@@ -19,8 +19,16 @@ const SELF = "scripts/house-rules.mjs";
 const SKIP_DIRS = new Set([".git", ".next", "node_modules", "out", "coverage"]);
 const TEXT_EXT = new Set([".ts", ".tsx", ".mjs", ".js", ".css", ".json", ".md", ".py", ".svg"]);
 
-/** The only file allowed to contain a raw colour. Everything else reads a custom property. */
-const TOKEN_LAYER = join("src", "app", "globals.css");
+/**
+ * The token layer: the only files allowed to contain a raw colour.
+ *
+ * `globals.css` is the real one. `tokens.ts` exists because the `theme-color` meta tag and the
+ * favicon generator both need a literal before any stylesheet is parsed, and every hex in it is
+ * checked against the stylesheet below so the exception cannot grow into a second palette.
+ */
+const TOKEN_CSS = join("src", "app", "globals.css");
+const TOKEN_TS = join("src", "app", "tokens.ts");
+const TOKEN_LAYER = new Set([TOKEN_CSS, TOKEN_TS]);
 
 function walk(dir, out = []) {
   for (const entry of readdirSync(dir)) {
@@ -69,7 +77,7 @@ for (const file of files) {
   if (file === "package-lock.json") continue;
   const lines = readFileSync(join(ROOT, file), "utf8").split("\n");
   const isSelf = file === SELF;
-  const isTokenLayer = file === TOKEN_LAYER;
+  const isTokenLayer = TOKEN_LAYER.has(file);
   const isStyle = file.endsWith(".css");
   const isComponent = file.endsWith(".tsx") || file.endsWith(".ts") || file.endsWith(".svg");
 
@@ -93,6 +101,20 @@ for (const file of files) {
   });
 }
 
+// The TypeScript side of the token layer is allowed its literals only while they still agree with
+// the stylesheet. Two palettes that drift apart is exactly the failure this whole arrangement
+// exists to prevent.
+{
+  const css = readFileSync(join(ROOT, TOKEN_CSS), "utf8").toLowerCase();
+  const ts = readFileSync(join(ROOT, TOKEN_TS), "utf8");
+  ts.split("\n").forEach((line, i) => {
+    const hit = /#[0-9a-fA-F]{3,8}\b/.exec(line);
+    if (hit && !css.includes(hit[0].toLowerCase())) {
+      report(TOKEN_TS, i + 1, `${hit[0]} is not in ${TOKEN_CSS}`, line);
+    }
+  });
+}
+
 if (failures.length > 0) {
   console.error(`house rules: ${failures.length} problem(s)\n`);
   for (const f of failures) {
@@ -103,4 +125,7 @@ if (failures.length > 0) {
 }
 
 console.log(`house rules: ${files.length} files clean (dashes, emoji, vocabulary, shadows, hex)`);
-console.log(`  token layer: ${TOKEN_LAYER.split(sep).join("/")} is the one file allowed a colour`);
+console.log(
+  `  token layer: ${[...TOKEN_LAYER].map((f) => f.split(sep).join("/")).join(" and ")}, ` +
+    "and their hex values agree",
+);
