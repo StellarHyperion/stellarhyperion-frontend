@@ -1,0 +1,18 @@
+# dependencies
+node_modules
+
+# next
+.next
+out
+next-env.d.ts
+*.tsbuildinfo
+
+# env: only .env.example is ever committed
+.env
+.env.*
+!.env.example
+
+# editors and os
+.DS_Store
+.idea
+.vscode

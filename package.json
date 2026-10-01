@@ -1,0 +1,46 @@
+{
+  "name": "@hyperion/app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hyperion web app: the routing layer between Stellar and EVM, as an interface",
+  "license": "MIT",
+  "author": "dotmantissa",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/StellarHyperion/stellarhyperion-frontend.git"
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "fmt": "prettier --write \"**/*.{ts,tsx,mjs,css,json,md}\"",
+    "fmt:check": "prettier --check \"**/*.{ts,tsx,mjs,css,json,md}\"",
+    "contrast": "node scripts/contrast.mjs",
+    "house": "node scripts/house-rules.mjs",
+    "icons": "python3 scripts/render-icons.py",
+    "check": "npm run fmt:check && npm run house && npm run contrast && npm run lint && npm run typecheck && npm run build"
+  },
+  "dependencies": {
+    "@hyperion/protocol": "file:../contracts/packages/protocol",
+    "lucide-react": "^1.49.0",
+    "next": "16.3.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "16.3.8",
+    "prettier": "^3.9.9",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.0"
+  }
+}
