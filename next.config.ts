@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import type { NextConfig } from "next";
 
 /**
@@ -12,10 +14,17 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   typedRoutes: true,
-  // Pinned because this app lives in a sibling directory to the contracts repo and Turbopack
-  // otherwise walks up looking for a lockfile, finds one in a home directory, and warns about it
-  // on every build. The root is this package, full stop.
-  turbopack: { root: import.meta.dirname },
+  // The parent directory, not this one, and that is load bearing rather than tidy.
+  //
+  // `@hyperion/protocol` is a file dependency on a sibling repository, so npm installs it as a
+  // symlink that resolves to a real path outside this package. Turbopack will not follow a symlink
+  // out of its root, so pinning the root here makes the shared SDK unresolvable and the build
+  // fails with a bare "module not found" that says nothing about symlinks. Pointing at the
+  // directory that actually contains both repositories is what a workspace root means.
+  //
+  // Setting it explicitly still does the job it was added for, which is stopping Turbopack from
+  // walking up into a home directory looking for a lockfile and warning on every build.
+  turbopack: { root: join(import.meta.dirname, "..") },
 };
 
 export default nextConfig;

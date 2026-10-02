@@ -1,0 +1,119 @@
+/*
+ * The page frame. One column, read top to bottom, because that is the shape of a transfer.
+ */
+
+.shell {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+.header {
+  border-block-end: 1px solid var(--edge-color);
+  background: var(--surface-page);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.headerInner,
+.column,
+.footerInner {
+  max-width: var(--measure);
+  margin-inline: auto;
+  /* Sixteen either side at phone width, which is the gutter the plan asks for. */
+  padding-inline: var(--space-4);
+}
+
+.headerInner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.brandMark {
+  color: var(--leg-origin);
+}
+
+.brandName {
+  font-family: var(--face-display);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.network {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  color: var(--text-data);
+  background: var(--surface-raised);
+}
+
+/* The one hover state in the chrome, and it communicates a state change rather than lifting. */
+.network:hover,
+.network:focus-visible {
+  border-color: var(--edge-color-strong);
+  color: var(--text-primary);
+}
+
+.main {
+  /* Deliberately not a flex or grid container. The yard breaks out of the column by sitting
+   * outside it in the markup, not by fighting a parent's layout. */
+  display: block;
+}
+
+.column {
+  padding-block: var(--space-8);
+  display: grid;
+  gap: var(--space-6);
+}
+
+.columnTight {
+  padding-block: var(--space-7);
+}
+
+.footer {
+  border-block-start: 1px solid var(--edge-color);
+  background: var(--surface-page);
+}
+
+.footerInner {
+  padding-block: var(--space-6);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  justify-content: space-between;
+  color: var(--text-data);
+}
+
+.footerLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+}
+
+.footerLinks a {
+  color: var(--text-data);
+  text-decoration: none;
+  border-block-end: 1px solid transparent;
+}
+
+.footerLinks a:hover,
+.footerLinks a:focus-visible {
+  color: var(--text-primary);
+  border-block-end-color: var(--leg-origin);
+}

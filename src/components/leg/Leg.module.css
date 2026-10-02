@@ -1,0 +1,88 @@
+/* A leg of the route. Two of these bracket the switchyard. */
+
+.leg {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.spine {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+/*
+ * The vertical rule running down the left of a leg, in that leg's own colour.
+ *
+ * It is the route. Copper beside the origin, instrument blue beside the destination, and the
+ * switchyard is where one becomes the other. Reading the page from top to bottom is reading the
+ * transfer, which is the entire reason the layout is a single column.
+ */
+.rail {
+  width: 2px;
+  align-self: stretch;
+  min-height: var(--space-8);
+  border-radius: 1px;
+}
+
+.railOrigin {
+  background: linear-gradient(to bottom, var(--leg-origin), var(--leg-origin-fill));
+}
+
+.railDestination {
+  background: linear-gradient(to bottom, var(--leg-destination-fill), var(--leg-destination));
+}
+
+.body {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.chainLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.chainName {
+  font-family: var(--face-display);
+  font-size: var(--type-title-size);
+  font-weight: var(--type-title-weight);
+  letter-spacing: var(--type-title-track);
+  line-height: var(--type-title-leading);
+  color: var(--text-primary);
+}
+
+.chainMeta {
+  color: var(--text-data);
+}
+
+/* Facts about a leg, each one a mono label over a mono value. No cards, no shadows. */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1px;
+  background: var(--edge-color);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+}
+
+.fact {
+  background: var(--surface-panel);
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.factLabel {
+  color: var(--graphic-muted);
+  font-size: var(--type-mono-sm-size);
+}
+
+.factValue {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
