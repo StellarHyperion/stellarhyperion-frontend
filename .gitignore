@@ -19,3 +19,7 @@ next-env.d.ts
 
 # the icon contact sheet is a look-at-it artefact, not a deliverable
 public/.icon-contact-sheet.png
+
+# Python bytecode from the icon generator.
+__pycache__/
+*.pyc
