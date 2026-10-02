@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <title>Hyperion</title>
+  <rect width="24" height="24" fill="#0a0c0f" />
+  <g fill="none" stroke="#e8743b" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="2.5,12.0 8.1,12.0" />
+    <polyline points="11.9,10.9 16.1,6.7 21.6,6.7" />
+    <polyline points="11.9,13.1 15.5,16.7 17.8,16.7" />
+  </g>
+  <circle cx="10.0" cy="12.0" r="2.1" fill="#e8743b" />
+</svg>

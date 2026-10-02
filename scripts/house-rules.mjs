@@ -71,7 +71,25 @@ const BANNED = [
 ];
 
 const HEX = /#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{1,5})?\b/;
+
+/**
+ * Generated icon assets, which have to carry literal colour and cannot be whitelisted blindly.
+ *
+ * An SVG favicon is loaded by the browser as an image, outside the document, so it has no access
+ * to a custom property. It needs the hex. Exempting it from the rule entirely would open the one
+ * hole the rule exists to close, so instead every hex in these files has to appear in the token
+ * file that generated them. `npm run icons` rewrites them from the mark and the tokens, and this
+ * check is what keeps a hand edit from drifting the tab icon away from the palette.
+ */
+const GENERATED_ICONS = new Set([join("public", "icon.svg")]);
 const SHADOW = /\b(box-shadow|drop-shadow|text-shadow)\b/;
+
+/** Every colour the token layer defines, lowercased, for the generated icon check above. */
+const tokenHexes = new Set(
+  [...readFileSync(join(ROOT, TOKEN_CSS), "utf8").matchAll(/#[0-9a-fA-F]{3,8}\b/g)].map((m) =>
+    m[0].toLowerCase(),
+  ),
+);
 
 for (const file of files) {
   if (file === "package-lock.json") continue;
@@ -96,7 +114,15 @@ for (const file of files) {
     if (!isSelf && SHADOW.test(line)) report(file, lineNo, "shadow (the plan says zero)", line);
 
     if (!isTokenLayer && !isSelf && (isStyle || isComponent) && HEX.test(line)) {
-      report(file, lineNo, "hex colour outside the token layer", line);
+      if (GENERATED_ICONS.has(file)) {
+        // Checked against the token file rather than waved through.
+        const hit = /#[0-9a-fA-F]{3,8}\b/.exec(line);
+        if (hit && !tokenHexes.has(hit[0].toLowerCase())) {
+          report(file, lineNo, `${hit[0]} is not a token colour; run npm run icons`, line);
+        }
+      } else {
+        report(file, lineNo, "hex colour outside the token layer", line);
+      }
     }
   });
 }

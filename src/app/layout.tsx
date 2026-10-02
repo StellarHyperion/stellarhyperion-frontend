@@ -16,6 +16,14 @@ export const metadata: Metadata = {
     "Hyperion prices four audited cross-chain rails locally and takes the one that lands the most money. It does not run a validator set of its own.",
   applicationName: "Hyperion",
   authors: [{ name: "dotmantissa" }],
+  // Generated from the mark component by `npm run icons`, so the tab and the header cannot drift.
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "16x16 32x32 48x48" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
 };
 
 export const viewport: Viewport = {
