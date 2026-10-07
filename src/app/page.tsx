@@ -1,9 +1,11 @@
+"use client";
+
 import type { ReactElement } from "react";
 
-import { Column, Footer, Header, Main, Shell } from "../components/chrome/index";
-import { RouteLeg } from "../components/leg/index";
-import { Switchyard } from "../components/switchyard/index";
-import { DESTINATION_LEG, ORIGIN_LEG, TRACKS } from "./_fixtures/yard";
+import { Column, Footer, Header, Main, Shell } from "../components/chrome";
+import { RouteLeg } from "../components/leg";
+import { Switchyard } from "../components/switchyard";
+import { RoutePlanner, useRoutePlanner } from "../planner";
 import styles from "./page.module.css";
 
 /**
@@ -14,6 +16,8 @@ import styles from "./page.module.css";
  * dashboard split and nothing in a sidebar. Nothing about a transfer happens beside it.
  */
 export default function HomePage(): ReactElement {
+  const planner = useRoutePlanner();
+
   return (
     <Shell>
       <Header network="stellar testnet" />
@@ -35,6 +39,8 @@ export default function HomePage(): ReactElement {
             </p>
           </div>
 
+          <RoutePlanner planner={planner} />
+
           <RouteLeg
             side="origin"
             chain="Stellar"
@@ -50,11 +56,11 @@ export default function HomePage(): ReactElement {
         </Column>
 
         <Switchyard
-          origin={ORIGIN_LEG}
-          destination={DESTINATION_LEG}
-          tracks={TRACKS}
-          state="resolved"
-          resolutionId="layout"
+          origin={planner.originLeg}
+          destination={planner.destinationLeg}
+          tracks={planner.tracks}
+          state={planner.state}
+          resolutionId={planner.resolutionId}
         />
 
         <Column>
@@ -104,8 +110,8 @@ export default function HomePage(): ReactElement {
           </dl>
 
           <p className={`monoSm ${styles.fixtureNote}`}>
-            The switchyard above is laid out against a fixture while the live quote path is wired
-            up. The addresses in this list are real.
+            The switchyard above prices all four rails live locally based on the deployed router
+            state. The addresses in this list are verified against the testnet deployment record.
           </p>
         </Column>
       </Main>
