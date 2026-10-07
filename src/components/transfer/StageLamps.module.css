@@ -1,0 +1,77 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background-color: var(--surface-raised);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-panel);
+}
+
+.heading {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-data);
+  text-transform: lowercase;
+  margin: 0;
+}
+
+.stagesList {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.stageItem {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.connector {
+  width: 1.5rem;
+  height: 1px;
+  background-color: var(--edge-color);
+}
+
+.lamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--text-data);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    outline-color var(--duration-fast) var(--ease-standard);
+}
+
+.lampIdle {
+  background-color: var(--rule-2);
+}
+
+.lampActive {
+  background-color: var(--leg-origin);
+  outline: 2px solid var(--leg-origin);
+  outline-offset: 2px;
+}
+
+.lampCompleted {
+  background-color: var(--state-settled);
+}
+
+.lampFailed {
+  background-color: var(--state-failed);
+}
+
+.stageName {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.stageDetail {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-data);
+}

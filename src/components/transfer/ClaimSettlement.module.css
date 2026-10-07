@@ -1,0 +1,179 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background-color: var(--surface-raised);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-panel);
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.title {
+  font-family: var(--face-display);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.tag {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--warn);
+  padding: 0.125rem 0.5rem;
+  background-color: var(--ink-4);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+}
+
+.description {
+  font-family: var(--face-body);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.lookupForm {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 12rem;
+}
+
+.label {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-data);
+}
+
+.input {
+  background-color: var(--ink-4);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  padding: 0.5rem 0.75rem;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.input:focus {
+  border-color: var(--leg-origin);
+  outline: 2px solid var(--leg-origin);
+  outline-offset: 1px;
+}
+
+.searchBtn {
+  padding: 0.5rem 1rem;
+  background-color: var(--ink-4);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.searchBtn:hover {
+  border-color: var(--edge-color-strong);
+  background-color: var(--ink-3);
+}
+
+.searchBtn:focus-visible {
+  outline: 2px solid var(--leg-origin);
+}
+
+.claimCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background-color: var(--ink-4);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+}
+
+.claimGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-3);
+}
+
+.claimItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.itemLabel {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-data);
+}
+
+.itemValue {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.itemStatus {
+  color: var(--warn);
+}
+
+.settleBtn {
+  width: 100%;
+  padding: 0.5rem 1rem;
+  background-color: var(--state-settled);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    outline-color var(--duration-fast) var(--ease-standard);
+}
+
+.settleBtn:hover {
+  opacity: 0.9;
+}
+
+.settleBtn:focus-visible {
+  outline: 2px solid var(--state-settled);
+  outline-offset: 1px;
+}
+
+.settledBanner {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--state-settled);
+  padding: 0.5rem;
+  background-color: var(--ink-3);
+  border: 1px solid var(--state-settled);
+  border-radius: var(--radius-control);
+  text-align: center;
+}

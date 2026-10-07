@@ -5,6 +5,7 @@ import type { ReactElement } from "react";
 import { Column, Footer, Header, Main, Shell } from "../components/chrome";
 import { RouteLeg } from "../components/leg";
 import { Switchyard } from "../components/switchyard";
+import { TransferFlow, ClaimSettlement } from "../components/transfer";
 import { RoutePlanner, useRoutePlanner } from "../planner";
 import styles from "./page.module.css";
 
@@ -53,6 +54,8 @@ export default function HomePage(): ReactElement {
               { label: "flow window", value: "720 ledgers" },
             ]}
           />
+
+          <TransferFlow planner={planner} />
         </Column>
 
         <Switchyard
@@ -76,6 +79,8 @@ export default function HomePage(): ReactElement {
               { label: "cctp domain", value: "26" },
             ]}
           />
+
+          <ClaimSettlement />
 
           <div className={styles.opening}>
             <h2 className="heading">What is actually deployed</h2>
