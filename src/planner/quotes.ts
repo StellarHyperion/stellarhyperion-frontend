@@ -4,6 +4,7 @@ import {
   planQuotes,
   ROUTE_LABELS,
   RouteKind,
+  tryParseStellarAddress,
   type RouterSnapshot,
   type RouteQuote,
 } from "@hyperion/protocol";
@@ -103,7 +104,9 @@ export function planRouteExecution(
 
   const parsedAmount = parseAmount(input.amount, STELLAR_DECIMALS);
   const effectiveAmount = parsedAmount ?? 1_000_0000000n; // Default 1000 USDC for layout preview
-  const destStrkey = input.destinationAddress.trim() || FALLBACK_DESTINATION;
+  const rawAddr = input.destinationAddress.trim();
+  const parsed = rawAddr ? tryParseStellarAddress(rawAddr) : null;
+  const destStrkey = parsed?.ok ? rawAddr : FALLBACK_DESTINATION;
 
   const quotes = planQuotes(
     {

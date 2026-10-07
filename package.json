@@ -24,7 +24,8 @@
     "contrast": "node scripts/contrast.mjs",
     "house": "node scripts/house-rules.mjs",
     "icons": "python3 scripts/render-icons.py",
-    "check": "npm run fmt:check && npm run house && npm run contrast && npm run lint && npm run typecheck && npm run build"
+    "test": "vitest run",
+    "check": "npm run fmt:check && npm run house && npm run contrast && npm run test && npm run lint && npm run typecheck && npm run build"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^2.7.1",
@@ -45,6 +46,7 @@
     "eslint-config-next": "16.3.8",
     "prettier": "^3.9.9",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.71.0"
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.3"
   }
 }
