@@ -1,0 +1,106 @@
+.container {
+  position: relative;
+  display: inline-flex;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  background-color: var(--ink-2);
+  border: 1px solid var(--rule-2);
+  border-radius: 2px;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.button:hover {
+  border-color: var(--instr);
+  background-color: var(--ink-3);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--instr);
+  outline-offset: 1px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--instr);
+  display: inline-block;
+}
+
+.network {
+  font-size: 0.6875rem;
+  color: var(--fg-3);
+  text-transform: lowercase;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 14rem;
+  background-color: var(--ink-2);
+  border: 1px solid var(--rule-2);
+  border-radius: 4px;
+  padding: 0.5rem;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.addressRow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.addressLabel {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--fg-3);
+}
+
+.fullAddress {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--fg);
+  word-break: break-all;
+}
+
+.disconnectBtn {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  background-color: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--bad);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-align: center;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.disconnectBtn:hover {
+  background-color: var(--ink-3);
+  border-color: var(--bad);
+}
+
+.disconnectBtn:focus-visible {
+  outline: 2px solid var(--bad);
+  outline-offset: 1px;
+}

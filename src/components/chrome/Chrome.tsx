@@ -14,6 +14,7 @@ import Link from "next/link";
 import type { ReactElement, ReactNode } from "react";
 
 import { HyperionMark } from "../brand/HyperionMark";
+import { StellarWalletButton, EvmWalletButton } from "../wallet";
 import styles from "./Chrome.module.css";
 
 export function Shell({ children }: { readonly children: ReactNode }): ReactElement {
@@ -32,7 +33,11 @@ export function Header({ network }: { readonly network: string }): ReactElement 
          * Which network you are on, in mono, because getting this wrong is the expensive mistake
          * and a person should be able to read it without opening a menu.
          */}
-        <span className={`mono ${styles.network}`}>{network}</span>
+        <div className={styles.actions}>
+          <span className={`mono ${styles.network}`}>{network}</span>
+          <StellarWalletButton />
+          <EvmWalletButton />
+        </div>
       </div>
     </header>
   );

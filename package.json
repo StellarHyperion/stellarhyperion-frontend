@@ -27,11 +27,15 @@
     "check": "npm run fmt:check && npm run house && npm run contrast && npm run lint && npm run typecheck && npm run build"
   },
   "dependencies": {
+    "@creit.tech/stellar-wallets-kit": "^2.7.1",
     "@hyperion/protocol": "file:../contracts/packages/protocol",
+    "@tanstack/react-query": "^5.104.1",
     "lucide-react": "^1.49.0",
     "next": "16.3.8",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "viem": "^2.57.3",
+    "wagmi": "^3.7.7"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",
