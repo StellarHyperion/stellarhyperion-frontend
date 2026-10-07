@@ -1,0 +1,191 @@
+/*
+ * Single transfer inspector styles.
+ *
+ * Strict hairlines, zero shadows, semantic role tokens.
+ */
+
+.topNav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.backLink {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-size);
+  color: var(--text-data);
+  text-decoration: none;
+}
+
+.backLink:hover,
+.backLink:focus-visible {
+  color: var(--leg-origin-hot);
+}
+
+.headerBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.titleRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.txHashDisplay {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-size);
+  color: var(--text-primary);
+  word-break: break-all;
+  background: var(--surface-well);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--edge-color);
+}
+
+.stageBadge {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-size);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-control);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.stageDelivered {
+  background: var(--ink-4);
+  color: var(--state-settled);
+  border: 1px solid var(--state-settled);
+}
+
+.stageInFlight {
+  background: var(--ink-4);
+  color: var(--leg-origin);
+  border: 1px solid var(--leg-origin);
+}
+
+.stageParked {
+  background: var(--ink-4);
+  color: var(--state-caution);
+  border: 1px solid var(--state-caution);
+}
+
+.stageFailed {
+  background: var(--ink-4);
+  color: var(--state-failed);
+  border: 1px solid var(--state-failed);
+}
+
+.lifecycleSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.panelsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.legPanel {
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-panel);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.panelTitle {
+  font-family: var(--face-display);
+  font-size: var(--type-heading-size);
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.panelBadge {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--edge-color);
+  background: var(--surface-page);
+  color: var(--text-data);
+}
+
+.factList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.factItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-block-end: var(--space-2);
+  border-block-end: 1px solid var(--edge-color);
+}
+
+.factItem:last-child {
+  border-block-end: none;
+  padding-block-end: 0;
+}
+
+.factLabel {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--text-data);
+  text-transform: uppercase;
+}
+
+.factValue {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-size);
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.claimBanner {
+  background: var(--surface-well);
+  border: 1px solid var(--state-caution);
+  border-radius: var(--radius-panel);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.claimBannerTitle {
+  font-family: var(--face-display);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--state-caution);
+}
+
+.claimBannerText {
+  color: var(--text-secondary);
+  font-size: var(--type-body-sm-size);
+}
+
+.errorState {
+  background: var(--surface-raised);
+  border: 1px dashed var(--edge-color);
+  border-radius: var(--radius-panel);
+  padding: var(--space-7);
+  text-align: center;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: center;
+}

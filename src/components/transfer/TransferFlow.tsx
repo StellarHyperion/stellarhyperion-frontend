@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, type ReactElement } from "react";
 import { RouteKind } from "@hyperion/protocol";
 import { useStellarWallet } from "../../wallets/stellar";
@@ -106,9 +107,9 @@ export function TransferFlow({ planner }: TransferFlowProps): ReactElement {
           {originTxHash && (
             <p className={styles.statusMessage}>
               origin transaction dispatched:{" "}
-              <span className="mono">
+              <Link href={`/transfers/${originTxHash}`} className="mono">
                 {originTxHash.slice(0, 10)}...{originTxHash.slice(-8)}
-              </span>
+              </Link>
             </p>
           )}
         </>

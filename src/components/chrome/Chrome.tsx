@@ -25,10 +25,20 @@ export function Header({ network }: { readonly network: string }): ReactElement 
   return (
     <header className={styles.header}>
       <div className={styles.headerInner}>
-        <Link className={styles.brand} href="/">
-          <HyperionMark size={26} className={styles.brandMark} label="Hyperion, home" />
-          <span className={styles.brandName}>Hyperion</span>
-        </Link>
+        <div className={styles.brandGroup}>
+          <Link className={styles.brand} href="/">
+            <HyperionMark size={26} className={styles.brandMark} label="Hyperion, home" />
+            <span className={styles.brandName}>Hyperion</span>
+          </Link>
+          <nav className={styles.navLinks} aria-label="Main navigation">
+            <Link className={styles.navLink} href="/">
+              Switchyard
+            </Link>
+            <Link className={styles.navLink} href="/transfers">
+              Transfers
+            </Link>
+          </nav>
+        </div>
         {/*
          * Which network you are on, in mono, because getting this wrong is the expensive mistake
          * and a person should be able to read it without opening a menu.
@@ -63,6 +73,9 @@ export function Footer(): ReactElement {
       <div className={styles.footerInner}>
         <p className="mono">Built by dotmantissa</p>
         <nav className={styles.footerLinks} aria-label="Project links">
+          <Link className="mono" href="/transfers">
+            Transfers
+          </Link>
           <a className="mono" href="https://github.com/StellarHyperion/stellarhyperion-contracts">
             Contracts
           </a>

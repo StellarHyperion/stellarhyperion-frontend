@@ -1,0 +1,263 @@
+/*
+ * Transfer registry layout.
+ *
+ * One column narrative view, matching the Hyperion measurement system.
+ * Zero box shadows, hairline borders, and strict semantic tokens.
+ */
+
+.headingGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.intro {
+  color: var(--text-secondary);
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--space-3);
+}
+
+.metricCard {
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-panel);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.metricLabel {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--text-data);
+  text-transform: uppercase;
+  letter-spacing: var(--type-mono-sm-track);
+}
+
+.metricValue {
+  font-family: var(--face-mono);
+  font-size: var(--type-figure-size);
+  font-weight: var(--type-figure-weight);
+  color: var(--text-primary);
+}
+
+.filterBar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-panel);
+  padding: var(--space-4);
+}
+
+.searchInput {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-well);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-size);
+  transition: border-color var(--motion-state) var(--ease-enter);
+}
+
+.searchInput:focus-visible {
+  border-color: var(--focus-color);
+}
+
+.filterControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.selectControl {
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-well);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-size);
+}
+
+.selectControl:focus-visible {
+  border-color: var(--focus-color);
+}
+
+.transferList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.transferCard {
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-panel);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  text-decoration: none;
+  color: inherit;
+  transition:
+    border-color var(--motion-tap) var(--ease-enter),
+    background-color var(--motion-tap) var(--ease-enter);
+}
+
+.transferCard:hover,
+.transferCard:focus-visible {
+  border-color: var(--edge-color-strong);
+  background: var(--surface-panel);
+}
+
+.cardTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.routeAndStage {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.routeBadge {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--edge-color-strong);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface-page);
+}
+
+.stageBadge {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-control);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.stageDelivered {
+  background: var(--ink-4);
+  color: var(--state-settled);
+  border: 1px solid var(--state-settled);
+}
+
+.stageInFlight {
+  background: var(--ink-4);
+  color: var(--leg-origin);
+  border: 1px solid var(--leg-origin);
+}
+
+.stageParked {
+  background: var(--ink-4);
+  color: var(--state-caution);
+  border: 1px solid var(--state-caution);
+}
+
+.stageFailed {
+  background: var(--ink-4);
+  color: var(--state-failed);
+  border: 1px solid var(--state-failed);
+}
+
+.timestamp {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--text-data);
+}
+
+.cardBody {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+  padding-block: var(--space-2);
+  border-block: 1px solid var(--edge-color);
+}
+
+.legBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.legLabel {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--text-data);
+  text-transform: uppercase;
+}
+
+.chainName {
+  font-family: var(--face-display);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+}
+
+.addressMono {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--text-data);
+}
+
+.cardBottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.amountGroup {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.netAmount {
+  font-family: var(--face-mono);
+  font-size: var(--type-figure-size);
+  font-weight: var(--type-figure-weight);
+  color: var(--text-primary);
+}
+
+.feeAmount {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--text-data);
+}
+
+.inspectAction {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--leg-origin);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.emptyState {
+  background: var(--surface-raised);
+  border: 1px dashed var(--edge-color);
+  border-radius: var(--radius-panel);
+  padding: var(--space-7);
+  text-align: center;
+  color: var(--text-secondary);
+}

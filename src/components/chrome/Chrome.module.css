@@ -33,6 +33,12 @@
   padding-block: var(--space-4);
 }
 
+.brandGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+
 .brand {
   display: inline-flex;
   align-items: center;
@@ -50,6 +56,27 @@
   font-size: 1.0625rem;
   font-weight: 600;
   letter-spacing: -0.02em;
+}
+
+.navLinks {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.navLink {
+  color: var(--text-data);
+  text-decoration: none;
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-size);
+  padding: var(--space-1) var(--space-2);
+  border-block-end: 1px solid transparent;
+}
+
+.navLink:hover,
+.navLink:focus-visible {
+  color: var(--text-primary);
+  border-block-end-color: var(--leg-origin);
 }
 
 .actions {
