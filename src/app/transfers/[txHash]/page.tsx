@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { use, useEffect, useState, type ReactElement } from "react";
+import { ExternalLink } from "lucide-react";
 import { Column, Footer, Header, Main, Shell } from "../../../components/chrome";
 import { StageLamps, type Stage } from "../../../components/transfer/StageLamps";
 import {
@@ -10,6 +11,7 @@ import {
   type FormattedTransfer,
   type TransferLifecycleStage,
 } from "../../../api";
+import { getExplorerUrl } from "../../../lib/format";
 import styles from "./page.module.css";
 
 interface PageProps {
@@ -147,7 +149,18 @@ export default function TransferDetailPage({ params }: PageProps): ReactElement 
                     {transfer.stage}
                   </span>
                 </div>
-                <div className={styles.txHashDisplay}>tx: {transfer.origin.txHash}</div>
+                <div className={styles.txHashDisplay}>
+                  <span>tx: {transfer.origin.txHash}</span>
+                  <a
+                    href={getExplorerUrl(transfer.origin.chain, "tx", transfer.origin.txHash)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`View origin transaction ${transfer.origin.txHash} on ${transfer.origin.chain} explorer`}
+                    className={styles.explorerLink}
+                  >
+                    <ExternalLink size={12} aria-hidden="true" />
+                  </a>
+                </div>
               </div>
 
               <section className={styles.lifecycleSection} aria-label="Progress lamps">
@@ -183,7 +196,22 @@ export default function TransferDetailPage({ params }: PageProps): ReactElement 
                     </div>
                     <div className={styles.factItem}>
                       <span className={styles.factLabel}>sender</span>
-                      <span className={styles.factValue}>{transfer.origin.sender}</span>
+                      <span className={styles.factValue}>
+                        <span>{transfer.origin.sender}</span>
+                        <a
+                          href={getExplorerUrl(
+                            transfer.origin.chain,
+                            "address",
+                            transfer.origin.sender,
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={`View sender address ${transfer.origin.sender} on ${transfer.origin.chain} explorer`}
+                          className={styles.explorerLink}
+                        >
+                          <ExternalLink size={12} aria-hidden="true" />
+                        </a>
+                      </span>
                     </div>
                     <div className={styles.factItem}>
                       <span className={styles.factLabel}>nonce</span>
@@ -281,7 +309,22 @@ export default function TransferDetailPage({ params }: PageProps): ReactElement 
                     </div>
                     <div className={styles.factItem}>
                       <span className={styles.factLabel}>recipient</span>
-                      <span className={styles.factValue}>{transfer.destination.recipient}</span>
+                      <span className={styles.factValue}>
+                        <span>{transfer.destination.recipient}</span>
+                        <a
+                          href={getExplorerUrl(
+                            transfer.destination.chain,
+                            "address",
+                            transfer.destination.recipient,
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={`View recipient address ${transfer.destination.recipient} on ${transfer.destination.chain} explorer`}
+                          className={styles.explorerLink}
+                        >
+                          <ExternalLink size={12} aria-hidden="true" />
+                        </a>
+                      </span>
                     </div>
                     <div className={styles.factItem}>
                       <span className={styles.factLabel}>delivery status</span>
@@ -298,7 +341,26 @@ export default function TransferDetailPage({ params }: PageProps): ReactElement 
                     <div className={styles.factItem}>
                       <span className={styles.factLabel}>destination tx</span>
                       <span className={styles.factValue}>
-                        {transfer.destination.txHash ?? "not yet submitted"}
+                        {transfer.destination.txHash ? (
+                          <>
+                            <span>{transfer.destination.txHash}</span>
+                            <a
+                              href={getExplorerUrl(
+                                transfer.destination.chain,
+                                "tx",
+                                transfer.destination.txHash,
+                              )}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              aria-label={`View destination transaction ${transfer.destination.txHash} on ${transfer.destination.chain} explorer`}
+                              className={styles.explorerLink}
+                            >
+                              <ExternalLink size={12} aria-hidden="true" />
+                            </a>
+                          </>
+                        ) : (
+                          "not yet submitted"
+                        )}
                       </span>
                     </div>
                     <div className={styles.factItem}>
