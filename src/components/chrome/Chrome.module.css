@@ -104,6 +104,45 @@
   color: var(--text-primary);
 }
 
+.themeSelector {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  padding: 1px;
+  gap: 1px;
+}
+
+.themeOption {
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius-control) - 1px);
+  color: var(--text-data);
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  transition:
+    color var(--motion-tap) var(--ease-enter),
+    background-color var(--motion-tap) var(--ease-enter);
+}
+
+.themeOption:hover {
+  color: var(--text-primary);
+}
+
+.themeOption:focus-visible {
+  outline: var(--focus-width) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+
+.themeOptionActive {
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
 .main {
   /* Deliberately not a flex or grid container. The yard breaks out of the column by sitting
    * outside it in the markup, not by fighting a parent's layout. */

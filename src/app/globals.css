@@ -219,6 +219,112 @@
 }
 
 /* ------------------------------------------------------------------------------
+ * Daylight instrument theme
+ *
+ * Light surface steps with deep ink text and saturated instrument signals.
+ * Every foreground and surface pair exceeds WCAG AAA 7:1 contrast ratio.
+ * ------------------------------------------------------------------------------ */
+
+:root[data-theme="light"],
+[data-theme="light"] {
+  --ink: #ffffff;
+  --ink-2: #f7f9fa;
+  --ink-3: #eef2f5;
+  --ink-4: #e4e9ee;
+
+  --rule: #cbd2d9;
+  --rule-2: #9aa5b1;
+
+  --fg: #0a0c0f;
+  --fg-2: #1a2028;
+  --fg-3: #3d4753;
+
+  --copper: #7c2702;
+  --copper-2: #601d00;
+  --copper-dim: #f5d4c2;
+
+  --instr: #09436d;
+  --instr-dim: #c7e0f4;
+
+  --ok: #05542f;
+  --warn: #683f00;
+  --bad: #82140c;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --ink: #ffffff;
+    --ink-2: #f7f9fa;
+    --ink-3: #eef2f5;
+    --ink-4: #e4e9ee;
+
+    --rule: #cbd2d9;
+    --rule-2: #9aa5b1;
+
+    --fg: #0a0c0f;
+    --fg-2: #1a2028;
+    --fg-3: #3d4753;
+
+    --copper: #7c2702;
+    --copper-2: #601d00;
+    --copper-dim: #f5d4c2;
+
+    --instr: #09436d;
+    --instr-dim: #c7e0f4;
+
+    --ok: #05542f;
+    --warn: #683f00;
+    --bad: #82140c;
+
+    color-scheme: light;
+  }
+}
+
+/* ------------------------------------------------------------------------------
+ * High contrast mode
+ *
+ * Deep black base with high luminance signals for maximum visual clarity.
+ * Every foreground and surface pair exceeds WCAG AAA 7:1 contrast ratio.
+ * ------------------------------------------------------------------------------ */
+
+:root[data-theme="high-contrast"],
+[data-theme="high-contrast"] {
+  --ink: #000000;
+  --ink-2: #07090c;
+  --ink-3: #0e1217;
+  --ink-4: #151b22;
+
+  --rule: #5c6978;
+  --rule-2: #7e8c9d;
+
+  --fg: #ffffff;
+  --fg-2: #d8e1ea;
+  --fg-3: #9cb0c4;
+
+  --copper: #ffaa7a;
+  --copper-2: #ffc8a8;
+  --copper-dim: #a3451b;
+
+  --instr: #a0d2f8;
+  --instr-dim: #486f91;
+
+  --ok: #70ebb0;
+  --warn: #ffd466;
+  --bad: #ff7f73;
+
+  color-scheme: dark;
+}
+
+@media (forced-colors: active) {
+  :root {
+    --hairline: 2px;
+    --focus-width: 3px;
+  }
+}
+
+/* ------------------------------------------------------------------------------
  * Reset, kept to what is actually needed.
  * ------------------------------------------------------------------------------ */
 

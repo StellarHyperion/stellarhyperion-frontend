@@ -13,44 +13,12 @@
 import Link from "next/link";
 import type { ReactElement, ReactNode } from "react";
 
-import { HyperionMark } from "../brand/HyperionMark";
-import { StellarWalletButton, EvmWalletButton } from "../wallet";
 import styles from "./Chrome.module.css";
+
+export { Header } from "../nav/Header";
 
 export function Shell({ children }: { readonly children: ReactNode }): ReactElement {
   return <div className={styles.shell}>{children}</div>;
-}
-
-export function Header({ network }: { readonly network: string }): ReactElement {
-  return (
-    <header className={styles.header}>
-      <div className={styles.headerInner}>
-        <div className={styles.brandGroup}>
-          <Link className={styles.brand} href="/">
-            <HyperionMark size={26} className={styles.brandMark} label="Hyperion, home" />
-            <span className={styles.brandName}>Hyperion</span>
-          </Link>
-          <nav className={styles.navLinks} aria-label="Main navigation">
-            <Link className={styles.navLink} href="/">
-              Switchyard
-            </Link>
-            <Link className={styles.navLink} href="/transfers">
-              Transfers
-            </Link>
-          </nav>
-        </div>
-        {/*
-         * Which network you are on, in mono, because getting this wrong is the expensive mistake
-         * and a person should be able to read it without opening a menu.
-         */}
-        <div className={styles.actions}>
-          <span className={`mono ${styles.network}`}>{network}</span>
-          <StellarWalletButton />
-          <EvmWalletButton />
-        </div>
-      </div>
-    </header>
-  );
 }
 
 export function Main({ children }: { readonly children: ReactNode }): ReactElement {

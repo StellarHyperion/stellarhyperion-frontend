@@ -1,24 +1,13 @@
 /**
  * The accessibility claim, measured rather than asserted.
  *
- * The palette is locked by `.planning/DESIGN-TOKENS.md` and is not up for negotiation. What is up
- * for negotiation is which locked colour does which job, and that is the only lever available when
- * a rolled value does not clear WCAG AA. So this file holds the role table: every colour, the
- * background steps it is allowed to sit on, and the ratio that role has to clear. It prints the
- * measured numbers and exits non zero if any role falls short.
+ * Checks all defined themes (dark instrument theme, daylight instrument theme, and
+ * high contrast mode) across every role and surface pair.
  *
- * One role was reassigned because of what this script measured. `--fg-3` is 4.01:1 on `--ink`,
- * which clears the 3.00 bar for a graphic and misses the 4.50 bar for text. The plan puts it on
- * 11px mono data labels. Those labels are text, so they use `--fg-2` at 7.57:1 instead, and
- * `--fg-3` keeps the jobs where 3.00 is the real bar: the dotted losing tracks in the switchyard,
- * and tick marks. The palette is untouched; only the job changed.
- *
- * Thresholds are WCAG 2.2: 4.50 for normal text, 3.00 for large text (at least 24px, or 18.66px
- * bold) and for non text contrast on a graphic or a focus indicator.
+ * In daylight instrument and high contrast modes, every text role exceeds WCAG AAA 7:1.
  */
 
-/** Exactly the values in `.planning/DESIGN-TOKENS.md`, which is the only reason this file has any. */
-const TOKEN = {
+export const DARK_TOKENS = {
   ink: "#0A0C0F",
   "ink-2": "#101318",
   "ink-3": "#171B21",
@@ -38,34 +27,89 @@ const TOKEN = {
   bad: "#DF574B",
 };
 
-const TEXT = 4.5;
+export const LIGHT_TOKENS = {
+  ink: "#FFFFFF",
+  "ink-2": "#F7F9FA",
+  "ink-3": "#EEF2F5",
+  "ink-4": "#E4E9EE",
+  rule: "#CBD2D9",
+  "rule-2": "#9AA5B1",
+  fg: "#0A0C0F",
+  "fg-2": "#1A2028",
+  "fg-3": "#3D4753",
+  copper: "#7C2702",
+  "copper-2": "#601D00",
+  "copper-dim": "#F5D4C2",
+  instr: "#09436D",
+  "instr-dim": "#C7E0F4",
+  ok: "#05542F",
+  warn: "#683F00",
+  bad: "#82140C",
+};
+
+export const HIGH_CONTRAST_TOKENS = {
+  ink: "#000000",
+  "ink-2": "#07090C",
+  "ink-3": "#0E1217",
+  "ink-4": "#151B22",
+  rule: "#5C6978",
+  "rule-2": "#7E8C9D",
+  fg: "#FFFFFF",
+  "fg-2": "#D8E1EA",
+  "fg-3": "#9CB0C4",
+  copper: "#FFAA7A",
+  "copper-2": "#FFC8A8",
+  "copper-dim": "#A3451B",
+  instr: "#A0D2F8",
+  "instr-dim": "#486F91",
+  ok: "#70EBB0",
+  warn: "#FFD466",
+  bad: "#FF7F73",
+};
+
+export const TOKEN = DARK_TOKENS;
+
+const TEXT_AA = 4.5;
+const TEXT_AAA = 7.0;
 const LARGE = 3.0;
 const GRAPHIC = 3.0;
 
 const STEPS = ["ink", "ink-2", "ink-3", "ink-4"];
 
-/**
- * Every role the stylesheet actually uses, with the surfaces it is allowed to appear on.
- *
- * A colour missing a background step from its list is not an oversight. `bad` is absent from
- * `ink-4` because it measures 4.17:1 there, so an error message never sits in an input well.
- */
-const ROLES = [
-  { role: "body and display text", fg: "fg", on: STEPS, need: TEXT },
-  { role: "secondary prose", fg: "fg-2", on: STEPS, need: TEXT },
-  { role: "mono data labels and annotations", fg: "fg-2", on: STEPS, need: TEXT },
-  { role: "origin leg accent text", fg: "copper", on: STEPS, need: TEXT },
-  { role: "origin leg hover text", fg: "copper-2", on: STEPS, need: TEXT },
-  { role: "destination leg accent text", fg: "instr", on: STEPS, need: TEXT },
-  { role: "settled state text", fg: "ok", on: STEPS, need: TEXT },
-  { role: "caution state text", fg: "warn", on: STEPS, need: TEXT },
-  { role: "failure state text", fg: "bad", on: ["ink", "ink-2", "ink-3"], need: TEXT },
-  { role: "losing track stroke and tick marks", fg: "fg-3", on: STEPS, need: GRAPHIC },
-  { role: "focus ring on the page", fg: "copper", on: ["ink", "ink-2"], need: GRAPHIC },
-  { role: "focus ring on a control", fg: "copper", on: ["ink-3", "ink-4"], need: GRAPHIC },
-  { role: "winning track, origin end", fg: "copper", on: ["ink-2"], need: GRAPHIC },
-  { role: "winning track, destination end", fg: "instr", on: ["ink-2"], need: GRAPHIC },
-  { role: "large display numerals", fg: "fg-2", on: STEPS, need: LARGE },
+const BASE_ROLES = [
+  { role: "body and display text", fg: "fg", on: STEPS, type: "text" },
+  { role: "secondary prose", fg: "fg-2", on: STEPS, type: "text" },
+  { role: "mono data labels and annotations", fg: "fg-2", on: STEPS, type: "text" },
+  { role: "origin leg accent text", fg: "copper", on: STEPS, type: "text" },
+  { role: "origin leg hover text", fg: "copper-2", on: STEPS, type: "text" },
+  { role: "destination leg accent text", fg: "instr", on: STEPS, type: "text" },
+  { role: "settled state text", fg: "ok", on: STEPS, type: "text" },
+  { role: "caution state text", fg: "warn", on: STEPS, type: "text" },
+  { role: "failure state text", fg: "bad", on: ["ink", "ink-2", "ink-3"], type: "text" },
+  { role: "losing track stroke and tick marks", fg: "fg-3", on: STEPS, type: "graphic" },
+  { role: "focus ring on the page", fg: "copper", on: ["ink", "ink-2"], type: "graphic" },
+  { role: "focus ring on a control", fg: "copper", on: ["ink-3", "ink-4"], type: "graphic" },
+  { role: "winning track, origin end", fg: "copper", on: ["ink-2"], type: "graphic" },
+  { role: "winning track, destination end", fg: "instr", on: ["ink-2"], type: "graphic" },
+  { role: "large display numerals", fg: "fg-2", on: STEPS, type: "large" },
+];
+
+const THEMES = [
+  {
+    name: "dark instrument theme (WCAG 2.2 AA)",
+    tokens: DARK_TOKENS,
+    textThreshold: TEXT_AA,
+  },
+  {
+    name: "daylight instrument theme (WCAG AAA)",
+    tokens: LIGHT_TOKENS,
+    textThreshold: TEXT_AAA,
+  },
+  {
+    name: "high contrast mode (WCAG AAA)",
+    tokens: HIGH_CONTRAST_TOKENS,
+    textThreshold: TEXT_AAA,
+  },
 ];
 
 const channel = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
@@ -78,31 +122,42 @@ function luminance(hex) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-function ratio(a, b) {
-  const [hi, lo] = [luminance(TOKEN[a]), luminance(TOKEN[b])].sort((x, y) => y - x);
+function calculateRatio(hex1, hex2) {
+  const [hi, lo] = [luminance(hex1), luminance(hex2)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
 }
 
-const rows = [];
 const failed = [];
+let totalPairs = 0;
 
-for (const { role, fg, on, need } of ROLES) {
-  for (const bg of on) {
-    const measured = ratio(fg, bg);
-    const ok = measured >= need;
-    rows.push({ role, fg, bg, need, measured, ok });
-    if (!ok) failed.push({ role, fg, bg, need, measured });
+for (const theme of THEMES) {
+  console.log(`\n=== ${theme.name} ===\n`);
+  const rows = [];
+  for (const item of BASE_ROLES) {
+    const need =
+      item.type === "text" ? theme.textThreshold : item.type === "large" ? LARGE : GRAPHIC;
+
+    for (const bg of item.on) {
+      const fgHex = theme.tokens[item.fg];
+      const bgHex = theme.tokens[bg];
+      const measured = calculateRatio(fgHex, bgHex);
+      const ok = measured >= need;
+      rows.push({ role: item.role, fg: item.fg, bg, need, measured, ok });
+      totalPairs += 1;
+      if (!ok) {
+        failed.push({ theme: theme.name, role: item.role, fg: item.fg, bg, need, measured });
+      }
+    }
   }
-}
 
-const width = Math.max(...rows.map((r) => r.role.length));
-console.log("WCAG 2.2 contrast over the locked Hyperion palette\n");
-for (const r of rows) {
-  const verdict = r.ok ? "pass" : "FAIL";
-  console.log(
-    `  ${r.role.padEnd(width)}  ${`--${r.fg}`.padEnd(11)} on ${`--${r.bg}`.padEnd(7)} ` +
-      `${r.measured.toFixed(2).padStart(6)} : 1  needs ${r.need.toFixed(2)}  ${verdict}`,
-  );
+  const width = Math.max(...rows.map((r) => r.role.length));
+  for (const r of rows) {
+    const verdict = r.ok ? "pass" : "FAIL";
+    console.log(
+      `  ${r.role.padEnd(width)}  ${`--${r.fg}`.padEnd(11)} on ${`--${r.bg}`.padEnd(7)} ` +
+        `${r.measured.toFixed(2).padStart(6)} : 1  needs ${r.need.toFixed(2)}  ${verdict}`,
+    );
+  }
 }
 
 console.log("");
@@ -112,4 +167,4 @@ if (failed.length > 0) {
   );
   process.exit(1);
 }
-console.log(`${rows.length} role and surface pairs, all at or above their bar.`);
+console.log(`${totalPairs} role and surface pairs across all themes, all at or above their bar.`);
