@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  frontend:
+    name: check, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out frontend repository
+        uses: actions/checkout@v4
+        with:
+          path: frontend
+
+      - name: Check out contracts repository for protocol dependency
+        uses: actions/checkout@v4
+        with:
+          repository: StellarHyperion/stellarhyperion-contracts
+          path: contracts
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            contracts/packages/protocol/package-lock.json
+            frontend/package-lock.json
+
+      - name: Build protocol package
+        working-directory: contracts/packages/protocol
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run verification pipeline
+        working-directory: frontend
+        run: npm run check
+
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    needs:
+      - frontend
+    if: always()
+
+    steps:
+      - name: Verify all required checks passed
+        env:
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: |
+          if [ "$FRONTEND_RESULT" != "success" ]; then
+            echo "Frontend CI failed with status: $FRONTEND_RESULT"
+            exit 1
+          fi
+          echo "All frontend CI checks passed."

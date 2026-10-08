@@ -1,0 +1,61 @@
+name: Bug report
+description: Report an issue in the interface, route planner, wallet adapters, or transfer registry.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this issue poses a security risk, please submit a private report at
+        [GitHub Security Advisories](https://github.com/StellarHyperion/stellarhyperion-frontend/security/advisories/new) instead.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Subsystem
+      description: Choose the component where the issue occurs.
+      options:
+        - Switchyard visualization (src/components/switchyard)
+        - Route planner and quotes (src/planner)
+        - Stellar wallet connection (src/wallets/stellar)
+        - EVM wallet connection (src/wallets/evm)
+        - Transfer execution and stages (src/components/transfer)
+        - Transfer registry and detail view (src/app/transfers)
+        - Design tokens and theme (src/app/globals.css)
+        - Accessibility and keyboard navigation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit revision
+      description: Provide the specific commit hash or release tag.
+      placeholder: "e.g. 2fb7fd1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description of the bug
+      description: Explain what happened versus what was expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide clear reproduction steps or browser environment details.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Browser console or terminal output
+      description: Include any relevant JavaScript console errors or build outputs.
+      render: shell

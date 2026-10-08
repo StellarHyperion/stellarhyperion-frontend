@@ -1,0 +1,38 @@
+# Dependabot configuration for Hyperion Frontend.
+#
+# Runs weekly on Monday mornings UTC.
+
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "frontend"
+      include: scope
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        patterns:
+          - "@types/*"
+          - "eslint*"
+          - "prettier"
+          - "typescript*"
+          - "vitest"
+      framework:
+        patterns:
+          - "next"
+          - "react"
+          - "react-dom"
+      wallets:
+        patterns:
+          - "@creit.tech/stellar-wallets-kit"
+          - "wagmi"
+          - "viem"
+          - "@tanstack/react-query"

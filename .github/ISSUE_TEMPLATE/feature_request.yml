@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose an addition or adjustment to the frontend interface.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: Explain what capability is missing or what workflow could be clearer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed solution
+      description: Describe the proposed interface behavior or component additions.
+    validations:
+      required: true
+
+  - type: textarea
+    id: design_impact
+    attributes:
+      label: Design token and layout impact
+      description: Detail any impact on locked design tokens, contrast rules, or mobile layouts.
+    validations:
+      required: false

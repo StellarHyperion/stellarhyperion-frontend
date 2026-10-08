@@ -1,0 +1,32 @@
+# Reviewers for frontend code paths.
+#
+# GitHub reads this file top to bottom and the LAST matching pattern wins.
+# Every line currently routes to @dotmantissa. Defining boundaries makes
+# future reviewer delegation clear.
+
+# Catch-all
+*                                   @dotmantissa
+
+# Token layer and design system
+/src/app/globals.css                @dotmantissa
+/src/app/tokens.ts                  @dotmantissa
+/src/app/fonts/                     @dotmantissa
+
+# Brand and switchyard geometry
+/src/components/brand/              @dotmantissa
+/src/components/switchyard/         @dotmantissa
+
+# Wallet integrations
+/src/wallets/                       @dotmantissa
+
+# Route planner and quotes
+/src/planner/                       @dotmantissa
+
+# Transfer lifecycle and claim UI
+/src/components/transfer/           @dotmantissa
+/src/app/transfers/                 @dotmantissa
+/src/api/                           @dotmantissa
+
+# House rules and verification scripts
+/scripts/                           @dotmantissa
+/.github/                           @dotmantissa
