@@ -121,17 +121,23 @@ package makes the shared SDK unresolvable with a bare "module not found" that sa
 symlinks. The root is the directory holding both repositories, which is what a workspace root
 means.
 
-## What is not built yet
+## Implemented capabilities
 
-`docs/ROADMAP.md` has the detail. In short: wallet connection through Stellar Wallets Kit and
-wagmi, live quoting against the deployed router, the transfer flow with its stage lamps, claim
-settlement, and the history view driven by the backend.
+1. **Dual wallet connectivity**: Stellar Wallets Kit for Soroban accounts (Freighter, xBull, Albedo) and Wagmi/Viem for EVM accounts.
+2. **Interactive Route Planner**: Prices all four rails live locally based on deployed router parameters and quotes.
+3. **Switchyard visualization**: Live SVG interchange that draws the winning route copper to blue and annotates losing rails.
+4. **Transfer flow and stage lamps**: Unnumbered, named stages tracking the cross-chain journey from origin burn/dispatch to destination execution.
+5. **Parked claim settlement UI**: Surfaces uninitialized destination claims for permissionless recovery.
+6. **Transfer registry and inspector**: Searchable history at `/transfers` and single-transfer inspector at `/transfers/[txHash]`.
+7. **Automated verification pipeline**: 24 tests across arithmetic, geometry, API client, and accessibility audits.
+8. **CI/CD and governance**: GitHub Actions CI workflow, PR template, CODEOWNERS, SECURITY.md, and dependabot.
 
-The switchyard is currently laid out against a fixture. That fixture lives in `src/app/_fixtures`,
-says what it is in its own header, and exists for one reason: a component positioned with empty
-props positions itself wrong and nobody finds out until real data arrives and the annotations
-overlap. The reasons in it are the real reasons those rails lose. The addresses listed further
-down the page are the real deployed contracts on Stellar testnet.
+### Organization links
+
+This web client surfaces on-chain contracts and off-chain indexing services across the StellarHyperion organization:
+
+- Contracts: [stellarhyperion-contracts](https://github.com/StellarHyperion/stellarhyperion-contracts)
+- Backend: [stellarhyperion-backend](https://github.com/StellarHyperion/stellarhyperion-backend)
 
 ## License
 
