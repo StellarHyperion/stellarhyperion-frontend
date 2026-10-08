@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RouteKind } from "@hyperion/protocol";
 import {
+  calculateMinAmountOut,
   formatAmount,
   getDefaultSnapshot,
   parseAmount,
@@ -53,6 +54,8 @@ describe("Route Planner Arithmetic & Parsing", () => {
     expect(plan.breakdown?.feeAmount).toBe("3.0000000 USDC");
     expect(plan.breakdown?.netAmount).toBe("997.0000000 USDC");
     expect(plan.breakdown?.destinationAmount).toBe("997.000000 USDC");
+    expect(plan.breakdown?.minAmountOut).toBe("992.015000 USDC");
+    expect(plan.breakdown?.minDestinationAmount).toBe(992015000n);
 
     // Tracks check
     expect(plan.tracks).toHaveLength(4);
@@ -65,6 +68,21 @@ describe("Route Planner Arithmetic & Parsing", () => {
     const cctpTrack = plan.tracks.find((t) => t.route === RouteKind.Cctp);
     expect(cctpTrack?.chosen).toBe(false);
     expect(cctpTrack?.verdict?.kind).toBe("refusal");
+  });
+
+  it("calculates minimum received amounts across slippage presets and custom inputs", () => {
+    const netAmount = 1_000_000000n; // 1000 USDC with 6 decimals
+
+    // 0.1% = 10 bps
+    expect(calculateMinAmountOut(netAmount, 10)).toBe(999_000000n);
+    // 0.5% = 50 bps
+    expect(calculateMinAmountOut(netAmount, 50)).toBe(995_000000n);
+    // 1.0% = 100 bps
+    expect(calculateMinAmountOut(netAmount, 100)).toBe(990_000000n);
+    // custom 250 bps
+    expect(calculateMinAmountOut(netAmount, 250)).toBe(975_000000n);
+    // custom 600 bps (> 500 bps)
+    expect(calculateMinAmountOut(netAmount, 600)).toBe(940_000000n);
   });
 
   it("handles custom snapshot overrides", () => {

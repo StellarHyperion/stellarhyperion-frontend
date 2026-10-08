@@ -16,6 +16,9 @@ export interface RouteBreakdown {
   feePercent: string;
   netAmount: string;
   destinationAmount: string;
+  minAmountOut: string;
+  minDestinationAmount: bigint;
+  slippageBps: number;
   selectedRoute: RouteKind | null;
   selectedRouteLabel: string | null;
   isCanonical: boolean;
