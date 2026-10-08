@@ -1,0 +1,190 @@
+.transferList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.transferCard {
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-panel);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  text-decoration: none;
+  color: inherit;
+  transition:
+    border-color var(--motion-tap) var(--ease-enter),
+    background-color var(--motion-tap) var(--ease-enter);
+}
+
+.transferCard:hover,
+.transferCard:focus-visible {
+  border-color: var(--edge-color-strong);
+  background: var(--surface-panel);
+}
+
+.cardTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.routeAndStage {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.routeBadge {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--edge-color-strong);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface-page);
+}
+
+.stageBadge {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-control);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.stageDelivered {
+  background: var(--ink-4);
+  color: var(--state-settled);
+  border: 1px solid var(--state-settled);
+}
+
+.stageInFlight {
+  background: var(--ink-4);
+  color: var(--leg-origin);
+  border: 1px solid var(--leg-origin);
+}
+
+.stageParked {
+  background: var(--ink-4);
+  color: var(--state-caution);
+  border: 1px solid var(--state-caution);
+}
+
+.stageFailed {
+  background: var(--ink-4);
+  color: var(--state-failed);
+  border: 1px solid var(--state-failed);
+}
+
+.timestamp {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--text-data);
+}
+
+.cardBody {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+  padding-block: var(--space-2);
+  border-block: 1px solid var(--edge-color);
+}
+
+.legBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.legLabel {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--text-data);
+  text-transform: uppercase;
+}
+
+.chainName {
+  font-family: var(--face-display);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+}
+
+.addressMono {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--text-data);
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.explorerLink {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-data);
+  padding: 0.125rem;
+  border-radius: var(--radius-control);
+  transition: color var(--duration-fast) var(--ease-standard);
+  text-decoration: none;
+}
+
+.explorerLink:hover {
+  color: var(--leg-origin);
+}
+
+.explorerLink:focus-visible {
+  outline: 2px solid var(--leg-origin);
+}
+
+.cardBottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.amountGroup {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.netAmount {
+  font-family: var(--face-mono);
+  font-size: var(--type-figure-size);
+  font-weight: var(--type-figure-weight);
+  color: var(--text-primary);
+}
+
+.feeAmount {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--text-data);
+}
+
+.inspectAction {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+  color: var(--leg-origin);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.emptyState {
+  background: var(--surface-raised);
+  border: 1px dashed var(--edge-color);
+  border-radius: var(--radius-panel);
+  padding: var(--space-7);
+  text-align: center;
+  color: var(--text-secondary);
+}

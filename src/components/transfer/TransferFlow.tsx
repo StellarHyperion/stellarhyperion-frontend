@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useState, type ReactElement } from "react";
+import { ExternalLink } from "lucide-react";
 import { RouteKind } from "@hyperion/protocol";
 import { submitBridgeOut, STELLAR_USDC_SAC_ID } from "../../contracts";
 import { useStellarWallet } from "../../wallets/stellar";
 import type { RoutePlannerHook } from "../../planner";
+import { getExplorerUrl } from "../../lib/format";
 import { StageLamps, type Stage } from "./StageLamps";
 import styles from "./TransferFlow.module.css";
 
@@ -122,6 +124,15 @@ export function TransferFlow({ planner }: TransferFlowProps): ReactElement {
               <Link href={`/transfers/${originTxHash}`} className="mono">
                 {originTxHash.slice(0, 10)}...{originTxHash.slice(-8)}
               </Link>
+              <a
+                href={getExplorerUrl("stellar-testnet", "tx", originTxHash)}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`View transaction ${originTxHash} on block explorer`}
+                className={styles.explorerLink}
+              >
+                <ExternalLink size={12} aria-hidden="true" />
+              </a>
             </p>
           )}
         </>
