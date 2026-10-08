@@ -105,4 +105,45 @@ describe("Route Planner Arithmetic & Parsing", () => {
     expect(pausedPlan.best).toBeNull();
     expect(pausedPlan.breakdown).toBeNull();
   });
+
+  it("renders an invisible aria-live polite region for route planner announcements", async () => {
+    const { RoutePlanner } = await import("../src/planner/RoutePlanner");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const plan = planRouteExecution({
+      amount: "1000",
+      originChain: "stellar-testnet",
+      destinationChain: "arc-testnet",
+      destinationAddress: "",
+      asset: "USDC",
+      slippageBps: 50,
+    });
+
+    const mockPlanner = {
+      input: {
+        amount: "1000",
+        originChain: "stellar-testnet",
+        destinationChain: "arc-testnet",
+        destinationAddress: "",
+        asset: "USDC",
+        slippageBps: 50,
+      },
+      setAmount: () => undefined,
+      setDestinationAddress: () => undefined,
+      setSlippageBps: () => undefined,
+      tracks: plan.tracks,
+      selectedRoute: plan.best?.route ?? null,
+      breakdown: plan.breakdown,
+      originLeg: plan.originLeg,
+      destinationLeg: plan.destinationLeg,
+      state: "resolved" as const,
+      resolutionId: "1000:",
+    };
+
+    const { createElement } = await import("react");
+    const html = renderToStaticMarkup(createElement(RoutePlanner, { planner: mockPlanner }));
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-atomic="true"');
+    expect(html).toContain("visuallyHidden");
+  });
 });

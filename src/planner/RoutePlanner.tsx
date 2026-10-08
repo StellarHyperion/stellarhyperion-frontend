@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import type { RoutePlannerHook } from "./useRoutePlanner";
 import styles from "./RoutePlanner.module.css";
 
@@ -19,11 +19,39 @@ export function RoutePlanner({ planner }: RoutePlannerProps): ReactElement {
   const [advancedOpen, setAdvancedOpen] = useState<boolean>(false);
   const [customMode, setCustomMode] = useState<boolean>(false);
   const [customBpsInput, setCustomBpsInput] = useState<string>("");
+  const [announcement, setAnnouncement] = useState<string>("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (breakdown?.selectedRouteLabel) {
+        setAnnouncement(
+          `Best route updated: ${breakdown.selectedRouteLabel} selected with ${breakdown.destinationAmount} net received`,
+        );
+      } else if (input.amount.trim() !== "" && input.amount.trim() !== "0") {
+        setAnnouncement("No route available for this amount");
+      } else {
+        setAnnouncement("");
+      }
+    }, 500);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [breakdown, input.amount]);
 
   const presets = ["100", "500", "1000", "5000"];
 
   return (
     <section className={styles.panel} aria-label="Route pricing planner">
+      <div
+        className={`visuallyHidden ${styles.liveRegion}`}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {announcement}
+      </div>
+
       <div className={styles.titleRow}>
         <h2 className={styles.title}>Route planner</h2>
         <span className={styles.statusTag}>live local pricing</span>
