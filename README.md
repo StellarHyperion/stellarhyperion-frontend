@@ -137,7 +137,7 @@ means.
 The frontend application is deployed and live on Vercel:
 
 - Web application: https://stellarhyperion.vercel.app
-- Backend REST API: https://hyperion-backend.vercel.app
+- Backend REST API: https://stellarhyperion-backend.vercel.app
 - Connected router on Stellar testnet: `CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF`
 
 ### Organization links
