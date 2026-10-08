@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { archivo, plexMono } from "./fonts";
 import { PAGE_INK } from "./tokens";
-import { WalletProvider } from "../wallets";
+import { Providers } from "./providers";
 import "./globals.css";
 
 /**
@@ -36,7 +36,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${archivo.variable} ${plexMono.variable}`}>
       <body>
-        <WalletProvider>{children}</WalletProvider>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
