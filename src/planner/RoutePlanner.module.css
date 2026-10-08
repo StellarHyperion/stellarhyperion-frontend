@@ -121,6 +121,122 @@
   outline: 2px solid var(--leg-origin);
 }
 
+.presetBtnActive {
+  border-color: var(--leg-origin);
+  color: var(--leg-origin);
+  background-color: var(--ink-3);
+}
+
+.advancedSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-top: 1px solid var(--edge-color);
+  padding-top: var(--space-3);
+}
+
+.advancedToggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  padding: 0.375rem 0.625rem;
+  color: var(--text-data);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.advancedToggle:hover {
+  color: var(--text-primary);
+  border-color: var(--leg-origin);
+}
+
+.advancedToggle:focus-visible {
+  outline: 2px solid var(--leg-origin);
+}
+
+.toggleIndicator {
+  font-size: 0.6875rem;
+  color: var(--graphic-muted);
+}
+
+.advancedPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background-color: var(--ink-4);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+}
+
+.slippageControlGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.slippageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.slippageCurrentNote {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-data);
+}
+
+.slippageOptions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.customInputRow {
+  display: flex;
+  max-width: 14rem;
+}
+
+.warningMessage {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--state-caution);
+  padding: var(--space-2);
+  background-color: var(--ink-3);
+  border: 1px solid var(--state-caution);
+  border-radius: var(--radius-control);
+  line-height: 1.4;
+}
+
+.minReceivedDisplay {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--edge-color);
+}
+
+.minReceivedLabel {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-data);
+}
+
+.minReceivedValue {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
 .breakdown {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
