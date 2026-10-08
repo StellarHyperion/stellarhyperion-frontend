@@ -85,6 +85,11 @@ export function formatAmount(raw: bigint, decimals = STELLAR_DECIMALS): string {
   return `${whole.toLocaleString("en-US")}.${fracStr}`;
 }
 
+export function calculateMinAmountOut(netAmount: bigint, slippageBps: number): bigint {
+  const safeSlippage = BigInt(Math.max(0, Math.min(10000, Math.floor(slippageBps))));
+  return (netAmount * (10000n - safeSlippage)) / 10000n;
+}
+
 const FALLBACK_DESTINATION = "GCHPVETUL5E4YKDLMRIBFUGFK4PMYOVKPFALVSYMP2QDYAVBA3ITQDAI";
 
 export function planRouteExecution(
@@ -197,6 +202,11 @@ export function planRouteExecution(
   const formattedDest = best ? formatAmount(best.destinationAmount, EVM_DECIMALS) : formattedGross;
   const formattedFee = best ? formatAmount(best.fee, STELLAR_DECIMALS) : "0.0000000";
 
+  const rawMinAmountOut = best
+    ? calculateMinAmountOut(best.destinationAmount, input.slippageBps)
+    : 0n;
+  const formattedMinOut = best ? formatAmount(rawMinAmountOut, EVM_DECIMALS) : formattedGross;
+
   const originLeg: Leg = {
     name: "Stellar",
     detail: `${formattedGross} ${input.asset}`,
@@ -214,6 +224,9 @@ export function planRouteExecution(
         feePercent: `${(snapshot.feeBps / 100).toFixed(2)}%`,
         netAmount: `${formattedNet} ${input.asset}`,
         destinationAmount: `${formattedDest} ${input.asset}`,
+        minAmountOut: `${formattedMinOut} ${input.asset}`,
+        minDestinationAmount: rawMinAmountOut,
+        slippageBps: input.slippageBps,
         selectedRoute: best.route,
         selectedRouteLabel: ROUTE_LABELS[best.route],
         isCanonical: best.isCanonical,
