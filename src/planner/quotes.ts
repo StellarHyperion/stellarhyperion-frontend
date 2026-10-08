@@ -122,27 +122,63 @@ export function planRouteExecution(
   const tracks: Track[] = quotes.map((q) => {
     const isWinner = best !== null && q.route === best.route;
     let verdict: Track["verdict"] = null;
+    let disqualificationCode = "PRICE_EXCEEDED";
+    let disqualificationReason = "Higher overall fee or slippage than winning rail";
 
     if (!isWinner) {
       if (q.route === RouteKind.Cctp) {
         verdict = { note: "adapter pending Circle deployment", kind: "refusal" };
+        disqualificationCode = "REFUSAL_ADAPTER_PENDING";
+        disqualificationReason = "Circle CCTP adapter pending contract deployment";
       } else if (q.route === RouteKind.AxelarGmp) {
         verdict = { note: "no canonical token on this lane", kind: "refusal" };
+        disqualificationCode = "REFUSAL_NON_CANONICAL";
+        disqualificationReason = "No canonical token registered on this lane";
       } else if (q.route === RouteKind.Allbridge) {
         verdict = { note: "0.31% pool slippage", kind: "cost" };
+        disqualificationCode = "COST_POOL_SLIPPAGE";
+        disqualificationReason = "0.31% pool slippage exceeds winning rail net amount";
       } else {
         const blocker = describeBlocker(q.reason);
         verdict = {
           note: blocker.label.toLowerCase(),
           kind: blocker.owner === "operator" ? "refusal" : "cost",
         };
+        disqualificationCode = `BLOCKER_${blocker.label.toUpperCase().replace(/\s+/g, "_")}`;
+        disqualificationReason = blocker.detail;
       }
+    } else {
+      disqualificationCode = "WINNING_RAIL";
+      disqualificationReason = "Selected for highest net arrival and lowest fee";
     }
 
     const landingStr =
       q.available && q.destinationAmount > 0n
         ? `${formatAmount(q.destinationAmount, EVM_DECIMALS)} ${input.asset}`
         : null;
+
+    const formattedFee =
+      q.fee > 0n
+        ? `${formatAmount(q.fee, STELLAR_DECIMALS)} ${input.asset}`
+        : `0.0000000 ${input.asset}`;
+    const formattedNet =
+      q.destinationAmount > 0n
+        ? `${formatAmount(q.destinationAmount, EVM_DECIMALS)} ${input.asset}`
+        : `0.000000 ${input.asset}`;
+    const headroomStr =
+      q.flowAvailable > 0n
+        ? `${formatAmount(q.flowAvailable, STELLAR_DECIMALS)} ${input.asset}`
+        : "None";
+    const latencyStr = q.waitsOnAttestation ? "13m attestation wait" : "5s deterministic ledger";
+
+    const inspection = {
+      quotedFee: formattedFee,
+      netAmountOut: formattedNet,
+      disqualificationCode,
+      disqualificationReason,
+      headroom: headroomStr,
+      latencyEstimate: latencyStr,
+    };
 
     return {
       route: q.route,
@@ -152,6 +188,7 @@ export function planRouteExecution(
       landing: landingStr,
       waitsOnAttestation: q.waitsOnAttestation,
       canonical: q.isCanonical,
+      inspection,
     };
   });
 

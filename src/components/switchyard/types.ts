@@ -21,6 +21,15 @@ export interface TrackVerdict {
   readonly kind: "cost" | "refusal";
 }
 
+export interface TrackInspection {
+  readonly quotedFee: string;
+  readonly netAmountOut: string;
+  readonly disqualificationCode: string;
+  readonly disqualificationReason: string;
+  readonly headroom: string;
+  readonly latencyEstimate?: string;
+}
+
 export interface Track {
   readonly route: RouteKind;
   /** The rail's name, as a person would say it. */
@@ -35,6 +44,8 @@ export interface Track {
   readonly waitsOnAttestation: boolean;
   /** True for the rail that moves the asset itself rather than a representation of it. */
   readonly canonical: boolean;
+  /** Detailed breakdown for inspection popovers. */
+  readonly inspection?: TrackInspection;
 }
 
 export interface Leg {

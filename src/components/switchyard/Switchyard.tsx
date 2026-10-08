@@ -19,7 +19,8 @@
  * And below forty eight rem the drawing is removed rather than squeezed, because four tracks in a
  * phone's width is four parallel lines nobody can tell apart.
  */
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
+import type { RouteKind } from "@hyperion/protocol";
 
 import styles from "./Switchyard.module.css";
 import {
@@ -31,6 +32,7 @@ import {
   pathLengthEstimate,
   trackPath,
 } from "./geometry";
+import { Track as TrackComponent } from "./Track";
 import type { Leg, Track, YardState } from "./types";
 
 export interface SwitchyardProps {
@@ -68,6 +70,7 @@ export function Switchyard({
   resolutionId = 0,
 }: SwitchyardProps): ReactElement {
   const count = tracks.length;
+  const [inspectedRoute, setInspectedRoute] = useState<RouteKind | null>(null);
 
   return (
     <section className={styles.yard} aria-labelledby="switchyard-heading">
@@ -82,11 +85,8 @@ export function Switchyard({
         <svg
           className={styles.canvas}
           viewBox={`0 0 ${String(VIEW_WIDTH)} ${String(VIEW_HEIGHT)}`}
-          // Hidden from assistive technology on purpose. The table below says the same thing in a
-          // form that can actually be read out, and describing a four track interchange in an alt
-          // string would produce a sentence nobody wants to hear.
-          aria-hidden="true"
-          focusable="false"
+          role="region"
+          aria-label="Switchyard rail tracks"
         >
           <defs>
             {/*
@@ -109,68 +109,23 @@ export function Switchyard({
 
           {tracks.map((track, index) => {
             const path = trackPath(index, count);
-            const drawn = track.chosen && state === "resolved";
-            const className = [
-              styles.track,
-              drawn ? styles.trackChosen : null,
-              drawn ? styles.trackDrawing : null,
-              !drawn && track.verdict?.kind === "refusal" ? styles.trackRefused : null,
-              !drawn && track.verdict?.kind !== "refusal" ? styles.trackLost : null,
-            ]
-              .filter((name): name is string => name !== null)
-              .join(" ");
-
+            const isInspected = inspectedRoute === track.route;
             return (
-              <path
-                // Remounted on every new resolution so the draw-in actually replays. A stable key
-                // leaves the browser with an element whose animation has already finished.
-                key={drawn ? `chosen-${String(resolutionId)}` : `track-${String(track.route)}`}
-                className={className}
-                d={path.d}
-                style={
-                  drawn
-                    ? {
-                        strokeDasharray: DRAW_LENGTH,
-                        ["--yard-draw-length" as string]: String(DRAW_LENGTH),
-                      }
-                    : undefined
-                }
+              <TrackComponent
+                key={`track-${String(track.route)}`}
+                track={track}
+                path={path}
+                state={state}
+                resolutionId={resolutionId}
+                isInspected={isInspected}
+                onInspect={() => {
+                  setInspectedRoute(track.route);
+                }}
+                onDismiss={() => {
+                  setInspectedRoute((prev) => (prev === track.route ? null : prev));
+                }}
+                drawLength={DRAW_LENGTH}
               />
-            );
-          })}
-
-          {tracks.map((track, index) => {
-            const path = trackPath(index, count);
-            const chosen = track.chosen && state === "resolved";
-            const offset = path.labelAbove ? -10 : 18;
-            const note = chosen ? track.landing : (track.verdict?.note ?? null);
-            const noteClass = chosen
-              ? styles.annotationChosen
-              : track.verdict?.kind === "refusal"
-                ? styles.annotationRefusal
-                : styles.annotationCost;
-
-            return (
-              <g key={`label-${String(track.route)}`}>
-                <text
-                  className={`${styles.railName} ${chosen ? styles.railNameChosen : ""}`}
-                  x={path.labelX}
-                  y={path.labelY + offset}
-                  textAnchor="middle"
-                >
-                  {track.label}
-                </text>
-                {note !== null && (
-                  <text
-                    className={`${styles.annotation} ${noteClass}`}
-                    x={path.labelX}
-                    y={path.labelY + offset + (path.labelAbove ? -14 : 14)}
-                    textAnchor="middle"
-                  >
-                    {note}
-                  </text>
-                )}
-              </g>
             );
           })}
 
@@ -186,17 +141,64 @@ export function Switchyard({
         <div className={styles.legend}>
           {tracks.map((track) => {
             const chosen = track.chosen && state === "resolved";
+            const isInspected = inspectedRoute === track.route;
+            const inspection = track.inspection;
             return (
               <div
                 key={`row-${String(track.route)}`}
-                className={`${styles.legendRow} ${chosen ? styles.legendRowChosen : ""}`}
+                tabIndex={0}
+                role="button"
+                aria-label={`Inspect ${track.label} rail details`}
+                aria-expanded={isInspected}
+                onClick={() => {
+                  setInspectedRoute((prev) => (prev === track.route ? null : track.route));
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setInspectedRoute((prev) => (prev === track.route ? null : track.route));
+                  } else if (e.key === "Escape") {
+                    setInspectedRoute(null);
+                  }
+                }}
+                onFocus={() => {
+                  setInspectedRoute(track.route);
+                }}
+                onBlur={() => {
+                  setInspectedRoute((prev) => (prev === track.route ? null : prev));
+                }}
+                className={`${styles.legendRow} ${styles.legendInteractive} ${chosen ? styles.legendRowChosen : ""} ${isInspected ? styles.legendRowInspected : ""}`}
               >
-                <span className={`${styles.legendRail} ${chosen ? styles.legendRailChosen : ""}`}>
-                  {track.label}
-                  {chosen ? " (taken)" : ""}
-                </span>
-                <span className={styles.legendLanding}>{track.landing ?? "no quote"}</span>
-                <span>{track.verdict?.note ?? describeAvailable(track)}</span>
+                <div>
+                  <span className={`${styles.legendRail} ${chosen ? styles.legendRailChosen : ""}`}>
+                    {track.label}
+                    {chosen ? " (taken)" : ""}
+                  </span>
+                </div>
+                <div className={styles.legendLanding}>{track.landing ?? "no quote"}</div>
+                <div>{track.verdict?.note ?? describeAvailable(track)}</div>
+                {isInspected && inspection && (
+                  <div className={styles.legendDetail} role="region">
+                    <span className={styles.legendDetailItem}>
+                      <span className={styles.legendDetailLabel}>quoted fee: </span>
+                      {inspection.quotedFee}
+                    </span>
+                    <span className={styles.legendDetailItem}>
+                      <span className={styles.legendDetailLabel}>headroom: </span>
+                      {inspection.headroom}
+                    </span>
+                    <span className={styles.legendDetailItem}>
+                      <span className={styles.legendDetailLabel}>code: </span>
+                      <span className={styles.legendDetailCode}>
+                        {inspection.disqualificationCode}
+                      </span>
+                    </span>
+                    <span className={styles.legendDetailItem}>
+                      <span className={styles.legendDetailLabel}>reason: </span>
+                      {inspection.disqualificationReason}
+                    </span>
+                  </div>
+                )}
               </div>
             );
           })}
