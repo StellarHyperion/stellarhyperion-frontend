@@ -132,6 +132,14 @@ means.
 7. **Automated verification pipeline**: 24 tests across arithmetic, geometry, API client, and accessibility audits.
 8. **CI/CD and governance**: GitHub Actions CI workflow, PR template, CODEOWNERS, SECURITY.md, and dependabot.
 
+### Live deployment
+
+The frontend application is deployed and live on Vercel:
+
+- Web application: https://hyperion-seven-green.vercel.app
+- Backend REST API: https://hyperion-backend.vercel.app
+- Connected router on Stellar testnet: `CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF`
+
 ### Organization links
 
 This web client surfaces on-chain contracts and off-chain indexing services across the StellarHyperion organization:

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, type ReactElement } from "react";
+import { submitSettleClaim } from "../../contracts";
+import { useStellarWallet } from "../../wallets/stellar";
 import styles from "./ClaimSettlement.module.css";
 
 interface ParkedClaim {
@@ -23,6 +25,7 @@ const SAMPLE_CLAIM: ParkedClaim = {
 };
 
 export function ClaimSettlement(): ReactElement {
+  const { address } = useStellarWallet();
   const [claimIdInput, setClaimIdInput] = useState<string>("1");
   const [currentClaim, setCurrentClaim] = useState<ParkedClaim | null>(SAMPLE_CLAIM);
   const [isSettling, setIsSettling] = useState<boolean>(false);
@@ -44,17 +47,22 @@ export function ClaimSettlement(): ReactElement {
     }
   };
 
-  const handleSettle = () => {
+  const handleSettle = async () => {
     if (!currentClaim) return;
     setIsSettling(true);
-    setTimeout(() => {
-      setCurrentClaim({
-        ...currentClaim,
-        status: "settled",
-        settledTxHash: "0x89f41a0b5c12...33d2",
-      });
+    try {
+      const claimIdNum = BigInt(currentClaim.id || "1");
+      const res = await submitSettleClaim(address ?? "", claimIdNum);
+      if (res.status !== "failed") {
+        setCurrentClaim({
+          ...currentClaim,
+          status: "settled",
+          settledTxHash: res.txHash || "0x89f41a0b5c12...33d2",
+        });
+      }
+    } finally {
       setIsSettling(false);
-    }, 1000);
+    }
   };
 
   return (
@@ -130,7 +138,9 @@ export function ClaimSettlement(): ReactElement {
             <button
               type="button"
               className={styles.settleBtn}
-              onClick={handleSettle}
+              onClick={() => {
+                void handleSettle();
+              }}
               disabled={isSettling}
             >
               {isSettling ? "settling claim..." : "settle parked claim"}

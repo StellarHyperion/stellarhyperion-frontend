@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState, type ReactElement } from "react";
 import { RouteKind } from "@hyperion/protocol";
+import { submitBridgeOut, STELLAR_USDC_SAC_ID } from "../../contracts";
 import { useStellarWallet } from "../../wallets/stellar";
 import type { RoutePlannerHook } from "../../planner";
 import { StageLamps, type Stage } from "./StageLamps";
@@ -43,14 +44,14 @@ interface TransferFlowProps {
 }
 
 export function TransferFlow({ planner }: TransferFlowProps): ReactElement {
-  const { isConnected, connect } = useStellarWallet();
+  const { isConnected, connect, address } = useStellarWallet();
   const { breakdown, selectedRoute, input } = planner;
 
   const [activeTransfer, setActiveTransfer] = useState<boolean>(false);
   const [stages, setStages] = useState<Stage[]>(() => getStagesForRoute(selectedRoute));
   const [originTxHash, setOriginTxHash] = useState<string | null>(null);
 
-  const handleInitiate = () => {
+  const handleInitiate = async () => {
     setActiveTransfer(true);
     const initial = getStagesForRoute(selectedRoute);
     // Move first stage to active
@@ -59,9 +60,20 @@ export function TransferFlow({ planner }: TransferFlowProps): ReactElement {
       state: idx === 0 ? ("active" as const) : ("idle" as const),
     }));
     setStages(running);
-    setOriginTxHash(
-      "0x" + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(""),
-    );
+
+    const res = await submitBridgeOut(address ?? "", {
+      token: STELLAR_USDC_SAC_ID,
+      amount: BigInt(Math.floor((Number(input.amount) || 0) * 10_000_000)),
+      route: selectedRoute ?? RouteKind.AxelarIts,
+      destinationChain: input.destinationChain,
+      destinationAddress: input.destinationAddress,
+      destinationDecimals: 6,
+      minDestinationAmount: 0n,
+    });
+
+    if (res.status !== "failed" && res.txHash) {
+      setOriginTxHash(res.txHash);
+    }
   };
 
   if (!breakdown) {
@@ -126,7 +138,13 @@ export function TransferFlow({ planner }: TransferFlowProps): ReactElement {
               connect stellar wallet to bridge
             </button>
           ) : (
-            <button type="button" className={styles.actionBtn} onClick={handleInitiate}>
+            <button
+              type="button"
+              className={styles.actionBtn}
+              onClick={() => {
+                void handleInitiate();
+              }}
+            >
               initiate {input.amount} USDC transfer
             </button>
           )}

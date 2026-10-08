@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^2.7.1",
-    "@hyperion/protocol": "file:../contracts/packages/protocol",
+    "@hyperion/protocol": "file:hyperion-protocol-0.1.0.tgz",
     "@tanstack/react-query": "^5.104.1",
     "lucide-react": "^1.49.0",
     "next": "16.3.8",
