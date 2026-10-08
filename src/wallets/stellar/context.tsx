@@ -13,6 +13,8 @@ import {
 import type { StellarNetworkName, StellarWalletContextValue } from "./types";
 
 const STORAGE_KEY = "hyperion.stellar.wallet";
+const STELLAR_WALLET_ID_KEY = "stellar_wallet_id";
+const STELLAR_WALLET_ADDRESS_KEY = "stellar_wallet_address";
 const DEFAULT_NETWORK: StellarNetworkName = "TESTNET";
 
 const StellarWalletContext = createContext<StellarWalletContextValue | null>(null);
@@ -87,27 +89,61 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
-    function restoreSession() {
+    async function restoreSession() {
       if (typeof window === "undefined") return;
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (!saved) return;
 
-      try {
-        const parsed = JSON.parse(saved) as { address?: string; walletId?: string };
-        if (parsed.address && !cancelled) {
-          setAddress(parsed.address);
-          setWalletId(parsed.walletId ?? null);
+      let savedWalletId = localStorage.getItem(STELLAR_WALLET_ID_KEY);
+      let savedAddress = localStorage.getItem(STELLAR_WALLET_ADDRESS_KEY);
+
+      if (!savedWalletId || !savedAddress) {
+        const legacy = localStorage.getItem(STORAGE_KEY);
+        if (legacy) {
+          try {
+            const parsed = JSON.parse(legacy) as { address?: string; walletId?: string };
+            savedWalletId = savedWalletId ?? parsed.walletId ?? null;
+            savedAddress = savedAddress ?? parsed.address ?? null;
+          } catch {
+            localStorage.removeItem(STORAGE_KEY);
+          }
         }
-      } catch {
-        localStorage.removeItem(STORAGE_KEY);
+      }
+
+      if (!savedAddress && !savedWalletId) return;
+
+      if (savedAddress && !cancelled) {
+        setAddress(savedAddress);
+      }
+      if (savedWalletId && !cancelled) {
+        setWalletId(savedWalletId);
+      }
+
+      if (savedWalletId) {
+        try {
+          const kit = await getKit();
+          kit.setWallet(savedWalletId);
+          const res = await kit.fetchAddress();
+          if (res.address && !cancelled) {
+            setAddress(res.address);
+            localStorage.setItem(STELLAR_WALLET_ADDRESS_KEY, res.address);
+          }
+        } catch {
+          // If silent check fails because extension is closed or denied, reset
+          if (!cancelled) {
+            setAddress(null);
+            setWalletId(null);
+            localStorage.removeItem(STORAGE_KEY);
+            localStorage.removeItem(STELLAR_WALLET_ID_KEY);
+            localStorage.removeItem(STELLAR_WALLET_ADDRESS_KEY);
+          }
+        }
       }
     }
 
-    restoreSession();
+    void restoreSession();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [getKit]);
 
   const connect = useCallback(
     async (preferredWalletId?: string): Promise<string | null> => {
@@ -117,22 +153,36 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       try {
         const kit = await getKit();
         let connectedAddress: string;
+        let chosenWalletId = preferredWalletId ?? null;
 
         if (preferredWalletId) {
           kit.setWallet(preferredWalletId);
           const res = await kit.fetchAddress();
           connectedAddress = res.address;
-          setWalletId(preferredWalletId);
         } else {
           const res = await kit.authModal();
           connectedAddress = res.address;
+          try {
+            const activeModule = (
+              kit as unknown as { selectedModule?: { productId?: string; id?: string } }
+            ).selectedModule;
+            chosenWalletId =
+              activeModule?.productId ?? activeModule?.id ?? preferredWalletId ?? null;
+          } catch {
+            // Keep default
+          }
         }
 
         setAddress(connectedAddress);
+        setWalletId(chosenWalletId);
         if (typeof window !== "undefined") {
+          if (chosenWalletId) {
+            localStorage.setItem(STELLAR_WALLET_ID_KEY, chosenWalletId);
+          }
+          localStorage.setItem(STELLAR_WALLET_ADDRESS_KEY, connectedAddress);
           localStorage.setItem(
             STORAGE_KEY,
-            JSON.stringify({ address: connectedAddress, walletId: preferredWalletId ?? null }),
+            JSON.stringify({ address: connectedAddress, walletId: chosenWalletId }),
           );
         }
         return connectedAddress;
@@ -160,6 +210,8 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       setError(null);
       if (typeof window !== "undefined") {
         localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(STELLAR_WALLET_ID_KEY);
+        localStorage.removeItem(STELLAR_WALLET_ADDRESS_KEY);
       }
     }
   }, []);
