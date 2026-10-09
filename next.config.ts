@@ -1,5 +1,3 @@
-import { join } from "node:path";
-
 import type { NextConfig } from "next";
 
 /**
@@ -24,7 +22,7 @@ const nextConfig: NextConfig = {
   //
   // Setting it explicitly still does the job it was added for, which is stopping Turbopack from
   // walking up into a home directory looking for a lockfile and warning on every build.
-  turbopack: { root: join(import.meta.dirname, "..") },
+  turbopack: { root: import.meta.dirname },
 };
 
 export default nextConfig;

@@ -16,7 +16,7 @@ import { join, relative, sep } from "node:path";
 const ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const SELF = "scripts/house-rules.mjs";
 
-const SKIP_DIRS = new Set([".git", ".next", "node_modules", "out", "coverage"]);
+const SKIP_DIRS = new Set([".git", ".next", ".vercel", "node_modules", "out", "coverage"]);
 const TEXT_EXT = new Set([".ts", ".tsx", ".mjs", ".js", ".css", ".json", ".md", ".py", ".svg"]);
 
 /**

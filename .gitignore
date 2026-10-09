@@ -24,3 +24,4 @@ public/.icon-contact-sheet.png
 __pycache__/
 *.pyc
 .vercel
+.env*
