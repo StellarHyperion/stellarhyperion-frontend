@@ -32,7 +32,7 @@
     "@hyperion/protocol": "file:hyperion-protocol-0.1.0.tgz",
     "@tanstack/react-query": "^5.104.1",
     "lucide-react": "^1.49.0",
-    "next": "16.3.8",
+    "next": "16.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "viem": "^2.57.3",
