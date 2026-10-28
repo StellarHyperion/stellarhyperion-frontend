@@ -6,6 +6,8 @@ export const TESTNET = {
   router: configured(process.env.NEXT_PUBLIC_STELLAR_ROUTER, stellar.router),
   token: configured(process.env.NEXT_PUBLIC_STELLAR_USDC, stellar.tokens.USDC.sacId),
   reader: stellar.admin,
+  usdcCode: stellar.tokens.USDC.code,
+  usdcIssuer: stellar.tokens.USDC.issuer,
   rpcUrl: configured(
     process.env.NEXT_PUBLIC_STELLAR_RPC_URL,
     "https://soroban-testnet.stellar.org",

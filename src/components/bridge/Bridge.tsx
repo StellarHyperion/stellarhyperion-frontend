@@ -282,7 +282,7 @@ export function Bridge() {
         </div>
       )}
       <details>
-        <summary>Testnet contract</summary>
+        <summary>Testnet setup and contract</summary>
         <p className={styles.address}>{TESTNET.router}</p>
         <a
           href="https://laboratory.stellar.org/account/fund"
@@ -290,6 +290,13 @@ export function Bridge() {
           rel="noopener noreferrer"
         >
           Fund a testnet account with XLM
+        </a>
+        <p>Add the USDC trustline in your wallet before requesting test USDC.</p>
+        <p className={styles.address}>
+          Asset: {TESTNET.usdcCode}. Issuer: {TESTNET.usdcIssuer}
+        </p>
+        <a href="https://faucet.circle.com/" target="_blank" rel="noopener noreferrer">
+          Get Stellar Testnet USDC from Circle
         </a>
       </details>
     </section>

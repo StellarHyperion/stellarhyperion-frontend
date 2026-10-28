@@ -2,7 +2,7 @@
 
 A Stellar wallet interface for real contract quotes, signed transfers, transaction status and parked-claim recovery. The current interface supports Stellar Testnet USDC to Ethereum Sepolia through Axelar ITS. The received token is the seven-decimal ITS representation of Stellar USDC, **not Circle's native Sepolia USDC**.
 
-The app checks the deployed router, adapter, token mapping, destination token and relay-gas support before enabling a transfer. The deployment record alone does not establish a usable lane. The existing deployment requires the paid-transfer router/adapter upgrade and Sepolia link/token mapping; until those operations are confirmed, sending stays disabled.
+The app checks the deployed router, adapter, token mapping, destination token and relay-gas support before enabling a transfer. The deployment record alone does not establish a usable lane. The current wallet-owned deployment has been activated after its normal timelock, with confirmed USDC mapping and a Sepolia link. The app still verifies live state before each quote and signature.
 
 ## Run
 
@@ -34,6 +34,6 @@ The browser RPC/router/USDC settings default to the checked-in testnet deploymen
 
 For a read-only browser smoke check, install Chromium with `npx playwright install chromium`, start the development server on port 3100, then run `npm run test:browser`. No wallet signing is automated by this check.
 
-Operator activation instructions are in the contracts repository at `docs/TESTNET_ACTIVATION.md`. Code validation does not prove a deployed upgrade or an end-to-end wallet transfer.
+Deployment addresses and signed transaction evidence are in the contracts repository at `docs/TESTNET_ACTIVATION.md` and `deployments/evidence/2026-10-28-paid-its.json`. The opt-in `test/live-transfer.test.ts` signs 0.1 testnet USDC with a named CLI wallet and checks real source execution and indexed destination token delivery. It saves its source hash across interrupted runs and is skipped unless `HYPERION_LIVE_TESTNET=1` is set.
 
 MIT.
