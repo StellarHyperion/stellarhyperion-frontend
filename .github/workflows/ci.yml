@@ -34,10 +34,10 @@ jobs:
           repository: StellarHyperion/stellarhyperion-contracts
           path: contracts
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.22.1
           cache: npm
           cache-dependency-path: |
             contracts/packages/protocol/package-lock.json
@@ -79,10 +79,10 @@ jobs:
           repository: StellarHyperion/stellarhyperion-contracts
           path: contracts
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.22.1
           cache: npm
           cache-dependency-path: |
             contracts/packages/protocol/package-lock.json
@@ -149,10 +149,10 @@ jobs:
           repository: StellarHyperion/stellarhyperion-contracts
           path: contracts
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.22.1
           cache: npm
           cache-dependency-path: |
             contracts/packages/protocol/package-lock.json
