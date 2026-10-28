@@ -14,7 +14,7 @@ export const metadata: Metadata = {
     template: "%s / Hyperion",
   },
   description:
-    "Hyperion prices four audited cross-chain rails locally and takes the one that lands the most money. It does not run a validator set of its own.",
+    "Stellar testnet transfers through configured Axelar ITS lanes, with wallet signing and on-chain transaction tracking.",
   applicationName: "Hyperion",
   authors: [{ name: "dotmantissa" }],
   // Generated from the mark component by `npm run icons`, so the tab and the header cannot drift.

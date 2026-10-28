@@ -5,7 +5,7 @@ import { useStellarWallet } from "../../wallets/stellar";
 import styles from "./StellarWalletButton.module.css";
 
 export function StellarWalletButton() {
-  const { isConnected, isConnecting, shortAddress, address, network, connect, disconnect } =
+  const { isConnected, isConnecting, shortAddress, address, error, connect, disconnect } =
     useStellarWallet();
   const [menuOpen, setMenuOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -36,6 +36,7 @@ export function StellarWalletButton() {
       >
         <span className={styles.dot} />
         <span>{isConnecting ? "connecting..." : "connect stellar"}</span>
+        {error && <span role="alert">{error}</span>}
       </button>
     );
   }
@@ -53,7 +54,7 @@ export function StellarWalletButton() {
       >
         <span className={styles.dot} />
         <span>{shortAddress}</span>
-        <span className={styles.network}>({network.toLowerCase()})</span>
+        <span className={styles.network}>(testnet)</span>
       </button>
 
       {menuOpen && (

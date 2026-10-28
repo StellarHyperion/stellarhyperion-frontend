@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState, type ReactElement } from "react";
 
 import { HyperionMark } from "../brand/HyperionMark";
-import { StellarWalletButton, EvmWalletButton } from "../wallet";
+import { StellarWalletButton } from "../wallet";
 import styles from "../chrome/Chrome.module.css";
 
 export type ThemeChoice = "system" | "dark" | "light";
@@ -91,7 +91,7 @@ export function Header({ network }: { readonly network: string }): ReactElement 
           </Link>
           <nav className={styles.navLinks} aria-label="Main navigation">
             <Link className={styles.navLink} href="/">
-              Switchyard
+              Send
             </Link>
             <Link className={styles.navLink} href="/transfers">
               Transfers
@@ -106,7 +106,6 @@ export function Header({ network }: { readonly network: string }): ReactElement 
           <span className={`mono ${styles.network}`}>{network}</span>
           <ThemeSelector />
           <StellarWalletButton />
-          <EvmWalletButton />
         </div>
       </div>
     </header>

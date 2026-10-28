@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-01T12:11:16.725Z",
+  "networks": {
+    "stellar-testnet": {
+      "family": "stellar",
+      "networkPassphrase": "Test SDF Network ; September 2015",
+      "router": "CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF",
+      "adapters": {
+        "axelar-its": "CBK3TPRQR5A3H2AWESOUX4MVYOP63VNQ5EYHCX26EEJUC5B5FLB4DV5O"
+      },
+      "tokens": {
+        "USDC": {
+          "sacId": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+          "code": "USDC",
+          "issuer": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          "decimals": 7,
+          "flowLimit": "10000000000000",
+          "routes": ["axelar-its"]
+        }
+      },
+      "treasury": "GCHPVETUL5E4YKDLMRIBFUGFK4PMYOVKPFALVSYMP2QDYAVBA3ITQDAI",
+      "admin": "GCHPVETUL5E4YKDLMRIBFUGFK4PMYOVKPFALVSYMP2QDYAVBA3ITQDAI",
+      "guardian": "GCHPVETUL5E4YKDLMRIBFUGFK4PMYOVKPFALVSYMP2QDYAVBA3ITQDAI",
+      "feeBps": 30,
+      "flowWindow": 720,
+      "timelockDelay": 3600,
+      "wasmHashes": {
+        "router": "e2698a44680a74731c7fa5a9946ce8fd04499e159aa00bd20e98b63de958d10f",
+        "adapter-axelar": "b81d8090e63ac0e339217f5cce29f045e85acdb206cdb0dd0db4b44f476d4395"
+      },
+      "deployedAt": {
+        "ledger": 4965951,
+        "timestamp": "2026-10-01T12:11:16.702Z"
+      },
+      "commit": "ee4f419384f77bf9da0e594f4d6a48d0690385cf",
+      "deployer": "GCHPVETUL5E4YKDLMRIBFUGFK4PMYOVKPFALVSYMP2QDYAVBA3ITQDAI",
+      "peerChain": "arc-testnet",
+      "queuedActionIds": [1, 2, 3, 7],
+      "queuedActions": [
+        "register USDC",
+        "set axelar adapter",
+        "set axelar receiver",
+        "enable axelar its"
+      ]
+    }
+  }
+}

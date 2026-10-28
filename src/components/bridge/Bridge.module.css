@@ -1,0 +1,81 @@
+.panel {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  background: var(--surface-panel);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-panel);
+}
+.heading {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.panel h2 {
+  font-family: var(--face-display);
+  font-size: 1.35rem;
+}
+.panel label {
+  font-weight: 600;
+}
+.panel input {
+  width: 100%;
+  min-width: 0;
+  background: var(--surface-page);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  color: var(--text-primary);
+  font-family: var(--face-mono);
+}
+.panel button {
+  padding: var(--space-3) var(--space-4);
+  background: var(--leg-origin);
+  color: var(--ink);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.panel button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.panel .secondary {
+  background: var(--ink-3);
+  color: var(--text-primary);
+}
+.status {
+  padding: var(--space-3);
+  border-inline-start: 2px solid var(--leg-origin);
+}
+.error {
+  color: var(--bad);
+}
+.summary {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--ink-3);
+}
+.summary div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.summary dd {
+  font-family: var(--face-mono);
+}
+.address {
+  overflow-wrap: anywhere;
+  font-family: var(--face-mono);
+  font-size: 0.8rem;
+}
+@media (width <= 40rem) {
+  .panel {
+    padding: var(--space-4);
+  }
+}

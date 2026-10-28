@@ -4,7 +4,7 @@ import Link from "next/link";
 import { type ReactElement } from "react";
 import { ExternalLink } from "lucide-react";
 import { getRouteName, type FormattedTransfer, type TransferLifecycleStage } from "../../api";
-import { getExplorerUrl, shortenAddress, shortenTxHash } from "../../lib/format";
+import { formatTokenAmount, getExplorerUrl, shortenAddress, shortenTxHash } from "../../lib/format";
 import styles from "./TransferList.module.css";
 
 interface TransferListProps {
@@ -36,11 +36,7 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
   return (
     <div className={styles.transferList} role="feed" aria-label="Transfers list">
       {transfers.map((t) => (
-        <Link
-          key={t.id}
-          href={`/transfers/${encodeURIComponent(t.origin.txHash)}`}
-          className={styles.transferCard}
-        >
+        <article key={t.id} className={styles.transferCard}>
           <div className={styles.cardTop}>
             <div className={styles.routeAndStage}>
               <span className={styles.routeBadge}>{getRouteName(t.route)}</span>
@@ -125,12 +121,23 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
 
           <div className={styles.cardBottom}>
             <div className={styles.amountGroup}>
-              <span className={styles.netAmount}>{t.origin.netAmount} USDC</span>
-              <span className={styles.feeAmount}>(fee: {t.origin.fee} USDC)</span>
+              <span className={styles.netAmount}>
+                {formatTokenAmount(t.origin.netAmount, t.origin.decimals)}{" "}
+                {t.origin.symbol ?? "token"}
+              </span>
+              <span className={styles.feeAmount}>
+                (fee: {formatTokenAmount(t.origin.fee, t.origin.decimals)}{" "}
+                {t.origin.symbol ?? "token"})
+              </span>
             </div>
-            <span className={styles.inspectAction}>inspect transfer details</span>
+            <Link
+              href={`/transfers/${encodeURIComponent(t.origin.txHash)}`}
+              className={styles.inspectAction}
+            >
+              inspect transfer details
+            </Link>
           </div>
-        </Link>
+        </article>
       ))}
     </div>
   );

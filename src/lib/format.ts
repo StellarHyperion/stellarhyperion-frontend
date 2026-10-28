@@ -1,3 +1,4 @@
+import { formatUnits } from "@hyperion/protocol";
 /**
  * Format and explorer deep link helpers for Hyperion.
  *
@@ -87,4 +88,11 @@ export function getExplorerUrl(chainKey: string, type: "tx" | "address", id: str
       return `https://sepolia.etherscan.io/${segment}/${cleanId}`;
     }
   }
+}
+
+export function formatTokenAmount(value: string, decimals?: number | null): string {
+  if (!/^\d+$/.test(value)) return "unavailable";
+  return decimals === null || decimals === undefined
+    ? `${value} base units`
+    : formatUnits(BigInt(value), decimals);
 }

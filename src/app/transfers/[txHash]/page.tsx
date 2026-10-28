@@ -1,380 +1,123 @@
 "use client";
-
 import Link from "next/link";
-import { use, useEffect, useState, type ReactElement } from "react";
-import { ExternalLink } from "lucide-react";
+import { use, useEffect, useState } from "react";
 import { Column, Footer, Header, Main, Shell } from "../../../components/chrome";
-import { StageLamps, type Stage } from "../../../components/transfer/StageLamps";
-import {
-  fetchTransferByTx,
-  getRouteName,
-  type FormattedTransfer,
-  type TransferLifecycleStage,
-} from "../../../api";
-import { getExplorerUrl } from "../../../lib/format";
+import { fetchTransferByTx, getRouteName, type FormattedTransfer } from "../../../api";
+import { readTransaction, errorMessage, type TransactionResult } from "../../../contracts";
+import { formatTokenAmount, getExplorerUrl } from "../../../lib/format";
 import styles from "./page.module.css";
-
-interface PageProps {
-  readonly params: Promise<{ readonly txHash: string }>;
-}
-
-function getStageClass(stage: TransferLifecycleStage): string {
-  switch (stage) {
-    case "delivered":
-    case "settled":
-      return styles.stageDelivered ?? "";
-    case "initiated":
-    case "attesting":
-    case "attested":
-    case "delivering":
-      return styles.stageInFlight ?? "";
-    case "parked":
-      return styles.stageParked ?? "";
-    case "failed":
-      return styles.stageFailed ?? "";
-  }
-}
-
-function buildStages(t: FormattedTransfer): Stage[] {
-  let stageNames: [string, string, string];
-  let stageDetails: [string, string, string];
-
-  if (t.route === 0) {
-    stageNames = ["burn", "attest", "mint"];
-    stageDetails = ["origin SAC", "circle iris", "destination cctp"];
-  } else if (t.route === 2) {
-    stageNames = ["call", "relay", "execute"];
-    stageDetails = ["origin gateway", "axelar validators", "destination execute"];
-  } else if (t.route === 3) {
-    stageNames = ["deposit", "relay", "release"];
-    stageDetails = ["v_usd pool", "allbridge messenger", "destination pool"];
-  } else {
-    stageNames = ["dispatch", "relay", "receive"];
-    stageDetails = ["origin token manager", "axelar network", "destination execute"];
-  }
-
-  const [s0, s1, s2] = stageNames;
-  const [d0, d1, d2] = stageDetails;
-
-  if (t.stage === "delivered" || t.stage === "settled") {
-    return [
-      { id: s0, name: s0, detail: d0, state: "completed" },
-      { id: s1, name: s1, detail: d1, state: "completed" },
-      { id: s2, name: s2, detail: d2, state: "completed" },
-    ];
-  }
-  if (t.stage === "delivering" || t.stage === "parked") {
-    return [
-      { id: s0, name: s0, detail: d0, state: "completed" },
-      { id: s1, name: s1, detail: d1, state: "completed" },
-      { id: s2, name: s2, detail: d2, state: "active" },
-    ];
-  }
-  if (t.stage === "attested") {
-    return [
-      { id: s0, name: s0, detail: d0, state: "completed" },
-      { id: s1, name: s1, detail: d1, state: "completed" },
-      { id: s2, name: s2, detail: d2, state: "idle" },
-    ];
-  }
-  if (t.stage === "attesting") {
-    return [
-      { id: s0, name: s0, detail: d0, state: "completed" },
-      { id: s1, name: s1, detail: d1, state: "active" },
-      { id: s2, name: s2, detail: d2, state: "idle" },
-    ];
-  }
-  if (t.stage === "failed") {
-    return [
-      { id: s0, name: s0, detail: d0, state: "completed" },
-      { id: s1, name: s1, detail: d1, state: "failed" },
-      { id: s2, name: s2, detail: d2, state: "idle" },
-    ];
-  }
-  // initiated
-  return [
-    { id: s0, name: s0, detail: d0, state: "active" },
-    { id: s1, name: s1, detail: d1, state: "idle" },
-    { id: s2, name: s2, detail: d2, state: "idle" },
-  ];
-}
-
-export default function TransferDetailPage({ params }: PageProps): ReactElement {
+export default function TransferDetailPage({ params }: { params: Promise<{ txHash: string }> }) {
   const { txHash } = use(params);
-  const [transfer, setTransfer] = useState<FormattedTransfer | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-
+  const [record, setRecord] = useState<FormattedTransfer | null>(null);
+  const [origin, setOrigin] = useState<TransactionResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [indexerError, setIndexerError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let active = true;
-    void fetchTransferByTx(txHash).then((res) => {
-      if (active) {
-        setTransfer(res);
-        setLoading(false);
-      }
-    });
+    const load = async () => {
+      await Promise.allSettled([
+        readTransaction(txHash)
+          .then((result) => {
+            if (active) {
+              setOrigin(result);
+              setError(null);
+            }
+          })
+          .catch((cause: unknown) => {
+            if (active) setError(errorMessage(cause));
+          }),
+        fetchTransferByTx(txHash)
+          .then((result) => {
+            if (active) {
+              setRecord(result);
+              setIndexerError(null);
+            }
+          })
+          .catch((cause: unknown) => {
+            if (active) setIndexerError(errorMessage(cause));
+          }),
+      ]);
+      if (active) setLoading(false);
+    };
+    void load();
+    const timer = setInterval(() => void load(), 5000);
     return () => {
       active = false;
+      clearInterval(timer);
     };
   }, [txHash]);
-
   return (
     <Shell>
-      <Header network="stellar testnet" />
+      <Header network="Stellar Testnet" />
       <Main>
         <Column>
-          <nav className={styles.topNav} aria-label="Breadcrumb">
-            <Link href="/transfers" className={styles.backLink}>
-              Back to Transfer registry
-            </Link>
-          </nav>
-
-          {loading ? (
-            <div className={styles.errorState}>Loading transfer details...</div>
-          ) : !transfer ? (
-            <div className={styles.errorState}>
-              <h2 className="heading">Transfer not found</h2>
-              <p className="prose">
-                No transfer record was found matching transaction hash {txHash}.
+          <Link href="/transfers">Back to transfer history</Link>
+          <h1 className="display">Transaction status</h1>
+          <p className="mono" style={{ overflowWrap: "anywhere" }}>
+            {txHash}
+          </p>
+          {loading && <p role="status">Checking chain and indexer...</p>}
+          {error && <p role="alert">{error}</p>}
+          {origin && (
+            <section className={styles.legPanel} aria-label="Stellar transaction status">
+              <h2>Stellar transaction</h2>
+              <p role="status">
+                {origin.status === "confirmed"
+                  ? "Confirmed on Stellar Testnet."
+                  : origin.status === "failed"
+                    ? "Failed on Stellar. No transfer was dispatched."
+                    : "Not yet confirmed by the RPC. Check this hash before submitting again."}
               </p>
-              <Link href="/transfers" className={styles.backLink}>
-                Return to transfer list
-              </Link>
-            </div>
-          ) : (
-            <>
-              <div className={styles.headerBlock}>
-                <div className={styles.titleRow}>
-                  <h1 className="title">Transfer inspector</h1>
-                  <span className={`${styles.stageBadge} ${getStageClass(transfer.stage)}`}>
-                    {transfer.stage}
-                  </span>
-                </div>
-                <div className={styles.txHashDisplay}>
-                  <span>tx: {transfer.origin.txHash}</span>
-                  <a
-                    href={getExplorerUrl(transfer.origin.chain, "tx", transfer.origin.txHash)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={`View origin transaction ${transfer.origin.txHash} on ${transfer.origin.chain} explorer`}
-                    className={styles.explorerLink}
-                  >
-                    <ExternalLink size={12} aria-hidden="true" />
-                  </a>
-                </div>
-              </div>
-
-              <section className={styles.lifecycleSection} aria-label="Progress lamps">
-                <StageLamps stages={buildStages(transfer)} />
-              </section>
-
-              {transfer.claim && (
-                <aside className={styles.claimBanner} aria-label="Parked claim notice">
-                  <div className={styles.claimBannerTitle}>
-                    {transfer.claim.settled ? "Claim settled" : "Parked claim pending recovery"}
-                  </div>
-                  <div className={styles.claimBannerText}>
-                    This delivery holds claim ID {transfer.claim.id}.{" "}
-                    {transfer.claim.settled
-                      ? "Funds were settled directly to the recipient."
-                      : "The destination address is uninitialized or guarded. Anyone can settle this claim permissionlessly."}
-                  </div>
-                </aside>
+              <a
+                href={getExplorerUrl("stellar-testnet", "tx", txHash)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View on Stellar Explorer
+              </a>
+            </section>
+          )}
+          {indexerError && (
+            <p role="status">{indexerError} Destination delivery cannot be verified here.</p>
+          )}
+          {!loading && !record && !indexerError && (
+            <p>
+              The indexer has not recorded this transfer yet. Source confirmation alone does not
+              verify destination delivery.
+            </p>
+          )}
+          {record && (
+            <section className={styles.legPanel} aria-label="Indexed transfer status">
+              <h2>{getRouteName(record.route)}</h2>
+              <p role="status">Status: {record.stage}</p>
+              <p>
+                Sent from {record.origin.chain} to {record.destination.chain}
+              </p>
+              <p>
+                Net: {formatTokenAmount(record.origin.netAmount, record.origin.decimals)}{" "}
+                {record.origin.symbol ?? "token"}. Fee:{" "}
+                {formatTokenAmount(record.origin.fee, record.origin.decimals)}{" "}
+                {record.origin.symbol ?? "token"}.
+              </p>
+              <p style={{ overflowWrap: "anywhere" }}>Recipient: {record.destination.recipient}</p>
+              {record.rail?.railStatus && <p>Rail reports: {record.rail.railStatus}</p>}
+              {record.destination.txHash && (
+                <a
+                  href={getExplorerUrl(record.destination.chain, "tx", record.destination.txHash)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View destination transaction
+                </a>
               )}
-
-              <div className={styles.panelsGrid}>
-                {/* 1. Origin Leg */}
-                <section className={styles.legPanel} aria-label="Origin leg details">
-                  <div className={styles.panelTitle}>
-                    <span>Origin leg</span>
-                    <span className={styles.panelBadge}>source</span>
-                  </div>
-
-                  <div className={styles.factList}>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>chain</span>
-                      <span className={styles.factValue}>{transfer.origin.chain}</span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>sender</span>
-                      <span className={styles.factValue}>
-                        <span>{transfer.origin.sender}</span>
-                        <a
-                          href={getExplorerUrl(
-                            transfer.origin.chain,
-                            "address",
-                            transfer.origin.sender,
-                          )}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`View sender address ${transfer.origin.sender} on ${transfer.origin.chain} explorer`}
-                          className={styles.explorerLink}
-                        >
-                          <ExternalLink size={12} aria-hidden="true" />
-                        </a>
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>nonce</span>
-                      <span className={styles.factValue}>{transfer.origin.nonce}</span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>block ledger</span>
-                      <span className={styles.factValue}>{transfer.origin.block}</span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>gross amount</span>
-                      <span className={styles.factValue}>
-                        {transfer.origin.grossAmount} {transfer.origin.token}
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>protocol fee</span>
-                      <span className={styles.factValue}>
-                        {transfer.origin.fee} {transfer.origin.token}
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>net departure</span>
-                      <span className={styles.factValue}>
-                        {transfer.origin.netAmount} {transfer.origin.token}
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>observed at</span>
-                      <span className={styles.factValue}>
-                        {new Date(transfer.origin.observedAt).toUTCString()}
-                      </span>
-                    </div>
-                  </div>
-                </section>
-
-                {/* 2. Rail Attestation */}
-                <section className={styles.legPanel} aria-label="Rail attestation details">
-                  <div className={styles.panelTitle}>
-                    <span>Rail bridge</span>
-                    <span className={styles.panelBadge}>{getRouteName(transfer.route)}</span>
-                  </div>
-
-                  <div className={styles.factList}>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>route index</span>
-                      <span className={styles.factValue}>{transfer.route}</span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>attestation status</span>
-                      <span className={styles.factValue}>
-                        {transfer.rail?.status ?? "pending observation"}
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>rail status</span>
-                      <span className={styles.factValue}>
-                        {transfer.rail?.railStatus ?? "in transit"}
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>reference</span>
-                      <span className={styles.factValue}>
-                        {transfer.rail?.reference ?? "not assigned"}
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>attested at</span>
-                      <span className={styles.factValue}>
-                        {transfer.rail?.attestedAt
-                          ? new Date(transfer.rail.attestedAt).toUTCString()
-                          : "awaiting signature"}
-                      </span>
-                    </div>
-                    {transfer.rail?.lastError && (
-                      <div className={styles.factItem}>
-                        <span className={styles.factLabel}>last error</span>
-                        <span className={styles.factValue}>{transfer.rail.lastError}</span>
-                      </div>
-                    )}
-                  </div>
-                </section>
-
-                {/* 3. Destination Leg */}
-                <section className={styles.legPanel} aria-label="Destination leg details">
-                  <div className={styles.panelTitle}>
-                    <span>Destination leg</span>
-                    <span className={styles.panelBadge}>arrival</span>
-                  </div>
-
-                  <div className={styles.factList}>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>chain</span>
-                      <span className={styles.factValue}>{transfer.destination.chain}</span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>recipient</span>
-                      <span className={styles.factValue}>
-                        <span>{transfer.destination.recipient}</span>
-                        <a
-                          href={getExplorerUrl(
-                            transfer.destination.chain,
-                            "address",
-                            transfer.destination.recipient,
-                          )}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`View recipient address ${transfer.destination.recipient} on ${transfer.destination.chain} explorer`}
-                          className={styles.explorerLink}
-                        >
-                          <ExternalLink size={12} aria-hidden="true" />
-                        </a>
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>delivery status</span>
-                      <span className={styles.factValue}>
-                        {transfer.destination.delivered ? "delivered" : "pending delivery"}
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>block</span>
-                      <span className={styles.factValue}>
-                        {transfer.destination.block ?? "unmined"}
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>destination tx</span>
-                      <span className={styles.factValue}>
-                        {transfer.destination.txHash ? (
-                          <>
-                            <span>{transfer.destination.txHash}</span>
-                            <a
-                              href={getExplorerUrl(
-                                transfer.destination.chain,
-                                "tx",
-                                transfer.destination.txHash,
-                              )}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              aria-label={`View destination transaction ${transfer.destination.txHash} on ${transfer.destination.chain} explorer`}
-                              className={styles.explorerLink}
-                            >
-                              <ExternalLink size={12} aria-hidden="true" />
-                            </a>
-                          </>
-                        ) : (
-                          "not yet submitted"
-                        )}
-                      </span>
-                    </div>
-                    <div className={styles.factItem}>
-                      <span className={styles.factLabel}>delivered at</span>
-                      <span className={styles.factValue}>
-                        {transfer.destination.deliveredAt
-                          ? new Date(transfer.destination.deliveredAt).toUTCString()
-                          : "in flight"}
-                      </span>
-                    </div>
-                  </div>
-                </section>
-              </div>
-            </>
+              {record.claim && (
+                <p>
+                  Claim {record.claim.id}:{" "}
+                  {record.claim.settled ? "settled" : "parked on the destination router"}.
+                </p>
+              )}
+            </section>
           )}
         </Column>
       </Main>

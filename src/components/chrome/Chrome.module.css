@@ -27,6 +27,7 @@
 
 .headerInner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
@@ -35,6 +36,7 @@
 
 .brandGroup {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-6);
 }
@@ -144,19 +146,15 @@
 }
 
 .main {
-  /* Deliberately not a flex or grid container. The yard breaks out of the column by sitting
-   * outside it in the markup, not by fighting a parent's layout. */
+  min-width: 0;
   display: block;
 }
 
 .column {
+  min-width: 0;
   padding-block: var(--space-8);
   display: grid;
   gap: var(--space-6);
-}
-
-.columnTight {
-  padding-block: var(--space-7);
 }
 
 .footer {
@@ -189,4 +187,11 @@
 .footerLinks a:focus-visible {
   color: var(--text-primary);
   border-block-end-color: var(--leg-origin);
+}
+
+@media (width <= 40rem) {
+  .actions {
+    width: 100%;
+    justify-content: space-between;
+  }
 }

@@ -32,7 +32,13 @@ const TOKEN_LAYER = new Set([TOKEN_CSS, TOKEN_TS]);
 
 function walk(dir, out = []) {
   for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
+    if (
+      SKIP_DIRS.has(entry) ||
+      /^agents?\.md$/i.test(entry) ||
+      entry === "CLAUDE.md" ||
+      entry === "TASKS.md"
+    )
+      continue;
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) walk(full, out);
     else out.push(full);
