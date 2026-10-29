@@ -1,197 +1,205 @@
-/*
- * The page frame. One column, read top to bottom, because that is the shape of a transfer.
- */
-
 .shell {
   min-height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr auto;
 }
-
 .header {
-  border-block-end: 1px solid var(--edge-color);
-  background: var(--surface-page);
   position: sticky;
   top: 0;
   z-index: 10;
+  background: color-mix(in srgb, var(--surface-page) 88%, transparent);
+  backdrop-filter: blur(20px);
+  border-block-end: 1px solid color-mix(in srgb, var(--edge-color) 70%, transparent);
 }
-
 .headerInner,
 .column,
 .footerInner {
   max-width: var(--measure);
   margin-inline: auto;
-  /* Sixteen either side at phone width, which is the gutter the plan asks for. */
-  padding-inline: var(--space-4);
+  padding-inline: var(--gutter);
 }
-
 .headerInner {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  padding-block: var(--space-4);
+  padding-block: var(--space-5);
 }
-
 .brandGroup {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-6);
+  gap: var(--space-7);
 }
-
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   color: var(--text-primary);
   text-decoration: none;
 }
-
 .brandMark {
   color: var(--leg-origin);
 }
-
 .brandName {
-  font-family: var(--face-display);
   font-size: 1.0625rem;
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.04em;
 }
-
 .navLinks {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--surface-panel);
+  border: 1px solid var(--edge-color);
 }
-
+.navLinks::before {
+  content: "";
+  position: absolute;
+  inset-block: 3px;
+  inset-inline-start: 3px;
+  width: calc((100% - 6px) / 2);
+  border-radius: 999px;
+  background: var(--surface-page);
+  border: 1px solid var(--edge-color);
+  transition: transform var(--motion-state) var(--ease-enter);
+}
+.navLinks[data-section="transfers"]::before {
+  transform: translateX(100%);
+}
 .navLink {
-  color: var(--text-data);
+  position: relative;
+  display: block;
+  text-align: center;
+  padding: var(--space-2) var(--space-4);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
   text-decoration: none;
-  font-family: var(--face-mono);
-  font-size: var(--type-mono-size);
-  padding: var(--space-1) var(--space-2);
-  border-block-end: 1px solid transparent;
+  transition: color var(--motion-state);
 }
-
-.navLink:hover,
-.navLink:focus-visible {
+.navLink[aria-current],
+.navLink:hover {
   color: var(--text-primary);
-  border-block-end-color: var(--leg-origin);
 }
-
 .actions {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
 }
-
 .network {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--edge-color);
-  border-radius: var(--radius-control);
-  color: var(--text-data);
-  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 0.625rem;
 }
-
-/* The one hover state in the chrome, and it communicates a state change rather than lifting. */
-.network:hover,
-.network:focus-visible {
-  border-color: var(--edge-color-strong);
-  color: var(--text-primary);
+.network::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--leg-origin);
 }
-
 .themeSelector {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--edge-color);
-  border-radius: var(--radius-control);
-  background: var(--surface-raised);
-  padding: 1px;
-  gap: 1px;
 }
-
-.themeOption {
-  background: transparent;
-  border: none;
-  border-radius: calc(var(--radius-control) - 1px);
-  color: var(--text-data);
-  font-family: var(--face-mono);
-  font-size: var(--type-mono-sm-size);
-  padding: var(--space-1) var(--space-2);
+.themeSelector select {
+  appearance: none;
   cursor: pointer;
+  border: 0;
+  border-radius: 999px;
+  padding: var(--space-2) var(--space-5) var(--space-2) var(--space-3);
+  font-family: var(--face-display);
+  font-size: 0.6875rem;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
   transition:
-    color var(--motion-tap) var(--ease-enter),
-    background-color var(--motion-tap) var(--ease-enter);
+    color var(--motion-state),
+    background var(--motion-state);
 }
-
-.themeOption:hover {
+.themeSelector select:hover {
   color: var(--text-primary);
-}
-
-.themeOption:focus-visible {
-  outline: var(--focus-width) solid var(--focus-color);
-  outline-offset: var(--focus-offset);
-}
-
-.themeOptionActive {
   background: var(--surface-panel);
-  color: var(--text-primary);
-  font-weight: 500;
 }
-
+.themeSelector > svg {
+  pointer-events: none;
+  position: absolute;
+  inset-inline-end: var(--space-2);
+  color: var(--text-secondary);
+}
 .main {
   min-width: 0;
-  display: block;
 }
-
 .column {
   min-width: 0;
-  padding-block: var(--space-8);
+  padding-block: clamp(2rem, 5vw, 4rem);
   display: grid;
   gap: var(--space-6);
 }
-
 .footer {
   border-block-start: 1px solid var(--edge-color);
-  background: var(--surface-page);
 }
-
 .footerInner {
-  padding-block: var(--space-6);
+  padding-block: var(--space-5);
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-4);
   justify-content: space-between;
-  color: var(--text-data);
+  align-items: center;
+  color: var(--text-secondary);
 }
-
+.footerInner p,
+.footerLinks a {
+  font-size: 0.625rem;
+}
 .footerLinks {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-5);
 }
-
 .footerLinks a {
-  color: var(--text-data);
+  color: var(--text-secondary);
   text-decoration: none;
-  border-block-end: 1px solid transparent;
+  transition: color var(--motion-state);
 }
-
-.footerLinks a:hover,
-.footerLinks a:focus-visible {
-  color: var(--text-primary);
-  border-block-end-color: var(--leg-origin);
+.footerLinks a:hover {
+  color: var(--leg-origin);
 }
-
+@media (width <= 58rem) {
+  .brandGroup {
+    gap: var(--space-4);
+  }
+  .headerInner {
+    gap: var(--space-3);
+    padding-block: var(--space-4);
+  }
+}
 @media (width <= 40rem) {
+  .headerInner {
+    gap: var(--space-3);
+  }
+  .brandGroup {
+    justify-content: space-between;
+    width: 100%;
+  }
   .actions {
     width: 100%;
     justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .network {
+    display: inline-flex;
+  }
+  .themeSelector {
+    margin-inline-start: auto;
+  }
+  .navLink {
+    padding: var(--space-2) var(--space-3);
   }
 }

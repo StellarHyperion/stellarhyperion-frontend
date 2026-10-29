@@ -26,12 +26,6 @@ describe("Accessibility and Design Token Audits", () => {
     expect(globalsCss).toContain(".skipLink:focus-visible {");
   });
 
-  it("enforces role-based radii according to locked design tokens", () => {
-    expect(globalsCss).toContain("--radius-panel: 4px;");
-    expect(globalsCss).toContain("--radius-control: 2px;");
-    expect(globalsCss).toContain("--radius-yard: 0;");
-  });
-
   it("defines daylight instrument theme and high contrast modes in globals.css", () => {
     expect(globalsCss).toContain(':root[data-theme="light"]');
     expect(globalsCss).toContain(':root[data-theme="high-contrast"]');

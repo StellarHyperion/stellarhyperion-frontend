@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { ArrowUpRight, ChevronDown, Plus, RefreshCw, Wallet } from "lucide-react";
+import { useEffect, useId, useState } from "react";
 import { formatUnits } from "@hyperion/protocol";
 import { TESTNET } from "../../config/testnet";
 import {
@@ -22,6 +23,55 @@ import {
 } from "../../contracts";
 import { useStellarWallet } from "../../wallets";
 import styles from "./Bridge.module.css";
+
+function RouteConnection({ available }: { available: boolean }) {
+  const gradient = `route-${useId().replace(/:/g, "")}`;
+  return (
+    <div className={styles.route} data-available={available}>
+      <div className={styles.networkEnd}>
+        <span className={styles.sourceIcon} aria-hidden="true">
+          S
+        </span>
+        <div>
+          <strong>Stellar</strong>
+          <span>Testnet</span>
+        </div>
+      </div>
+      <svg className={styles.routeLine} viewBox="0 0 180 48" fill="none" aria-hidden="true">
+        <defs>
+          <linearGradient id={gradient}>
+            <stop stopColor="var(--leg-origin)" />
+            <stop offset="1" stopColor="var(--leg-destination)" />
+          </linearGradient>
+        </defs>
+        <path className={styles.routeTrack} d="M2 24 C46 -8 134 56 178 24" />
+        <path
+          className={styles.routeSignal}
+          pathLength="1"
+          d="M2 24 C46 -8 134 56 178 24"
+          stroke={`url(#${gradient})`}
+        />
+        <circle cx="2" cy="24" r="2" fill="var(--leg-origin)" />
+        <circle cx="178" cy="24" r="2" fill="var(--leg-destination)" />
+      </svg>
+      <div className={styles.networkEnd}>
+        <span className={styles.destinationIcon} aria-hidden="true">
+          <svg viewBox="0 0 20 28" fill="none">
+            <path
+              d="M10 1 2 14l8 5 8-5L10 1Z M2 17l8 10 8-10-8 5-8-5Z"
+              stroke="currentColor"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+        <div>
+          <strong>Sepolia</strong>
+          <span>Ethereum</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function Bridge() {
   const wallet = useStellarWallet();
@@ -83,7 +133,7 @@ export function Bridge() {
 
   useEffect(() => {
     let active = true;
-    if (!amount || !lane?.available) return;
+    if (!amount || !recipient.trim() || !lane?.available) return;
     const timer = setTimeout(() => {
       try {
         const parsed = parseSendAmount(amount);
@@ -138,88 +188,112 @@ export function Bridge() {
     <section className={styles.panel} aria-labelledby="bridge-heading">
       <div className={styles.heading}>
         <h2 id="bridge-heading">Send testnet USDC</h2>
-        <span className="monoSm">Axelar ITS</span>
+        <span className={styles.rail}>Axelar ITS</span>
       </div>
-      <p>
-        Stellar Testnet to Ethereum Sepolia. Receive the ITS representation of Stellar USDC, not
-        Circle&apos;s native Sepolia USDC.
-      </p>
-      <p className={styles.status} role="status">
-        {lane
-          ? lane.available
-            ? `Lane ready. Checked at Stellar ledger ${lane.ledger}.`
-            : lane.reason
-          : error
-            ? "Unable to verify the lane."
-            : "Checking the deployed lane..."}
-      </p>
-      <button
-        type="button"
-        className={styles.secondary}
-        onClick={() => {
-          setRefresh((value) => value + 1);
-        }}
-        disabled={busy}
+      <RouteConnection available={lane?.available === true} />
+      <div
+        className={styles.networkStatus}
+        data-state={lane?.available ? "ready" : lane || error ? "unavailable" : "checking"}
       >
-        Refresh network state
-      </button>
-      <label htmlFor="send-amount">Amount in USDC</label>
-      <input
-        id="send-amount"
-        inputMode="decimal"
-        autoComplete="off"
-        value={amount}
-        placeholder="0.00"
-        disabled={busy || result !== null}
-        onChange={(event) => {
-          setAmount(event.target.value);
-        }}
-      />
-      {wallet.address && (
-        <p className="monoSm">
-          Balance: {balance === null ? "unavailable" : `${formatUnits(balance, 7)} USDC`}
+        <span className={styles.statusDot} aria-hidden="true" />
+        <p className={styles.status} role="status">
+          {lane
+            ? lane.available
+              ? `Lane ready. Checked at Stellar ledger ${lane.ledger}.`
+              : lane.reason
+            : error
+              ? "Unable to verify the lane."
+              : "Checking the deployed lane..."}
         </p>
-      )}
-      <label htmlFor="recipient">Recipient on Ethereum Sepolia</label>
-      <input
-        id="recipient"
-        autoComplete="off"
-        spellCheck={false}
-        value={recipient}
-        placeholder="0x..."
-        disabled={busy || result !== null}
-        onChange={(event) => {
-          setRecipient(event.target.value);
-        }}
-      />
-      {quote && (
-        <dl className={styles.summary}>
-          <div>
-            <dt>Wallet debit</dt>
-            <dd>{formatUnits(quote.grossAmount, 7)} USDC</dd>
+        <button
+          type="button"
+          className={styles.refresh}
+          aria-label="Refresh network state"
+          title="Refresh network state"
+          onClick={() => {
+            setRefresh((value) => value + 1);
+          }}
+          disabled={busy}
+        >
+          <RefreshCw size={14} aria-hidden="true" />
+        </button>
+      </div>
+      <div className={styles.amountField}>
+        <label htmlFor="send-amount">Amount in USDC</label>
+        <div className={styles.amountRow}>
+          <input
+            id="send-amount"
+            inputMode="decimal"
+            autoComplete="off"
+            value={amount}
+            placeholder="0.00"
+            disabled={busy || result !== null}
+            onChange={(event) => {
+              setAmount(event.target.value);
+            }}
+          />
+          <span className={styles.asset}>
+            <span aria-hidden="true">$</span> USDC
+          </span>
+        </div>
+        {wallet.address && (
+          <p className="monoSm">
+            Balance: {balance === null ? "unavailable" : `${formatUnits(balance, 7)} USDC`}
+          </p>
+        )}
+      </div>
+      <div className={styles.recipientField}>
+        <label htmlFor="recipient">Recipient on Ethereum Sepolia</label>
+        <input
+          id="recipient"
+          autoComplete="off"
+          spellCheck={false}
+          value={recipient}
+          placeholder="0x..."
+          disabled={busy || result !== null}
+          onChange={(event) => {
+            setRecipient(event.target.value);
+          }}
+        />
+      </div>
+      <div className={styles.quoteSurface} aria-live="polite">
+        {quote ? (
+          <div className={styles.quoteContent}>
+            <div className={styles.receive}>
+              <span>You receive</span>
+              <strong>{formatUnits(quote.destinationAmount, 7)} USDC</strong>
+            </div>
+            <dl className={styles.summary}>
+              <div>
+                <dt>Wallet debit</dt>
+                <dd>{formatUnits(quote.grossAmount, 7)} USDC</dd>
+              </div>
+              <div>
+                <dt>Protocol fee</dt>
+                <dd>{formatUnits(quote.fee, 7)} USDC</dd>
+              </div>
+              <div>
+                <dt>Axelar relay gas</dt>
+                <dd>{formatUnits(quote.relayGas, 7)} XLM</dd>
+              </div>
+              <div>
+                <dt>Quote ledger</dt>
+                <dd>{quote.ledger}</dd>
+              </div>
+            </dl>
           </div>
-          <div>
-            <dt>Protocol fee</dt>
-            <dd>{formatUnits(quote.fee, 7)} USDC</dd>
+        ) : (
+          <div className={styles.quoteHint}>
+            <span className={styles.hintSymbol} aria-hidden="true">
+              <ArrowUpRight size={20} />
+            </span>
+            <p>Your next move, quoted live.</p>
+            <span>Enter an amount and recipient to see fees and what arrives.</span>
           </div>
-          <div>
-            <dt>ITS token amount</dt>
-            <dd>{formatUnits(quote.destinationAmount, 7)} USDC</dd>
-          </div>
-          <div>
-            <dt>Axelar relay gas</dt>
-            <dd>{formatUnits(quote.relayGas, 7)} XLM</dd>
-          </div>
-          <div>
-            <dt>Quote ledger</dt>
-            <dd>{quote.ledger}</dd>
-          </div>
-        </dl>
-      )}
-      <p>
-        Use test assets only. You need testnet XLM for Stellar fees. The quoted Axelar relay gas is
-        paid with this transfer. Stellar network fees are added by your wallet. Source confirmation
-        does not mean destination delivery.
+        )}
+      </div>
+      <p className={styles.assetNote}>
+        Receive the ITS representation of Stellar USDC, not Circle&apos;s native Sepolia USDC.
       </p>
       {error && (
         <p role="alert" className={styles.error}>
@@ -232,13 +306,21 @@ export function Bridge() {
         </p>
       )}
       {!wallet.isConnected ? (
-        <button type="button" onClick={() => void wallet.connect()} disabled={wallet.isConnecting}>
-          Connect Stellar wallet
+        <button
+          type="button"
+          className={styles.primary}
+          onClick={() => void wallet.connect()}
+          disabled={wallet.isConnecting}
+        >
+          <Wallet size={17} aria-hidden="true" />
+          {wallet.isConnecting ? "Connecting wallet..." : "Connect Stellar wallet"}
+          <ArrowUpRight className={styles.buttonArrow} size={18} aria-hidden="true" />
         </button>
       ) : (
         !result && (
           <button
             type="button"
+            className={styles.primary}
             disabled={
               !quote || busy || !lane?.available || balance === null || balance < quote.grossAmount
             }
@@ -249,7 +331,7 @@ export function Bridge() {
         )
       )}
       {result && (
-        <div role="status" className={styles.summary}>
+        <div role="status" className={styles.transaction}>
           <p>
             {result.status === "confirmed"
               ? "Confirmed on Stellar. Destination delivery is pending verification."
@@ -281,8 +363,14 @@ export function Bridge() {
           )}
         </div>
       )}
-      <details>
-        <summary>Testnet setup and contract</summary>
+      <p className={styles.feeNote}>
+        Test assets only. XLM covers relay gas and wallet network fees. Source confirmation does not
+        mean destination delivery.
+      </p>
+      <details className={styles.support}>
+        <summary>
+          Testnet setup and contract <ChevronDown size={15} aria-hidden="true" />
+        </summary>
         <p className={styles.address}>{TESTNET.router}</p>
         <a
           href="https://laboratory.stellar.org/account/fund"
@@ -338,65 +426,75 @@ export function ClaimRecovery() {
     }
   };
   return (
-    <section className={styles.panel} aria-labelledby="claims-heading">
-      <h2 id="claims-heading">Recover a Stellar claim</h2>
-      <p>
-        Look up a claim on the deployed Stellar router. Settlement always pays its recorded
-        recipient.
-      </p>
-      <label htmlFor="claim-id">Claim number</label>
-      <input
-        id="claim-id"
-        inputMode="numeric"
-        value={id}
-        onChange={(event) => {
-          setId(event.target.value);
-          setClaim(null);
-        }}
-        disabled={busy}
-      />
-      <button type="button" disabled={!/^\d+$/.test(id) || busy} onClick={() => void lookup()}>
-        {busy ? "Checking..." : "Look up claim"}
-      </button>
-      {error && (
-        <p role="alert" className={styles.error}>
-          {error}
-        </p>
-      )}
-      {claim && (
-        <>
-          <p className={styles.address}>Recipient: {claim.recipient}</p>
+    <section className={`${styles.panel} ${styles.recovery}`} aria-labelledby="claims-heading">
+      <details>
+        <summary>
+          <div>
+            <h2 id="claims-heading">Recover a Stellar claim</h2>
+            <span>For funds parked on the Stellar router</span>
+          </div>
+          <Plus size={18} aria-hidden="true" />
+        </summary>
+        <div className={styles.recoveryBody}>
           <p>
-            Amount:{" "}
-            {claim.token === TESTNET.token
-              ? `${formatUnits(claim.amount, 7)} USDC`
-              : `${claim.amount} base units of ${claim.token}`}
+            Look up a claim on the deployed Stellar router. Settlement always pays its recorded
+            recipient.
           </p>
-          <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
-          {!claim.settled && (
-            <button
-              type="button"
-              disabled={!wallet.address || busy || result?.status === "pending"}
-              onClick={() => void settle()}
-            >
-              Sign claim settlement
-            </button>
+          <label htmlFor="claim-id">Claim number</label>
+          <input
+            id="claim-id"
+            inputMode="numeric"
+            value={id}
+            onChange={(event) => {
+              setId(event.target.value);
+              setClaim(null);
+            }}
+            disabled={busy}
+          />
+          <button type="button" disabled={!/^\d+$/.test(id) || busy} onClick={() => void lookup()}>
+            {busy ? "Checking..." : "Look up claim"}
+          </button>
+          {error && (
+            <p role="alert" className={styles.error}>
+              {error}
+            </p>
           )}
-          {!wallet.address && !claim.settled && (
-            <p>Connect your Stellar wallet to pay the settlement network fee.</p>
+          {claim && (
+            <>
+              <p className={styles.address}>Recipient: {claim.recipient}</p>
+              <p>
+                Amount:{" "}
+                {claim.token === TESTNET.token
+                  ? `${formatUnits(claim.amount, 7)} USDC`
+                  : `${claim.amount} base units of ${claim.token}`}
+              </p>
+              <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
+              {!claim.settled && (
+                <button
+                  type="button"
+                  disabled={!wallet.address || busy || result?.status === "pending"}
+                  onClick={() => void settle()}
+                >
+                  Sign claim settlement
+                </button>
+              )}
+              {!wallet.address && !claim.settled && (
+                <p>Connect your Stellar wallet to pay the settlement network fee.</p>
+              )}
+            </>
           )}
-        </>
-      )}
-      {result && (
-        <Link href={`/transfers/${result.txHash}`}>
-          {result.status === "confirmed"
-            ? "Settlement confirmed"
-            : result.status === "failed"
-              ? "Settlement failed"
-              : "Settlement pending"}
-          : view transaction
-        </Link>
-      )}
+          {result && (
+            <Link href={`/transfers/${result.txHash}`}>
+              {result.status === "confirmed"
+                ? "Settlement confirmed"
+                : result.status === "failed"
+                  ? "Settlement failed"
+                  : "Settlement pending"}
+              : view transaction
+            </Link>
+          )}
+        </div>
+      </details>
     </section>
   );
 }

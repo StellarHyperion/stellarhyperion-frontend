@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Column, Footer, Header, Main, Shell } from "../../components/chrome";
+import { Column } from "../../components/chrome";
 import { fetchTransfers, type FormattedTransfer } from "../../api";
 import { TransferList } from "../../components/transfers";
 import { errorMessage } from "../../contracts";
@@ -48,57 +48,51 @@ export default function TransfersPage() {
     };
   }, [address, search, offset]);
   return (
-    <Shell>
-      <Header network="Stellar Testnet" />
-      <Main>
-        <Column>
-          <h1 className="display">Transfer history</h1>
-          <p className="lede">
-            {address
-              ? "Transfers sent by your connected Stellar account."
-              : "Recent transfers observed by the indexer. Connect a Stellar wallet to see your transfers."}
-          </p>
-          <input
-            className={styles.searchInput}
-            aria-label="Search indexed transfers"
-            placeholder="Transaction, recipient or nonce"
-            value={search}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setOffset(0);
-            }}
-          />
-          {error ? (
-            <p role="alert">{error}</p>
-          ) : loading ? (
-            <p role="status">Loading indexed transfers...</p>
-          ) : (
-            <TransferList transfers={transfers} />
-          )}
-          <div className={styles.filterControls}>
-            <button
-              type="button"
-              disabled={offset === 0 || loading}
-              onClick={() => {
-                setOffset((value) => Math.max(0, value - 20));
-              }}
-            >
-              Previous
-            </button>
-            <span>Page {offset / 20 + 1}</span>
-            <button
-              type="button"
-              disabled={transfers.length < 20 || loading}
-              onClick={() => {
-                setOffset((value) => value + 20);
-              }}
-            >
-              Next
-            </button>
-          </div>
-        </Column>
-      </Main>
-      <Footer />
-    </Shell>
+    <Column>
+      <h1 className="display">Transfer history</h1>
+      <p className="lede">
+        {address
+          ? "Transfers sent by your connected Stellar account."
+          : "Recent transfers observed by the indexer. Connect a Stellar wallet to see your transfers."}
+      </p>
+      <input
+        className={styles.searchInput}
+        aria-label="Search indexed transfers"
+        placeholder="Transaction, recipient or nonce"
+        value={search}
+        onChange={(event) => {
+          setSearch(event.target.value);
+          setOffset(0);
+        }}
+      />
+      {error ? (
+        <p role="alert">{error}</p>
+      ) : loading ? (
+        <p role="status">Loading indexed transfers...</p>
+      ) : (
+        <TransferList transfers={transfers} />
+      )}
+      <div className={styles.filterControls}>
+        <button
+          type="button"
+          disabled={offset === 0 || loading}
+          onClick={() => {
+            setOffset((value) => Math.max(0, value - 20));
+          }}
+        >
+          Previous
+        </button>
+        <span>Page {offset / 20 + 1}</span>
+        <button
+          type="button"
+          disabled={transfers.length < 20 || loading}
+          onClick={() => {
+            setOffset((value) => value + 20);
+          }}
+        >
+          Next
+        </button>
+      </div>
+    </Column>
   );
 }

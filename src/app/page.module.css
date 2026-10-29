@@ -1,0 +1,107 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  align-items: start;
+  gap: clamp(2.5rem, 6vw, 6rem);
+  padding-block: var(--space-5);
+}
+.intro {
+  position: sticky;
+  top: 10rem;
+  padding-block: var(--space-7);
+  animation: arrive var(--motion-draw) var(--ease-enter) both;
+}
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block-end: var(--space-6);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+.eyebrow > span {
+  width: 1.5rem;
+  height: 1px;
+  background: var(--leg-origin);
+}
+.title {
+  font-size: clamp(3.5rem, 6.6vw, 5.5rem);
+  font-weight: 500;
+  letter-spacing: -0.065em;
+  line-height: 1.04;
+}
+.title > span {
+  color: var(--leg-destination);
+}
+.description {
+  max-width: 29ch;
+  margin-block-start: var(--space-6);
+  color: var(--text-secondary);
+  font-size: 1.0625rem;
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+.note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-block-start: var(--space-9);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+}
+.note p > span {
+  color: var(--text-secondary);
+}
+.noteMark {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 50%;
+  font-family: var(--face-mono);
+  color: var(--leg-origin);
+  transform: rotate(-12deg);
+}
+.composer {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+  animation: arrive var(--motion-draw) var(--ease-enter) both;
+}
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (width <= 58rem) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-6);
+    max-width: 36rem;
+    margin-inline: auto;
+    padding-block: 0;
+  }
+  .intro {
+    position: static;
+    padding-block: 0;
+  }
+  .title {
+    font-size: clamp(3rem, 9vw, 4.5rem);
+  }
+  .description {
+    max-width: 43ch;
+    margin-block-start: var(--space-4);
+  }
+  .eyebrow {
+    margin-block-end: var(--space-4);
+  }
+  .note {
+    display: none;
+  }
+}

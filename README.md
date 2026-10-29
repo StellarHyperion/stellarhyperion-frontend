@@ -36,4 +36,8 @@ For a read-only browser smoke check, install Chromium with `npx playwright insta
 
 Deployment addresses and signed transaction evidence are in the contracts repository at `docs/TESTNET_ACTIVATION.md` and `deployments/evidence/2026-10-28-paid-its.json`. The opt-in `test/live-transfer.test.ts` signs 0.1 testnet USDC with a named CLI wallet and checks real source execution and indexed destination token delivery. It saves its source hash across interrupted runs and is skipped unless `HYPERION_LIVE_TESTNET=1` is set.
 
+## Interface
+
+The transfer composer uses soft surfaces, a responsive two-column layout and a curved lane connection driven by verified route availability. Live quotes reveal their actual fee breakdown; empty states contain no sample amounts. Native disclosure controls keep recovery and setup available without crowding the transfer flow. CSS motion follows interaction and network state, and honors reduced-motion preferences. Light, dark, keyboard focus and contrast remain supported.
+
 MIT.

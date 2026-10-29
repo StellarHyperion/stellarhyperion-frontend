@@ -20,3 +20,31 @@
   gap: var(--space-3);
   align-items: center;
 }
+
+.filterControls {
+  justify-content: space-between;
+}
+.filterControls button {
+  border: 1px solid var(--edge-color);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  transition:
+    background var(--motion-state),
+    border-color var(--motion-state);
+}
+.filterControls button:not(:disabled):hover {
+  background: var(--surface-panel);
+  border-color: var(--edge-color-strong);
+}
+.filterControls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.filterControls > span {
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+}

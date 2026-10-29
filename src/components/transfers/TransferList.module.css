@@ -1,28 +1,30 @@
 .transferList {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
 }
 
 .transferCard {
   background: var(--surface-raised);
   border: 1px solid var(--edge-color);
   border-radius: var(--radius-panel);
-  padding: var(--space-4);
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   text-decoration: none;
   color: inherit;
   transition:
-    border-color var(--motion-tap) var(--ease-enter),
-    background-color var(--motion-tap) var(--ease-enter);
+    border-color var(--motion-state) var(--ease-enter),
+    background-color var(--motion-state) var(--ease-enter),
+    transform var(--motion-state) var(--ease-enter);
 }
 
 .transferCard:hover,
 .transferCard:focus-visible {
   border-color: var(--edge-color-strong);
   background: var(--surface-panel);
+  transform: translateY(-2px);
 }
 
 .cardTop {
@@ -44,7 +46,7 @@
   font-size: var(--type-mono-sm-size);
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--edge-color-strong);
-  border-radius: var(--radius-control);
+  border-radius: 999px;
   color: var(--text-primary);
   background: var(--surface-page);
 }
@@ -53,7 +55,7 @@
   font-family: var(--face-mono);
   font-size: var(--type-mono-sm-size);
   padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-control);
+  border-radius: 999px;
   text-transform: uppercase;
   font-weight: 500;
 }
@@ -131,8 +133,8 @@
   align-items: center;
   color: var(--text-data);
   padding: 0.125rem;
-  border-radius: var(--radius-control);
-  transition: color var(--duration-fast) var(--ease-standard);
+  border-radius: 999px;
+  transition: color var(--motion-state) var(--ease-enter);
   text-decoration: none;
 }
 
@@ -187,4 +189,26 @@
   padding: var(--space-7);
   text-align: center;
   color: var(--text-secondary);
+}
+
+.transferCard {
+  animation: arrive var(--motion-draw) var(--ease-enter) backwards;
+}
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (width <= 40rem) {
+  .amountGroup {
+    flex-wrap: wrap;
+  }
+  .cardBody {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

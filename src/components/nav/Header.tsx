@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type ReactElement } from "react";
+import { usePathname } from "next/navigation";
+import { ChevronDown } from "lucide-react";
+import { useEffect, useSyncExternalStore, type ReactElement } from "react";
 
 import { HyperionMark } from "../brand/HyperionMark";
 import { StellarWalletButton } from "../wallet";
@@ -9,7 +11,10 @@ import styles from "../chrome/Chrome.module.css";
 
 export type ThemeChoice = "system" | "dark" | "light";
 
-function getInitialTheme(): ThemeChoice {
+let fallbackTheme: ThemeChoice = "system";
+const themeEvent = "hyperion:theme";
+
+function getThemeSnapshot(): ThemeChoice {
   if (typeof window === "undefined") {
     return "system";
   }
@@ -21,11 +26,20 @@ function getInitialTheme(): ThemeChoice {
   } catch {
     // Ignore storage access errors
   }
-  return "system";
+  return fallbackTheme;
+}
+
+function subscribeTheme(onChange: () => void): () => void {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(themeEvent, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(themeEvent, onChange);
+  };
 }
 
 export function ThemeSelector(): ReactElement {
-  const [theme, setTheme] = useState<ThemeChoice>(getInitialTheme);
+  const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, () => "system");
 
   useEffect(() => {
     if (theme === "system") {
@@ -36,51 +50,36 @@ export function ThemeSelector(): ReactElement {
   }, [theme]);
 
   const selectTheme = (choice: ThemeChoice) => {
-    setTheme(choice);
+    fallbackTheme = choice;
     try {
       localStorage.setItem("hyperion.theme", choice);
     } catch {
       // Ignore storage access errors
     }
+    window.dispatchEvent(new Event(themeEvent));
   };
 
   return (
-    <div className={styles.themeSelector} role="group" aria-label="Theme selector">
-      <button
-        type="button"
-        className={`${styles.themeOption} ${theme === "system" ? styles.themeOptionActive : ""}`}
-        onClick={() => {
-          selectTheme("system");
+    <div className={styles.themeSelector}>
+      <select
+        aria-label="Color theme"
+        value={theme}
+        onChange={(event) => {
+          const choice = event.target.value;
+          if (choice === "system" || choice === "dark" || choice === "light") selectTheme(choice);
         }}
-        aria-pressed={theme === "system"}
       >
-        System
-      </button>
-      <button
-        type="button"
-        className={`${styles.themeOption} ${theme === "dark" ? styles.themeOptionActive : ""}`}
-        onClick={() => {
-          selectTheme("dark");
-        }}
-        aria-pressed={theme === "dark"}
-      >
-        Dark
-      </button>
-      <button
-        type="button"
-        className={`${styles.themeOption} ${theme === "light" ? styles.themeOptionActive : ""}`}
-        onClick={() => {
-          selectTheme("light");
-        }}
-        aria-pressed={theme === "light"}
-      >
-        Light
-      </button>
+        <option value="system">System</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+      </select>
+      <ChevronDown size={12} aria-hidden="true" />
     </div>
   );
 }
 
 export function Header({ network }: { readonly network: string }): ReactElement {
+  const transfersActive = usePathname().startsWith("/transfers");
   return (
     <header className={styles.header}>
       <div className={styles.headerInner}>
@@ -89,11 +88,23 @@ export function Header({ network }: { readonly network: string }): ReactElement 
             <HyperionMark size={26} className={styles.brandMark} label="Hyperion, home" />
             <span className={styles.brandName}>Hyperion</span>
           </Link>
-          <nav className={styles.navLinks} aria-label="Main navigation">
-            <Link className={styles.navLink} href="/">
+          <nav
+            className={styles.navLinks}
+            aria-label="Main navigation"
+            data-section={transfersActive ? "transfers" : "send"}
+          >
+            <Link
+              className={styles.navLink}
+              href="/"
+              aria-current={!transfersActive ? "page" : undefined}
+            >
               Send
             </Link>
-            <Link className={styles.navLink} href="/transfers">
+            <Link
+              className={styles.navLink}
+              href="/transfers"
+              aria-current={transfersActive ? "page" : undefined}
+            >
               Transfers
             </Link>
           </nav>

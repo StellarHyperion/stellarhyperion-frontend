@@ -7,17 +7,17 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.375rem 0.75rem;
+  padding: 0.625rem 0.875rem;
   background-color: var(--ink-2);
   border: 1px solid var(--rule-2);
-  border-radius: 2px;
+  border-radius: 999px;
   color: var(--fg);
-  font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
   cursor: pointer;
   transition:
-    border-color var(--duration-fast) var(--ease-standard),
-    background-color var(--duration-fast) var(--ease-standard);
+    border-color var(--motion-state) var(--ease-enter),
+    background-color var(--motion-state) var(--ease-enter);
 }
 
 .button:hover {
@@ -40,18 +40,18 @@
 
 .network {
   font-size: 0.6875rem;
-  color: var(--fg-3);
+  color: var(--text-secondary);
   text-transform: lowercase;
 }
 
 .menu {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 12px);
   right: 0;
   min-width: 14rem;
   background-color: var(--ink-2);
   border: 1px solid var(--rule-2);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 0.5rem;
   z-index: 50;
   display: flex;
@@ -67,13 +67,13 @@
 }
 
 .addressLabel {
-  font-family: var(--font-mono);
+  font-family: var(--face-mono);
   font-size: 0.6875rem;
-  color: var(--fg-3);
+  color: var(--text-secondary);
 }
 
 .fullAddress {
-  font-family: var(--font-mono);
+  font-family: var(--face-mono);
   font-size: 0.75rem;
   color: var(--fg);
   word-break: break-all;
@@ -84,15 +84,15 @@
   padding: 0.375rem 0.5rem;
   background-color: transparent;
   border: 1px solid var(--rule);
-  border-radius: 2px;
+  border-radius: 999px;
   color: var(--bad);
-  font-family: var(--font-mono);
+  font-family: var(--face-mono);
   font-size: 0.75rem;
   cursor: pointer;
   text-align: center;
   transition:
-    background-color var(--duration-fast) var(--ease-standard),
-    border-color var(--duration-fast) var(--ease-standard);
+    background-color var(--motion-state) var(--ease-enter),
+    border-color var(--motion-state) var(--ease-enter);
 }
 
 .disconnectBtn:hover {

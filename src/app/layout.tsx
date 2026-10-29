@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { archivo, plexMono } from "./fonts";
 import { PAGE_INK } from "./tokens";
 import { Providers } from "./providers";
+import { Footer, Header, Main, Shell } from "../components/chrome";
 import "./globals.css";
 
 /**
@@ -34,7 +35,12 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning className={`${archivo.variable} ${plexMono.variable}`}>
+    <html
+      lang="en"
+      data-scroll-behavior="smooth"
+      suppressHydrationWarning
+      className={`${archivo.variable} ${plexMono.variable}`}
+    >
       <head>
         <script
           dangerouslySetInnerHTML={{
@@ -44,7 +50,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <Providers>{children}</Providers>
+        <Providers>
+          <a className="skipLink" href="#main-content">
+            Skip to main content
+          </a>
+          <Shell>
+            <Header network="Stellar Testnet" />
+            <Main>{children}</Main>
+            <Footer />
+          </Shell>
+        </Providers>
       </body>
     </html>
   );

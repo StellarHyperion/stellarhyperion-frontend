@@ -1,28 +1,6 @@
 import type { SVGProps } from "react";
 
-/**
- * The Hyperion mark: a monoline switch.
- *
- * One line comes in from the left. It reaches a solid junction node and forks. One branch leaves
- * to the right and keeps going. The other peels off at the same angle and stops short, because it
- * was priced and it lost.
- *
- * That is the entire product in nineteen points of geometry. Hyperion does not carry anything
- * across a chain boundary itself; it looks at four rails that already do, prices all four, and
- * throws a switch. A mark showing a bridge would be claiming something the architecture is
- * explicitly not doing.
- *
- * The geometry below is the single source of truth for the favicon set too.
- * `scripts/render-icons.py` reads this file, pulls the `d` attributes and the node circle straight
- * out of it, and fails loudly if it cannot find them, so the tab icon cannot drift away from the
- * mark in the header.
- *
- * Drawn on a 24 unit grid with a 2 unit stroke, which is 1.33px at a 16px render. The two branches
- * leave the node at 45 degrees in opposite directions and the only asymmetry is length: the chosen
- * branch runs to the edge of the box, the dropped one halts in open space. Legibility at 16px
- * comes from that difference in length rather than from a difference in weight, because a hairline
- * at 16px is a grey smudge and a shorter line is still a shorter line.
- */
+/** Monoline routing mark. The icon generator reads this geometry as its source of truth. */
 export interface HyperionMarkProps extends Omit<SVGProps<SVGSVGElement>, "children" | "viewBox"> {
   /** Rendered size in pixels, square. Legible down to 16. */
   readonly size?: number;

@@ -1,26 +1,6 @@
-/*
- * The token layer.
- *
- * This is the only file in the repository allowed to contain a colour, and `npm run house`
- * enforces that. Everything else reads a custom property, which is not tidiness for its own sake:
- * it means the palette can be checked in one place by one script, and `npm run contrast` can make
- * a real claim about the whole interface rather than about whichever component somebody remembered
- * to look at.
- *
- * Every value under "Roll 1" is lifted verbatim from `.planning/DESIGN-TOKENS.md`, which is a
- * rolled and locked plan. It is not a starting point and it is not a mood board. Do not swap a
- * hue because a different one would look nice today.
- *
- * Three structural rules the plan is explicit about, encoded here rather than remembered:
- *
- * 1. Depth comes from a background step plus a 1px hairline. There are no shadows anywhere in this
- *    build, and the house rules script fails the build if one appears.
- * 2. Radius is a function of role, not of taste. A data panel is 4px, a control is 2px, and the
- *    switchyard is 0px because it runs full bleed and a rounded corner on a full bleed element is
- *    just a mistake with a radius.
- * 3. Motion only ever means "state changed". Nothing floats, nothing pulses, nothing fades up as
- *    you scroll. `prefers-reduced-motion` collapses every duration below to zero, which turns each
- *    transition into an instant state swap rather than a fast one.
+/* Shared palette, accessible semantic colors and fluid interface primitives.
+ * User-directed visual refinement supersedes the original sharp/static layout.
+ * Amounts remain exact; motion presents state changes and respects reduced motion.
  */
 
 :root {
@@ -176,36 +156,26 @@
    * Radius by role, and the hairline depth system that replaces shadows.
    * ---------------------------------------------------------------------------- */
 
-  --radius-panel: 4px;
-  --radius-control: 2px;
+  --radius-panel: 28px;
+  --radius-control: 16px;
   --radius-yard: 0;
 
   --hairline: 1px;
   --edge: var(--hairline) solid var(--edge-color);
   --edge-strong: var(--hairline) solid var(--edge-color-strong);
 
-  /* ----------------------------------------------------------------------------
-   * Roll 4: response to action only, nothing ambient.
-   *
-   * Allowed: the switchyard redrawing when a quote resolves, a route line drawing in on rail
-   * select, a stage lamp advancing on a chain confirmation, a number rolling when a balance
-   * changes, a panel morphing height on a step change. Forbidden: scroll reveals, fade and slide
-   * up sections, ambient pulse, lift on hover.
-   *
-   * The reason is not restraint for its own sake. In a bridge, motion that does not mean "state
-   * changed" is a lie about whether somebody's money moved.
-   * ---------------------------------------------------------------------------- */
+  /* Motion follows interaction and actual asynchronous state. */
 
   --motion-instant: 0ms;
-  --motion-tap: 110ms;
-  --motion-state: 180ms;
+  --motion-tap: 160ms;
+  --motion-state: 320ms;
   --motion-draw: 560ms;
   --motion-draw-stagger: 90ms;
   --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 
   /* ----------------------------------------------------------------------------
-   * Roll 2: one column, 68rem, read top to bottom as the route itself.
+   * Responsive canvas: two columns for the composer, one on smaller screens.
    * ---------------------------------------------------------------------------- */
 
   --measure: 68rem;
@@ -342,8 +312,23 @@ html {
 body {
   margin: 0;
   min-height: 100svh;
-  background: var(--surface-page);
+  background-color: var(--surface-page);
+  background-image:
+    radial-gradient(
+      ellipse at 4% 20%,
+      color-mix(in srgb, var(--leg-origin) 7%, transparent),
+      transparent 45%
+    ),
+    radial-gradient(
+      ellipse at 95% 45%,
+      color-mix(in srgb, var(--leg-destination) 7%, transparent),
+      transparent 48%
+    );
+  background-attachment: fixed;
   color: var(--text-primary);
+  transition:
+    background-color var(--motion-state),
+    color var(--motion-state);
   font-family: var(--face-display);
   font-size: var(--type-body-size);
   font-weight: var(--type-body-weight);

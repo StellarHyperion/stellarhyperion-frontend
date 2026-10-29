@@ -10,7 +10,11 @@ export function Shell({ children }: { readonly children: ReactNode }): ReactElem
 }
 
 export function Main({ children }: { readonly children: ReactNode }): ReactElement {
-  return <main className={styles.main}>{children}</main>;
+  return (
+    <main id="main-content" tabIndex={-1} className={styles.main}>
+      {children}
+    </main>
+  );
 }
 
 export function Column({ children }: { readonly children: ReactNode }): ReactElement {
