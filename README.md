@@ -46,6 +46,8 @@ The production alias is [stellarhyperion.vercel.app](https://stellarhyperion.ver
 
 The backend uses a server-side PostgreSQL connection and a continuously running indexer. Database credentials and signing keys must never be included in `NEXT_PUBLIC_` variables. The checked-in deployment is testnet only. See the backend README for the scheduled indexer, optional continuous container and database configuration.
 
+Vercel's installed Git integration publishes `main` after pushes. GitHub Actions runs quality checks; the legacy token-based deployment jobs were removed to avoid duplicate deployments and expired deployment credentials.
+
 ## Verification
 
 `npm run check` runs formatting, interface rules, contrast checks, unit tests, lint, types and the production build. Start the app and run `npm run test:browser` for the real wallet picker, theme persistence, native selectors and mobile layout. Chromium must be installed with `npx playwright install chromium`.
