@@ -46,6 +46,8 @@ Live transaction tests require explicit opt-in and real named CLI wallets. `test
 
 For the route suite, set `HYPERION_LIVE_ROUTES=1`, `HYPERION_ROUTE_MODE=convert` or `cctp`, `HYPERION_ROUTE_IDENTITY`, `HYPERION_ROUTE_PROOF`, `HYPERION_ROUTE_DESTINATION`, `HYPERION_TESTNET_APP_URL`, `HYPERION_TESTNET_RECIPIENT` and `NEXT_PUBLIC_HYPERION_API_URL`. Conversion spends at most 1 testnet XLM plus fees; CCTP spends 0.3 testnet USDC. Never delete a pending proof to retry a transfer.
 
+Real signed acceptance includes native XLM conversion followed by an ITS payout and CCTP native-USDC payouts on all three destination testnets. Public source/destination hashes, observed amounts and confirmation evidence are retained in the contracts repository under `deployments/evidence/2026-10-29-conversion.json` and `deployments/evidence/2026-10-29-cctp.json`.
+
 ## Interface
 
 The layout study used [Jumper](https://jumper.xyz/), [Relay](https://relay.link/bridge) and [Stargate](https://stargate.finance/) as reference points for focused asset selection and progressive route details. Hyperion adds explicit receive-token identity, quote request feedback, review and interruption recovery. Decorative orbital paths provide background motion without implying that funds are moving. One theme button switches between light and dark; all motion honors reduced-motion preferences.
