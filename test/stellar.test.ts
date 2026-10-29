@@ -75,4 +75,31 @@ describe("Real Stellar transaction encoding", () => {
     expect(await readTransaction("0xnot-a-stellar-tx")).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
   });
+  it("encodes Circle's post-forwarding receive minimum with six-decimal native USDC", () => {
+    const operation = bridgeOperation(
+      TESTNET.reader,
+      { ...quote, route: 0, destinationAmount: 900000n, relayGas: 500000n },
+      "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    );
+    const tx = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(60)
+      .build();
+    const op = tx.operations[0];
+    if (op?.type !== "invokeHostFunction" || op.func.type !== "hostFunctionTypeInvokeContract")
+      throw new Error("Wrong bridge operation.");
+    const encodedRequest = op.func.invokeContract.args[1];
+    if (!encodedRequest) throw new Error("Missing bridge request.");
+    const request = scValToNative(encodedRequest) as {
+      route: number;
+      destination_decimals: number;
+      min_destination_amount: bigint;
+    };
+    expect(request.route).toBe(0);
+    expect(request.destination_decimals).toBe(6);
+    expect(request.min_destination_amount).toBe(900000n);
+  });
 });

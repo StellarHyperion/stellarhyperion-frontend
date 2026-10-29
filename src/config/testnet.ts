@@ -1,3 +1,4 @@
+import { CHAINS, RAIL_CONTRACTS, assetOn } from "@hyperion/protocol";
 import deployment from "./testnet-deployment.json";
 const configured = (value: string | undefined, fallback: string) =>
   value?.trim() ? value.trim() : fallback;
@@ -13,18 +14,35 @@ export const TESTNET = {
     "https://soroban-testnet.stellar.org",
   ),
   networkPassphrase: "Test SDF Network ; September 2015",
+  horizonUrl: "https://horizon-testnet.stellar.org",
 } as const;
-export const DESTINATIONS = [
-  {
-    key: "sepolia",
-    name: "Ethereum Sepolia",
-    axelarName: "ethereum-sepolia",
+export type BridgeRoute = 0 | 1;
+export const CIRCLE_STELLAR = {
+  messenger: "CDNG7HXAPBWICI2E3AUBP3YZWZELJLYSB6F5CC7WLDTLTHVM74SLRTHP",
+  transmitter: "CBJ6MTCKKZG73PMDZCJMSFRD7DQEMI4FKDH7CGDSV4W6FHCRBCQAVVJY",
+} as const;
+export const DESTINATIONS = (["sepolia", "base-sepolia", "arc-testnet"] as const).map((key) => {
+  const chain = CHAINS[key];
+  if (chain.family !== "evm") throw new Error("Expected an EVM testnet.");
+  const asset = assetOn(key, "USDC");
+  const contracts = RAIL_CONTRACTS[key];
+  if (asset?.family !== "evm" || !contracts?.cctp || chain.cctpDomain === null)
+    throw new Error("Missing native USDC configuration.");
+  return {
+    key,
+    name: chain.name,
+    axelarName: chain.axelarName,
     decimals: 7,
-    chainId: 11155111,
-    rpcUrl: "https://ethereum-sepolia-rpc.publicnode.com",
-    its: "0xB5FB4BE02232B1bBA4dC8f81dc24C26980dE9e3C",
-  },
-] as const;
+    chainId: chain.chainId,
+    rpcUrl: chain.defaultRpcUrl,
+    its: contracts.axelar?.interchainTokenService as `0x${string}`,
+    cctpDomain: chain.cctpDomain,
+    usdc: asset.address,
+    messenger: contracts.cctp.tokenMessengerV2,
+    transmitter: contracts.cctp.messageTransmitterV2,
+  };
+});
+export const destinationDecimals = (route: number) => (route === 0 ? 6 : 7);
 export type DestinationKey = (typeof DESTINATIONS)[number]["key"];
 export function destinationFor(key: string) {
   const destination = DESTINATIONS.find((chain) => chain.key === key);

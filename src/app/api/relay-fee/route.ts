@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { relayBudget } from "../../../lib/relay-budget";
 // The fee API expects a method in the JSON body. Its /gmp/estimateITSFee path returns help text.
 export async function GET() {
   try {
@@ -18,7 +19,12 @@ export async function GET() {
     if (!response.ok || !/^\d+$/.test(value) || BigInt(value) <= 0n)
       throw new Error("Invalid gas estimate");
     return NextResponse.json(
-      { amount: value, token: "XLM", decimals: 7 },
+      {
+        amount: String(relayBudget(BigInt(value))),
+        estimatedAmount: value,
+        token: "XLM",
+        decimals: 7,
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch {

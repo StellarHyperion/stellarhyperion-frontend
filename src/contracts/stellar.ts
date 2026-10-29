@@ -5,6 +5,7 @@ import {
   BASE_FEE,
   Contract,
   TransactionBuilder,
+  type Transaction,
   nativeToScVal,
   rpc,
   scValToNative,
@@ -18,7 +19,14 @@ import {
   sorobanErrorName,
   describeError,
 } from "@hyperion/protocol";
-import { TESTNET, destinationFor, type DestinationKey } from "../config/testnet";
+import {
+  TESTNET,
+  CIRCLE_STELLAR,
+  destinationFor,
+  destinationDecimals,
+  type BridgeRoute,
+  type DestinationKey,
+} from "../config/testnet";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
@@ -45,6 +53,7 @@ export interface LiveQuote {
   destination: DestinationKey;
   requestedAmount: bigint;
   relayGas: bigint;
+  estimatedRelayGas?: bigint;
 }
 export interface LaneState {
   available: boolean;
@@ -64,6 +73,34 @@ export interface PendingClaim {
 
 function server() {
   return new rpc.Server(TESTNET.rpcUrl, { timeout: 15_000 });
+}
+
+async function readWithRetry<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (!/fetch failed|timeout|timed out|429|502|503|504|ECONN/i.test(String(error))) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return read();
+  }
+}
+const capabilityCache = new Map<
+  string,
+  { expires: number; promise: ReturnType<rpc.Server["getContractMethods"]> }
+>();
+function contractMethods(contract: string) {
+  const key = `${TESTNET.rpcUrl}:${contract}`;
+  const cached = capabilityCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.promise;
+  // Capability discovery downloads WASM. Keep it separate from fresh state and pricing reads.
+  const promise = readWithRetry(() => server().getContractMethods(contract)).catch(
+    (error: unknown) => {
+      capabilityCache.delete(key);
+      throw error;
+    },
+  );
+  capabilityCache.set(key, { expires: Date.now() + 60000, promise });
+  return promise;
 }
 
 export function errorMessage(error: unknown): string {
@@ -103,7 +140,7 @@ async function view(contract: string, method: string, args: xdr.ScVal[] = []) {
     .addOperation(new Contract(contract).call(method, ...args))
     .setTimeout(60)
     .build();
-  const response = await client.simulateTransaction(tx);
+  const response = await readWithRetry(() => client.simulateTransaction(tx));
   if (!rpc.Api.isSimulationSuccess(response)) {
     throw new Error(
       rpc.Api.isSimulationError(response)
@@ -133,12 +170,23 @@ export function validateRecipient(value: string): string {
   return recipient;
 }
 
-export async function readLane(destinationKey: DestinationKey): Promise<LaneState> {
+export async function readLane(
+  destinationKey: DestinationKey,
+  route: BridgeRoute = 1,
+): Promise<LaneState> {
   const destination = destinationFor(destinationKey);
+  if (route === 1 && destinationKey !== "sepolia")
+    return {
+      available: false,
+      reason: "Axelar ITS is configured for Sepolia. Choose Circle CCTP for this network.",
+      feeBps: null,
+      ledger: 0,
+      adapter: null,
+    };
   const [configResult, tokenResult, enabledResult] = await Promise.all([
     view(TESTNET.router, "get_config"),
     view(TESTNET.router, "get_token", [new Address(TESTNET.token).toScVal()]),
-    view(TESTNET.router, "is_route_enabled", [nativeToScVal(ITS_ROUTE, { type: "u32" })]),
+    view(TESTNET.router, "is_route_enabled", [nativeToScVal(route, { type: "u32" })]),
   ]);
   const config = object(configResult.value);
   const token = object(tokenResult.value);
@@ -152,12 +200,79 @@ export async function readLane(destinationKey: DestinationKey): Promise<LaneStat
   if (token.enabled !== true)
     return { ...base, available: false, reason: "USDC is disabled on the router." };
   if (enabledResult.value !== true)
-    return { ...base, available: false, reason: "The ITS route is not enabled." };
+    return {
+      ...base,
+      available: false,
+      reason: `${route === 0 ? "Circle CCTP" : "Axelar ITS"} is not enabled on the router.`,
+    };
   const adapterResult = await view(TESTNET.router, "get_adapter", [
-    nativeToScVal(ITS_ROUTE, { type: "u32" }),
+    nativeToScVal(route, { type: "u32" }),
   ]);
   const adapter = address(adapterResult.value);
   const adapterConfig = object((await view(adapter, "get_config")).value);
+  if (route === 0) {
+    if (
+      adapterConfig.router !== TESTNET.router ||
+      adapterConfig.token_messenger !== CIRCLE_STELLAR.messenger ||
+      adapterConfig.message_transmitter !== CIRCLE_STELLAR.transmitter ||
+      adapterConfig.min_finality_threshold !== 2000
+    )
+      throw new Error("Circle adapter configuration does not match this testnet.");
+    const [
+      linkResult,
+      messengerPaused,
+      transmitterPaused,
+      remoteMessenger,
+      methods,
+      routerMethods,
+    ] = await Promise.all([
+      view(adapter, "get_link", [nativeToScVal(destination.cctpDomain, { type: "u32" })]),
+      view(CIRCLE_STELLAR.messenger, "paused"),
+      view(CIRCLE_STELLAR.transmitter, "paused"),
+      view(CIRCLE_STELLAR.messenger, "get_remote_token_messenger", [
+        nativeToScVal(destination.cctpDomain, { type: "u32" }),
+      ]),
+      contractMethods(adapter),
+      contractMethods(TESTNET.router),
+    ]);
+    const link = object(linkResult.value);
+    if (
+      link.chain !== destinationKey ||
+      !(link.destination_caller instanceof Uint8Array) ||
+      link.destination_caller.some((byte) => byte !== 0)
+    )
+      throw new Error("Circle destination forwarding is not configured for this network.");
+    if (messengerPaused.value === true || transmitterPaused.value === true)
+      return { ...base, adapter, available: false, reason: "Circle has paused this lane." };
+    if (
+      !(remoteMessenger.value instanceof Uint8Array) ||
+      toHex(remoteMessenger.value).toLowerCase() !==
+        `0x${destination.messenger.slice(2).padStart(64, "0")}`.toLowerCase()
+    )
+      throw new Error("Circle's remote messenger does not match the selected network.");
+    if (
+      !methods.some((method) => method.name === "dispatch_from") ||
+      !routerMethods.some((method) => method.name === "supports_paid_route")
+    )
+      return {
+        ...base,
+        adapter,
+        available: false,
+        reason: "Circle forwarding is awaiting router activation.",
+      };
+    const remote = createPublicClient({
+      transport: http(destination.rpcUrl, { timeout: 15000, retryCount: 0 }),
+    });
+    if ((await remote.getChainId()) !== destination.chainId)
+      throw new Error("The destination RPC is on the wrong network.");
+    const decimals = await remote.readContract({
+      address: destination.usdc,
+      abi: parseAbi(["function decimals() view returns (uint8)"]),
+      functionName: "decimals",
+    });
+    if (decimals !== 6) throw new Error("Native USDC precision does not match this lane.");
+    return { ...base, adapter, available: true, reason: null, destinationToken: destination.usdc };
+  }
   if (adapterConfig.router !== TESTNET.router || adapterConfig.route !== ITS_ROUTE) {
     throw new Error("The configured adapter does not match this router and route.");
   }
@@ -188,6 +303,7 @@ export async function readLane(destinationKey: DestinationKey): Promise<LaneStat
       available: false,
       reason: "Axelar has not enabled this destination.",
     };
+  let destinationToken: string | null = null;
   try {
     const id = await view(adapter, "token_id_for", [new Address(TESTNET.token).toScVal()]);
     const registered = await view(its, "registered_token_address", [nativeToScVal(id.value)]);
@@ -217,6 +333,7 @@ export async function readLane(destinationKey: DestinationKey): Promise<LaneStat
     });
     if (decimals !== destination.decimals)
       throw new Error("The destination token precision does not match this lane.");
+    destinationToken = remoteToken;
   } catch (error) {
     if (!String(error).includes("Error(Contract, #39)")) throw error;
     return {
@@ -227,8 +344,8 @@ export async function readLane(destinationKey: DestinationKey): Promise<LaneStat
     };
   }
   const [methods, routerMethods] = await Promise.all([
-    server().getContractMethods(adapter),
-    server().getContractMethods(TESTNET.router),
+    contractMethods(adapter),
+    contractMethods(TESTNET.router),
   ]);
   if (
     !methods.some((method) => method.name === "dispatch_from") ||
@@ -241,49 +358,69 @@ export async function readLane(destinationKey: DestinationKey): Promise<LaneStat
       reason: "The operator must update the router and ITS adapter to support relay gas payments.",
     };
   }
-  return { ...base, adapter, available: true, reason: null };
+  return {
+    ...base,
+    adapter,
+    available: true,
+    reason: null,
+    ...(destinationToken ? { destinationToken } : {}),
+  };
 }
 
 export async function quoteTransfer(
   destinationKey: DestinationKey,
   amount: bigint,
+  route: BridgeRoute = 1,
 ): Promise<LiveQuote> {
-  const destination = destinationFor(destinationKey);
   if (amount <= 0n || amount > I128_MAX) throw new Error("Enter a valid transfer amount.");
-  const lane = await readLane(destinationKey);
+  const lane = await readLane(destinationKey, route);
   if (!lane.available || !lane.adapter) throw new Error(lane.reason ?? "This lane is unavailable.");
   const response = await view(TESTNET.router, "quote_routes", [
     new Address(TESTNET.token).toScVal(),
     nativeToScVal(amount, { type: "i128" }),
-    nativeToScVal(destination.decimals, { type: "u32" }),
+    nativeToScVal(destinationDecimals(route), { type: "u32" }),
   ]);
   if (!Array.isArray(response.value)) throw new Error("The router returned an invalid quote.");
-  const quote = response.value.map(object).find((q) => q.route === ITS_ROUTE);
-  if (!quote) throw new Error("The router did not quote the ITS route.");
+  const quote = response.value.map(object).find((q) => q.route === route);
+  if (!quote) throw new Error("The router did not quote this bridge.");
   if (quote.available !== true) {
     const name = sorobanErrorName(Number(quote.reason));
     throw new Error(
       name ? `${name}: ${describeError(name).summary}` : "The router declined this amount.",
     );
   }
-  const feeResponse = await fetch("/api/relay-fee", {
-    signal: AbortSignal.timeout(20_000),
-    cache: "no-store",
+  const feeResponse = await readWithRetry(async () => {
+    const response = await fetch(
+      route === 0 ? `/api/cctp-fee?destination=${destinationKey}` : "/api/relay-fee",
+      {
+        signal: AbortSignal.timeout(20_000),
+        cache: "no-store",
+      },
+    );
+    if (response.status === 503)
+      throw new Error("503: Live bridge pricing is temporarily unavailable. Try again.");
+    return response;
   });
-  if (!feeResponse.ok) throw new Error("Axelar relay gas pricing is unavailable. Try again later.");
+  if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");
   const fee: unknown = await feeResponse.json();
   const relayGas = integer(object(fee).amount);
+  const estimatedRelayGas = integer(object(fee).estimatedAmount ?? relayGas);
+  if (estimatedRelayGas <= 0n || estimatedRelayGas > relayGas)
+    throw new Error("Invalid live fee estimate.");
   if (relayGas <= 0n || relayGas > I128_MAX) throw new Error("Invalid relay gas estimate.");
+  if (route === 0 && (relayGas % 10n !== 0n || relayGas >= integer(quote.net_amount)))
+    throw new Error("Increase the amount to cover Circle's destination forwarding fee.");
   return {
     relayGas,
-    route: ITS_ROUTE,
+    estimatedRelayGas,
+    route,
     adapter: lane.adapter,
     destination: destinationKey,
     requestedAmount: amount,
     grossAmount: integer(quote.gross_amount),
     fee: integer(quote.fee),
     netAmount: integer(quote.net_amount),
-    destinationAmount: integer(quote.destination_amount),
+    destinationAmount: integer(quote.destination_amount) - (route === 0 ? relayGas / 10n : 0n),
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
   };
@@ -310,12 +447,12 @@ export function bridgeOperation(sender: string, quote: LiveQuote, recipientInput
     map({
       token: new Address(TESTNET.token).toScVal(),
       amount: nativeToScVal(quote.requestedAmount, { type: "i128" }),
-      route: nativeToScVal(ITS_ROUTE, { type: "u32" }),
+      route: nativeToScVal(quote.route, { type: "u32" }),
       destination: map({
         chain: nativeToScVal(destination.key, { type: "string" }),
         address: nativeToScVal(fromHex(`0x${recipient.slice(2).padStart(64, "0")}`)),
       }),
-      destination_decimals: nativeToScVal(destination.decimals, { type: "u32" }),
+      destination_decimals: nativeToScVal(destinationDecimals(quote.route), { type: "u32" }),
       min_destination_amount: nativeToScVal(quote.destinationAmount, { type: "i128" }),
     }),
     nativeToScVal(quote.relayGas, { type: "i128" }),
@@ -366,6 +503,33 @@ async function submitOperation(
     );
   }
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
+  progress?.("signing");
+  return signAndSubmit(prepared, sign, progress);
+}
+
+export async function submitClassicOperations(
+  sender: string,
+  operations: readonly xdr.Operation[],
+  sign: WalletSigner,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
+): Promise<TransactionResult> {
+  const client = server();
+  if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
+    throw new Error("The RPC endpoint is not Stellar Testnet.");
+  const builder = new TransactionBuilder(await client.getAccount(sender), {
+    fee: BASE_FEE,
+    networkPassphrase: TESTNET.networkPassphrase,
+  });
+  for (const operation of operations) builder.addOperation(operation);
+  return signAndSubmit(builder.setTimeout(180).build(), sign, progress);
+}
+
+async function signAndSubmit(
+  prepared: Transaction,
+  sign: WalletSigner,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
+): Promise<TransactionResult> {
+  const client = server();
   progress?.("signing");
   const signed = await sign(prepared.toXdr(), {
     networkPassphrase: TESTNET.networkPassphrase,
@@ -418,12 +582,16 @@ export async function submitBridgeOut(
   progress?: (phase: TransactionPhase, hash?: string) => void,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
-  const refreshed = await quoteTransfer(quoted.destination, quoted.requestedAmount);
+  const refreshed = await quoteTransfer(
+    quoted.destination,
+    quoted.requestedAmount,
+    quoted.route as BridgeRoute,
+  );
   if (
     refreshed.grossAmount !== quoted.grossAmount ||
     refreshed.destinationAmount < quoted.destinationAmount ||
     refreshed.fee !== quoted.fee ||
-    refreshed.relayGas > quoted.relayGas
+    (refreshed.estimatedRelayGas ?? refreshed.relayGas) > quoted.relayGas
   ) {
     throw new Error("The quote changed. Review a fresh quote before signing.");
   }
