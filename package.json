@@ -39,7 +39,7 @@
     "next": "^16.4.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "viem": "^2.57.3"
+    "viem": "^2.57.11"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
