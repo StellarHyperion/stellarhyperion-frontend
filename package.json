@@ -35,7 +35,7 @@
     "@lobstrco/signer-extension-api": "^2.0.0",
     "@stellar/freighter-api": "^6.0.0",
     "@stellar/stellar-sdk": "17.2.1",
-    "lucide-react": "^1.49.0",
+    "lucide-react": "^1.61.0",
     "next": "^16.4.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
