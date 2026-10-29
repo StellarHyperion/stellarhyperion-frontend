@@ -5,3 +5,6 @@ public/apple-touch-icon.png
 src/app/fonts/*.woff2
 public/.icon-contact-sheet.png
 public/icon.svg
+
+# Local recovery checklist, never committed.
+/TASKS.md

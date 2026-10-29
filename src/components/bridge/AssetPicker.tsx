@@ -1,58 +1,17 @@
 "use client";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, Check, ChevronRight, Search, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { ArrowUpRight, Check, ChevronRight, Search } from "lucide-react";
 import { DESTINATIONS, type BridgeRoute, type DestinationKey } from "../../config/testnet";
 import { USDC, XLM, searchAssets, type SourceAsset } from "../../contracts/assets";
 import { errorMessage } from "../../contracts";
 import styles from "./AssetPicker.module.css";
+import { Dialog } from "../common/Dialog";
 
 export function AssetIcon({ code, network = false }: { code: string; network?: boolean }) {
   return (
     <span className={styles.assetIcon} data-asset={code} data-network={network} aria-hidden="true">
       {code === "USDC" ? "$" : code === "XLM" ? "S" : code.slice(0, 2)}
     </span>
-  );
-}
-function Dialog({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const dialog = ref.current;
-    dialog?.showModal();
-    return () => {
-      dialog?.close();
-    };
-  }, []);
-  return (
-    <dialog
-      ref={ref}
-      className={styles.dialog}
-      aria-label={title}
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div className={styles.content}>
-        <div className={styles.heading}>
-          <h2>{title}</h2>
-          <button type="button" aria-label="Close selector" onClick={onClose}>
-            <X size={19} />
-          </button>
-        </div>
-        {children}
-      </div>
-    </dialog>
   );
 }
 export function SourceAssetPicker({

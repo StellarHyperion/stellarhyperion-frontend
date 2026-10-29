@@ -24,7 +24,7 @@ npm ci
 npm run dev
 ```
 
-Connect a Stellar wallet configured for Testnet. Users need testnet XLM for reserves and network fees, plus Axelar relay gas when using ITS. The setup disclosure links to the XLM and Circle testnet faucets. Testnet assets have no cash value.
+Connect Freighter, Albedo, xBull or LOBSTR for Stellar Testnet through the native wallet picker. Direct wallet SDKs replace the multi-chain wallet-kit bundle. Only Freighter restores a saved connection silently; popup wallets require an explicit selection. Every returned signature is checked against the exact requested transaction, connected account and Testnet passphrase before submission. Users need testnet XLM for reserves and network fees, plus Axelar relay gas when using ITS. The setup disclosure links to the XLM and Circle testnet faucets. Testnet assets have no cash value.
 
 ## Configuration and tracking
 
@@ -59,6 +59,8 @@ Live transaction tests require explicit opt-in and real named CLI wallets. `test
 For the route suite, set `HYPERION_LIVE_ROUTES=1`, `HYPERION_ROUTE_MODE=convert` or `cctp`, `HYPERION_ROUTE_IDENTITY`, `HYPERION_ROUTE_PROOF`, `HYPERION_ROUTE_DESTINATION`, `HYPERION_TESTNET_APP_URL`, `HYPERION_TESTNET_RECIPIENT` and `NEXT_PUBLIC_HYPERION_API_URL`. Conversion spends at most 1 testnet XLM plus fees; CCTP spends 0.3 testnet USDC. Never delete a pending proof to retry a transfer.
 
 Real signed acceptance includes native XLM conversion followed by an ITS payout and CCTP native-USDC payouts on all three destination testnets. Public source/destination hashes, observed amounts and confirmation evidence are retained in the contracts repository under `deployments/evidence/2026-10-29-conversion.json` and `deployments/evidence/2026-10-29-cctp.json`.
+
+As of October 29, 2026, `npm audit` reports zero known vulnerabilities after patching Next.js to 16.4.3 and replacing the wallet-kit bundle with direct SDKs. Adapter tests use mocked wallet responses and real locally generated signatures; browser checks cover the picker and read-only flows. These checks do not certify third-party wallets or replace signed live acceptance.
 
 ## Interface
 
