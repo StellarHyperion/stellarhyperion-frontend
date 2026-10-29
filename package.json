@@ -33,9 +33,9 @@
     "@hyperion/protocol": "file:hyperion-protocol-0.1.0.tgz",
     "@stellar/stellar-sdk": "17.2.1",
     "lucide-react": "^1.49.0",
-    "next": "16.3.8",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
+    "next": "16.4.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "viem": "^2.57.3"
   },
   "devDependencies": {
