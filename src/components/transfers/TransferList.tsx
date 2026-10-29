@@ -122,8 +122,28 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
           <div className={styles.cardBottom}>
             <div className={styles.amountGroup}>
               <span className={styles.netAmount}>
-                {formatTokenAmount(t.origin.netAmount, t.origin.decimals)}{" "}
-                {t.origin.symbol ?? "token"}
+                <small className={styles.amountLabel}>
+                  {t.destination.delivered &&
+                  t.destination.amount &&
+                  t.destination.decimals !== undefined &&
+                  t.destination.decimals !== null
+                    ? "Received"
+                    : "Bridged before relay fees"}
+                </small>
+                {t.destination.delivered &&
+                t.destination.amount &&
+                t.destination.decimals !== undefined &&
+                t.destination.decimals !== null ? (
+                  <>
+                    {formatTokenAmount(t.destination.amount, t.destination.decimals)}{" "}
+                    {t.destination.symbol ?? "token"}
+                  </>
+                ) : (
+                  <>
+                    {formatTokenAmount(t.origin.netAmount, t.origin.decimals)}{" "}
+                    {t.origin.symbol ?? "token"}
+                  </>
+                )}
               </span>
               <span className={styles.feeAmount}>
                 (fee: {formatTokenAmount(t.origin.fee, t.origin.decimals)}{" "}

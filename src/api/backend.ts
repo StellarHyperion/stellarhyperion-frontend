@@ -37,6 +37,10 @@ export interface FormattedTransfer {
     readonly observedAt: string;
   };
   readonly destination: {
+    readonly token?: string | null;
+    readonly amount?: string | null;
+    readonly symbol?: string | null;
+    readonly decimals?: number | null;
     readonly chain: string;
     readonly recipient: string;
     readonly delivered: boolean;

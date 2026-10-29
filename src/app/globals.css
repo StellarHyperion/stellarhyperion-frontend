@@ -309,6 +309,17 @@ html {
   scroll-behavior: smooth;
 }
 
+.themeChanging,
+.themeChanging *,
+.themeChanging *::before,
+.themeChanging *::after {
+  transition: none !important;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 240ms;
+}
+
 body {
   margin: 0;
   min-height: 100svh;

@@ -1,0 +1,199 @@
+.dialog {
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 24px;
+  padding: 0;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  width: min(440px, calc(100vw - 24px));
+  max-height: 85dvh;
+  margin: auto;
+}
+.dialog::backdrop {
+  background: color-mix(in srgb, var(--surface-page) 65%, transparent);
+  backdrop-filter: blur(10px);
+}
+.content {
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.heading h2 {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+.heading button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 14px;
+  padding: 12px;
+  background: var(--surface-page);
+  color: var(--text-secondary);
+}
+.search input {
+  background: transparent;
+  color: var(--text-primary);
+  border: 0;
+  outline: none;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.875rem;
+}
+.search:focus-within {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+}
+.note {
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.label {
+  font-family: var(--face-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+.list {
+  max-height: 40dvh;
+  overflow-y: auto;
+  display: grid;
+  gap: 6px;
+}
+.list > p {
+  padding: 20px 0;
+  font-size: 0.875rem;
+}
+.option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: start;
+  background: var(--surface-panel);
+  border: 1px solid transparent;
+  color: var(--text-primary);
+  border-radius: 16px;
+  padding: 14px;
+  cursor: pointer;
+  width: 100%;
+  font: inherit;
+  transition:
+    background var(--motion-state),
+    border-color var(--motion-state);
+}
+.option:hover,
+.option[aria-pressed="true"] {
+  border-color: var(--edge-color-strong);
+  background: var(--surface-well);
+}
+.option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.option > span:nth-child(2) {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+.option strong {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.option small {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.assetIcon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--edge-color-strong);
+  background: var(--surface-page);
+  color: var(--leg-origin);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.assetIcon[data-asset="USDC"] {
+  color: var(--leg-destination);
+  font-size: 1.25rem;
+}
+.assetIcon[data-network="true"] {
+  border-radius: 12px;
+  color: var(--leg-destination);
+  font-size: 0.625rem;
+}
+.balance {
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.networks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.network {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  background: var(--surface-panel);
+  border: 1px solid var(--edge-color);
+  border-radius: 16px;
+  color: var(--text-primary);
+  padding: 12px 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+}
+.network[aria-pressed="true"] {
+  border-color: var(--leg-origin);
+}
+.network small {
+  display: block;
+  font-size: 0.625rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dialog[open] {
+    animation: open var(--motion-state) var(--ease-enter) both;
+  }
+  @keyframes open {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+}

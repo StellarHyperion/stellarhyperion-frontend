@@ -11,13 +11,14 @@ import styles from "../chrome/Chrome.module.css";
 
 export type ThemeChoice = "system" | "dark" | "light";
 
-let fallbackTheme: ThemeChoice = "system";
+let transientTheme: ThemeChoice | null = null;
 const themeEvent = "hyperion:theme";
 
 function getThemeSnapshot(): ThemeChoice {
   if (typeof window === "undefined") {
     return "system";
   }
+  if (transientTheme) return transientTheme;
   try {
     const stored = localStorage.getItem("hyperion.theme");
     if (stored === "light" || stored === "dark" || stored === "system") {
@@ -26,7 +27,7 @@ function getThemeSnapshot(): ThemeChoice {
   } catch {
     // Ignore storage access errors
   }
-  return fallbackTheme;
+  return "system";
 }
 
 function subscribeTheme(onChange: () => void): () => void {
@@ -64,13 +65,31 @@ export function ThemeSelector(): ReactElement {
   }, [theme]);
 
   const selectTheme = (choice: ThemeChoice) => {
-    fallbackTheme = choice;
+    const root = document.documentElement;
     try {
       localStorage.setItem("hyperion.theme", choice);
+      transientTheme = null;
     } catch {
-      // Ignore storage access errors
+      transientTheme = choice;
     }
-    window.dispatchEvent(new Event(themeEvent));
+    const apply = () => {
+      root.classList.add("themeChanging");
+      root.setAttribute("data-theme", choice);
+      window.dispatchEvent(new Event(themeEvent));
+    };
+    const clear = () => {
+      root.classList.remove("themeChanging");
+    };
+    const start = (document as { startViewTransition?: Document["startViewTransition"] })
+      .startViewTransition;
+    if (start && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      void start.call(document, apply).finished.then(clear, clear);
+    } else {
+      apply();
+      requestAnimationFrame(() => {
+        requestAnimationFrame(clear);
+      });
+    }
   };
 
   return (

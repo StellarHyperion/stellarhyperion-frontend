@@ -161,10 +161,18 @@
 }
 
 .netAmount {
+  display: grid;
+  gap: 3px;
   font-family: var(--face-mono);
   font-size: var(--type-figure-size);
   font-weight: var(--type-figure-weight);
   color: var(--text-primary);
+}
+.amountLabel {
+  font-family: var(--face-display);
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  font-weight: 400;
 }
 
 .feeAmount {

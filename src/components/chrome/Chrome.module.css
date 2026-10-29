@@ -30,7 +30,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  padding-block: var(--space-5);
+  padding-block: var(--space-4);
 }
 .brandGroup {
   display: flex;
@@ -128,6 +128,11 @@
 .themeToggle:hover {
   color: var(--text-primary);
   background: var(--surface-panel);
+}
+.themeToggle svg {
+  transition: transform var(--motion-state) var(--ease-enter);
+}
+.themeToggle:hover svg {
   transform: rotate(-12deg);
 }
 .themeToggle:active {
@@ -138,7 +143,7 @@
 }
 .column {
   min-width: 0;
-  padding-block: clamp(2rem, 5vw, 4rem);
+  padding-block: clamp(1.25rem, 2vw, 2rem);
   display: grid;
   gap: var(--space-6);
 }
@@ -146,7 +151,7 @@
   border-block-start: 1px solid var(--edge-color);
 }
 .footerInner {
-  padding-block: var(--space-5);
+  padding-block: var(--space-4);
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-4);

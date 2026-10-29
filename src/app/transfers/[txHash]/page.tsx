@@ -92,11 +92,18 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
             Sent from {record.origin.chain} to {record.destination.chain}
           </p>
           <p>
-            Net: {formatTokenAmount(record.origin.netAmount, record.origin.decimals)}{" "}
+            Bridged before relay fees:{" "}
+            {formatTokenAmount(record.origin.netAmount, record.origin.decimals)}{" "}
             {record.origin.symbol ?? "token"}. Fee:{" "}
             {formatTokenAmount(record.origin.fee, record.origin.decimals)}{" "}
             {record.origin.symbol ?? "token"}.
           </p>
+          {record.destination.delivered && record.destination.amount && (
+            <p>
+              Received: {formatTokenAmount(record.destination.amount, record.destination.decimals)}{" "}
+              {record.destination.symbol ?? ""}.
+            </p>
+          )}
           <p style={{ overflowWrap: "anywhere" }}>Recipient: {record.destination.recipient}</p>
           {record.rail?.railStatus && <p>Rail reports: {record.rail.railStatus}</p>}
           {record.destination.txHash && (

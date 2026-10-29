@@ -1,43 +1,53 @@
 # Hyperion testnet app
 
-A Stellar wallet interface for real contract quotes, signed transfers, transaction status and parked-claim recovery. The current interface supports Stellar Testnet USDC to Ethereum Sepolia through Axelar ITS. The received token is the seven-decimal ITS representation of Stellar USDC, **not Circle's native Sepolia USDC**.
+A focused bridge interface for Stellar wallets, real quotes and verified destination payments. The app uses a compact send/receive composer, native token and destination pickers, explicit quote loading, a review before signing and recoverable transaction progress.
 
-The app checks the deployed router, adapter, token mapping, destination token and relay-gas support before enabling a transfer. The deployment record alone does not establish a usable lane. The current wallet-owned deployment has been activated after its normal timelock, with confirmed USDC mapping and a Sepolia link. The app still verifies live state before each quote and signature.
+## Assets and routes
+
+Send canonical Stellar USDC directly, or choose another classic Stellar asset. The app discovers wallet balances and issued assets through Stellar Testnet Horizon, then finds a real liquid conversion path into USDC. Issuer addresses distinguish assets with the same symbol. A listed asset still needs liquidity before a usable quote can exist.
+
+- Axelar ITS delivers the seven-decimal ITS representation of Stellar USDC to Ethereum Sepolia. This is not Circle's native Sepolia USDC.
+- Circle CCTP delivers six-decimal native USDC to supported Sepolia, Base Sepolia and Arc Testnet lanes. Circle's forwarding service mints on the destination; its live USDC fee budget is included in the receive minimum.
+
+The interface reads the active router, adapter configuration, destination contracts, token precision and bridge capabilities. A configured destination does not guarantee an available lane. Pending activation, paused routes, missing liquidity and unavailable pricing prevent signing rather than producing placeholder quotes.
+
+Conversion and bridging are separate signed transactions. The conversion uses a strict-receive path payment with an exact source spending cap and 0.5% price tolerance. It can create the canonical USDC trustline in the same transaction. If the bridge cannot proceed, the converted USDC remains in the user's wallet. The app saves the actual signed hash before broadcast; after an interruption, it checks the recorded transaction before offering a fresh bridge review. Unknown outcomes never trigger an automatic resend.
 
 ## Run
 
-Use Node 22.13 or newer (the pinned version is in `.nvmrc`).
+Node 22.13 or newer is required.
 
 ```bash
 npm ci
-cp .env.example .env.local
 npm run dev
 ```
 
-The shared protocol package is a committed, versioned tarball. No sibling checkout is required. `npm run check` runs formatting, design rules, contrast, unit tests, lint, type checking and a production build.
+Connect a Stellar wallet configured for Testnet. Users need testnet XLM for reserves and network fees, plus Axelar relay gas when using ITS. The setup disclosure links to the XLM and Circle testnet faucets. Testnet assets have no cash value.
 
-## Wallet and transfer behavior
+## Configuration and tracking
 
-Freighter, xBull, Albedo and Lobstr are available through Stellar Wallets Kit. Select Stellar Testnet in your wallet. Fund your account with testnet XLM and the configured testnet USDC asset; testnet assets have no monetary value. The asset code, issuer and SAC address are in `src/config/testnet-deployment.json`.
+The checked-in deployment supplies the default router and canonical USDC asset. Public overrides are documented in `.env.example`. The app is testnet only.
 
-Amounts use exact seven-decimal integers. Quotes come from the deployed router and relay-gas estimates from Axelar's testnet API. The signature includes the USDC transfer, protocol fee and XLM relay gas. The wallet also pays Stellar network fees. The app rechecks the quote, account, network and balance before submission and verifies the signed transaction matches the prepared transaction.
+`NEXT_PUBLIC_HYPERION_API_URL` supplies transfer activity and destination verification. The backend must run its persistent indexer and rail pollers. Unreachable history is shown explicitly. A confirmed Stellar transaction proves source execution; destination delivery requires matching confirmed bridge and token-payment events.
 
-A confirmed Stellar transaction establishes source execution. Destination delivery requires a matching confirmed ITS event and token payment, verified by the backend. Unknown submission outcomes retain the real transaction hash; check its outcome before retrying. There are no generated transaction hashes, sample claims, offline transfer fixtures or fixed relay-price estimates.
+Next serves `/api/relay-fee` for Axelar's live ITS estimate and `/api/cctp-fee` for Circle's finalized forwarding estimate. Static export cannot serve these endpoints. There are no fixed relay prices, generated transaction hashes, sample claims or fabricated history.
 
-Claim recovery reads `get_claim` directly from the Stellar router and signs `settle_claim`. It cannot recover assets that were never dispatched or bypass a destination trustline requirement.
+Relay budgets include 10% headroom over the live estimate. The Axelar XLM budget is paid in full; the Circle receive minimum accounts for the full USDC forwarding budget. A refreshed estimate must fit inside the displayed budget before signing. Transient read failures receive one bounded retry; signed transactions are never retried automatically.
 
-## Configuration
+Claim recovery reads `get_claim` and signs `settle_claim` on the Stellar router. It pays the recorded recipient and cannot recover assets that were never dispatched.
 
-The browser RPC/router/USDC settings default to the checked-in testnet deployment. Public overrides are documented in `.env.example`. This app is testnet only.
+## Verification
 
-`NEXT_PUBLIC_HYPERION_API_URL` is optional for signing and direct claim lookup, and required for transfer history and destination verification. The backend must run its indexer and rail poller. An absent or unreachable backend is shown explicitly; no fabricated history appears. The Next server exposes `/api/relay-fee` to fetch Axelar's live ITS gas estimate. Static export cannot serve this endpoint.
+`npm run check` runs formatting, interface rules, contrast checks, unit tests, lint, types and the production build. Start the app and run `npm run test:browser` for the real wallet picker, theme persistence, native selectors and mobile layout. Chromium must be installed with `npx playwright install chromium`.
 
-For a read-only browser smoke check, install Chromium with `npx playwright install chromium`, start the development server on port 3100, then run `npm run test:browser`. No wallet signing is automated by this check.
+Set `HYPERION_BROWSER=firefox` to check Firefox, or `HYPERION_BROWSER_EXECUTABLE` to use a specific installed browser executable.
 
-Deployment addresses and signed transaction evidence are in the contracts repository at `docs/TESTNET_ACTIVATION.md` and `deployments/evidence/2026-10-28-paid-its.json`. The opt-in `test/live-transfer.test.ts` signs 0.1 testnet USDC with a named CLI wallet and checks real source execution and indexed destination token delivery. It saves its source hash across interrupted runs and is skipped unless `HYPERION_LIVE_TESTNET=1` is set.
+Live transaction tests require explicit opt-in and real named CLI wallets. `test/live-transfer.test.ts` retains the original ITS acceptance. `test/live-routes.test.ts` verifies conversion or CCTP through actual destination payment, preserving its proof file across interrupted runs. Normal tests skip both live suites.
+
+For the route suite, set `HYPERION_LIVE_ROUTES=1`, `HYPERION_ROUTE_MODE=convert` or `cctp`, `HYPERION_ROUTE_IDENTITY`, `HYPERION_ROUTE_PROOF`, `HYPERION_ROUTE_DESTINATION`, `HYPERION_TESTNET_APP_URL`, `HYPERION_TESTNET_RECIPIENT` and `NEXT_PUBLIC_HYPERION_API_URL`. Conversion spends at most 1 testnet XLM plus fees; CCTP spends 0.3 testnet USDC. Never delete a pending proof to retry a transfer.
 
 ## Interface
 
-The transfer composer uses soft surfaces, a responsive two-column layout and a curved lane connection driven by verified route availability. Live quotes reveal their actual fee breakdown; empty states contain no sample amounts. Native disclosure controls keep recovery and setup available without crowding the transfer flow. CSS motion follows interaction and network state, and honors reduced-motion preferences. Light, dark, keyboard focus and contrast remain supported.
+The layout study used [Jumper](https://jumper.xyz/), [Relay](https://relay.link/bridge) and [Stargate](https://stargate.finance/) as reference points for focused asset selection and progressive route details. Hyperion adds explicit receive-token identity, quote request feedback, review and interruption recovery. Decorative orbital paths provide background motion without implying that funds are moving. One theme button switches between light and dark; all motion honors reduced-motion preferences.
 
 MIT.
