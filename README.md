@@ -1,4 +1,6 @@
-# Hyperion testnet app
+# Hyperion frontend
+
+[Open Hyperion](https://stellarhyperion.vercel.app/) | [Backend](https://github.com/StellarHyperion/stellarhyperion-backend) | [Contracts and deployment evidence](https://github.com/StellarHyperion/stellarhyperion-contracts)
 
 A focused bridge interface for Stellar wallets, real quotes and verified destination payments. The app uses a compact send/receive composer, native token and destination pickers, explicit quote loading, a review before signing and recoverable transaction progress.
 
@@ -34,7 +36,15 @@ Next serves `/api/relay-fee` for Axelar's live ITS estimate and `/api/cctp-fee` 
 
 Relay budgets include 10% headroom over the live estimate. The Axelar XLM budget is paid in full; the Circle receive minimum accounts for the full USDC forwarding budget. A refreshed estimate must fit inside the displayed budget before signing. Transient read failures receive one bounded retry; signed transactions are never retried automatically.
 
-Claim recovery reads `get_claim` and signs `settle_claim` on the Stellar router. It pays the recorded recipient and cannot recover assets that were never dispatched.
+Hyperion charges 30 basis points (0.3%) on the bridged USDC amount. The source transaction sends that protocol fee to the router's configured Stellar treasury. Bridge forwarding, relay and network fees are separate and shown before signing.
+
+Claim recovery reads `get_claim` and signs `settle_claim` on the Stellar router. It pays the recorded recipient. A claim exists only when a destination router has parked funds for recovery; completed transfers have no claim number. Activity displays genuine claim numbers and settlement status, while transfer details explain when no claim exists. A delayed outbound transfer does not automatically become a Stellar claim.
+
+## Deploy
+
+The production alias is [stellarhyperion.vercel.app](https://stellarhyperion.vercel.app/), attached to the Vercel project `hyperion`. Set `NEXT_PUBLIC_HYPERION_API_URL=https://stellarhyperion-backend.vercel.app` in its production environment, then deploy from this repository with `vercel deploy --prod`. The app requires a Next.js server for its live bridge-fee API routes.
+
+The backend uses a server-side PostgreSQL connection and a continuously running indexer. Database credentials and signing keys must never be included in `NEXT_PUBLIC_` variables. The checked-in deployment is testnet only. See the backend README for the persistent worker and database configuration.
 
 ## Verification
 

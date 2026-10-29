@@ -1,0 +1,9 @@
+.git
+node_modules
+.next
+coverage
+.env
+.env.*
+TASKS.md
+**/[Aa][Gg][Ee][Nn][Tt]*.[Mm][Dd]
+*.log
