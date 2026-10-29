@@ -4,6 +4,12 @@
 
 A focused bridge interface for Stellar wallets, real quotes and verified destination payments. The app uses a compact send/receive composer, native token and destination pickers, explicit quote loading, a review before signing and recoverable transaction progress.
 
+## Changes since October 12, 2026
+
+- Replaced simulated transfer submission with real Soroban construction, simulation, wallet signing and broadcast. Live Axelar and Circle fee estimates are reviewed before signing.
+- Added liquid Stellar asset conversion, trustline creation and paid ITS/CCTP routes, with saved signed hashes and recovery that checks uncertain outcomes before another submission.
+- Replaced the wallet-kit bundle with direct Freighter, Albedo, xBull and LOBSTR SDKs, checked transaction signatures, and updated Next.js to 16.4.3. Activity now displays independently verified destination payouts and genuine claims.
+
 ## Assets and routes
 
 Send canonical Stellar USDC directly, or choose another classic Stellar asset. The app discovers wallet balances and issued assets through Stellar Testnet Horizon, then finds a real liquid conversion path into USDC. Issuer addresses distinguish assets with the same symbol. A listed asset still needs liquidity before a usable quote can exist.
@@ -58,7 +64,15 @@ Live transaction tests require explicit opt-in and real named CLI wallets. `test
 
 For the route suite, set `HYPERION_LIVE_ROUTES=1`, `HYPERION_ROUTE_MODE=convert` or `cctp`, `HYPERION_ROUTE_IDENTITY`, `HYPERION_ROUTE_PROOF`, `HYPERION_ROUTE_DESTINATION`, `HYPERION_TESTNET_APP_URL`, `HYPERION_TESTNET_RECIPIENT` and `NEXT_PUBLIC_HYPERION_API_URL`. Conversion spends at most 1 testnet XLM plus fees; CCTP spends 0.3 testnet USDC. Never delete a pending proof to retry a transfer.
 
-Real signed acceptance includes native XLM conversion followed by an ITS payout and CCTP native-USDC payouts on all three destination testnets. Public source/destination hashes, observed amounts and confirmation evidence are retained in the contracts repository under `deployments/evidence/2026-10-29-conversion.json` and `deployments/evidence/2026-10-29-cctp.json`.
+Verified testnet acceptance is published with actual signed transaction hashes and destination payment evidence:
+
+| Evidence                                                                                                                                              | Result                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [Paid ITS acceptance](https://github.com/StellarHyperion/stellarhyperion-contracts/blob/main/deployments/evidence/2026-10-28-paid-its.json)           | Stellar USDC delivered through ITS to Ethereum Sepolia                                   |
+| [Asset conversion acceptance](https://github.com/StellarHyperion/stellarhyperion-contracts/blob/main/deployments/evidence/2026-10-29-conversion.json) | An XLM-only wallet created its USDC trustline, converted XLM and completed an ITS payout |
+| [CCTP acceptance](https://github.com/StellarHyperion/stellarhyperion-contracts/blob/main/deployments/evidence/2026-10-29-cctp.json)                   | Native-USDC payouts verified on Ethereum Sepolia, Base Sepolia and Arc Testnet           |
+
+The [October 29 CI run](https://github.com/StellarHyperion/stellarhyperion-frontend/actions/runs/40881695541) passed formatting, interface/contrast checks, lint, types, the production build and 54 ordinary tests. The two live suites require explicit opt-in and are skipped in normal runs. Browser verification also covered wallet errors/cancellation, saved connections, mobile layout, themes, live quotes and recorded receipt links in Chromium and Firefox.
 
 As of October 29, 2026, `npm audit` reports zero known vulnerabilities after patching Next.js to 16.4.3 and replacing the wallet-kit bundle with direct SDKs. Adapter tests use mocked wallet responses and real locally generated signatures; browser checks cover the picker and read-only flows. These checks do not certify third-party wallets or replace signed live acceptance.
 
