@@ -189,15 +189,15 @@
     width: 100%;
   }
   .actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     width: 100%;
-    justify-content: space-between;
     gap: var(--space-2);
   }
-  .network {
-    display: inline-flex;
-  }
-  .themeSelector {
-    margin-inline-start: auto;
+  .actions .network {
+    min-width: 0;
+    gap: var(--space-1);
+    font-size: 0.625rem;
   }
   .navLink {
     padding: var(--space-2) var(--space-3);
