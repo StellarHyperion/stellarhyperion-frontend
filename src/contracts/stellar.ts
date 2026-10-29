@@ -261,7 +261,7 @@ export async function readLane(
         reason: "Circle forwarding is awaiting router activation.",
       };
     const remote = createPublicClient({
-      transport: http(destination.rpcUrl, { timeout: 15000, retryCount: 0 }),
+      transport: http(destination.rpcUrl, { timeout: 15000, retryCount: 1, retryDelay: 300 }),
     });
     if ((await remote.getChainId()) !== destination.chainId)
       throw new Error("The destination RPC is on the wrong network.");
@@ -310,7 +310,7 @@ export async function readLane(
     if (registered.value !== TESTNET.token)
       throw new Error("The adapter token mapping does not match Stellar USDC.");
     const remote = createPublicClient({
-      transport: http(destination.rpcUrl, { timeout: 15_000, retryCount: 0 }),
+      transport: http(destination.rpcUrl, { timeout: 15_000, retryCount: 1, retryDelay: 300 }),
     });
     if ((await remote.getChainId()) !== destination.chainId)
       throw new Error("The destination RPC is on the wrong network.");
