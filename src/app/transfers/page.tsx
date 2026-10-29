@@ -55,6 +55,10 @@ export default function TransfersPage() {
           ? "Transfers sent by your connected Stellar account."
           : "Recent transfers observed by the indexer. Connect a Stellar wallet to see your transfers."}
       </p>
+      <p className={styles.claimNote}>
+        Claim numbers appear when a destination router holds funds for recovery. Delivered transfers
+        need no claim recovery. Open transfer details to check a claim and its status.
+      </p>
       <input
         className={styles.searchInput}
         aria-label="Search indexed transfers"

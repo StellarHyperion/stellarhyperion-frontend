@@ -1,3 +1,8 @@
+.claimNote {
+  color: var(--text-secondary);
+  font-size: var(--type-mono-sm-size);
+}
+
 .searchInput {
   width: 100%;
   padding: var(--space-2) var(--space-3);

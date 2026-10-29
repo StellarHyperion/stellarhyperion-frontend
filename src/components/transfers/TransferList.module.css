@@ -154,6 +154,18 @@
   gap: var(--space-2);
 }
 
+.claimInfo {
+  display: grid;
+  gap: var(--space-1);
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: var(--type-mono-sm-size);
+}
+
+.claimInfo strong {
+  color: var(--text-primary);
+}
+
 .amountGroup {
   display: flex;
   align-items: baseline;

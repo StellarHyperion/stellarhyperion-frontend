@@ -119,6 +119,17 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
             </div>
           </div>
 
+          {t.claim && (
+            <p className={styles.claimInfo}>
+              <strong>Claim number: {t.claim.id}</strong>
+              <span>
+                {t.claim.settled
+                  ? "Settled. Funds paid to the recorded recipient."
+                  : `Funds parked on ${t.destination.chain}. Open transfer details to review recovery.`}
+              </span>
+            </p>
+          )}
+
           <div className={styles.cardBottom}>
             <div className={styles.amountGroup}>
               <span className={styles.netAmount}>

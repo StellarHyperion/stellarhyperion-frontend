@@ -115,10 +115,25 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
               View destination transaction
             </a>
           )}
-          {record.claim && (
+          {record.claim ? (
+            <div aria-label="Claim recovery">
+              <p>
+                Claim number: <strong>{record.claim.id}</strong>
+              </p>
+              <p>
+                {record.claim.settled
+                  ? "Settled. Funds were paid to the recorded recipient."
+                  : `Funds are parked on the ${record.destination.chain} router for the recorded recipient.`}
+              </p>
+              {!record.claim.settled && record.destination.chain === "stellar-testnet" && (
+                <Link href="/#claim-recovery">Recover Stellar claim {record.claim.id}</Link>
+              )}
+            </div>
+          ) : (
             <p>
-              Claim {record.claim.id}:{" "}
-              {record.claim.settled ? "settled" : "parked on the destination router"}.
+              {record.destination.delivered
+                ? "No recovery claim. This transfer was delivered to the destination wallet."
+                : "No recovery claim has been recorded for this transfer. A pending transfer does not automatically create a claim."}
             </p>
           )}
         </section>
