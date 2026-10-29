@@ -12,9 +12,10 @@ try {
   await page.getByRole("heading", { name: "Send testnet USDC" }).waitFor();
   assert.equal(await page.getByLabel("Amount in USDC").count(), 1);
   assert.equal(await page.getByLabel("Recipient on Ethereum Sepolia").count(), 1);
-  await page.getByLabel("Color theme").selectOption("dark");
+  const themeToggle = page.getByRole("button", { name: "Toggle dark theme" });
+  if ((await themeToggle.getAttribute("aria-pressed")) !== "true") await themeToggle.click();
   await page.reload({ waitUntil: "networkidle" });
-  assert.equal(await page.getByLabel("Color theme").inputValue(), "dark");
+  assert.equal(await themeToggle.getAttribute("aria-pressed"), "true");
   assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
   await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
   await page.getByText("Freighter", { exact: true }).waitFor();

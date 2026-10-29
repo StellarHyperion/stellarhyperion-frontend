@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronDown } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 import { useEffect, useSyncExternalStore, type ReactElement } from "react";
 
 import { HyperionMark } from "../brand/HyperionMark";
@@ -38,8 +38,22 @@ function subscribeTheme(onChange: () => void): () => void {
   };
 }
 
+function subscribeSystemTheme(onChange: () => void): () => void {
+  const query = window.matchMedia("(prefers-color-scheme: dark)");
+  query.addEventListener("change", onChange);
+  return () => {
+    query.removeEventListener("change", onChange);
+  };
+}
+
 export function ThemeSelector(): ReactElement {
   const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, () => "system");
+  const systemDark = useSyncExternalStore(
+    subscribeSystemTheme,
+    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
+    () => true,
+  );
+  const dark = theme === "system" ? systemDark : theme === "dark";
 
   useEffect(() => {
     if (theme === "system") {
@@ -60,21 +74,18 @@ export function ThemeSelector(): ReactElement {
   };
 
   return (
-    <div className={styles.themeSelector}>
-      <select
-        aria-label="Color theme"
-        value={theme}
-        onChange={(event) => {
-          const choice = event.target.value;
-          if (choice === "system" || choice === "dark" || choice === "light") selectTheme(choice);
-        }}
-      >
-        <option value="system">System</option>
-        <option value="dark">Dark</option>
-        <option value="light">Light</option>
-      </select>
-      <ChevronDown size={12} aria-hidden="true" />
-    </div>
+    <button
+      type="button"
+      className={styles.themeToggle}
+      aria-label="Toggle dark theme"
+      aria-pressed={dark}
+      title={dark ? "Switch to light theme" : "Switch to dark theme"}
+      onClick={() => {
+        selectTheme(dark ? "light" : "dark");
+      }}
+    >
+      {dark ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
+    </button>
   );
 }
 
@@ -98,14 +109,14 @@ export function Header({ network }: { readonly network: string }): ReactElement 
               href="/"
               aria-current={!transfersActive ? "page" : undefined}
             >
-              Send
+              Bridge
             </Link>
             <Link
               className={styles.navLink}
               href="/transfers"
               aria-current={transfersActive ? "page" : undefined}
             >
-              Transfers
+              Activity
             </Link>
           </nav>
         </div>

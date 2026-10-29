@@ -1,4 +1,6 @@
 .shell {
+  position: relative;
+  isolation: isolate;
   min-height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr auto;
@@ -17,6 +19,10 @@
   max-width: var(--measure);
   margin-inline: auto;
   padding-inline: var(--gutter);
+}
+.headerInner,
+.footerInner {
+  max-width: 90rem;
 }
 .headerInner {
   display: flex;
@@ -104,34 +110,28 @@
   border-radius: 50%;
   background: var(--leg-origin);
 }
-.themeSelector {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-.themeSelector select {
-  appearance: none;
+.themeToggle {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
   cursor: pointer;
-  border: 0;
+  border: 1px solid var(--edge-color);
   border-radius: 999px;
-  padding: var(--space-2) var(--space-5) var(--space-2) var(--space-3);
-  font-family: var(--face-display);
-  font-size: 0.6875rem;
   background: var(--surface-raised);
   color: var(--text-secondary);
   transition:
     color var(--motion-state),
-    background var(--motion-state);
+    background var(--motion-state),
+    transform var(--motion-state) var(--ease-enter);
 }
-.themeSelector select:hover {
+.themeToggle:hover {
   color: var(--text-primary);
   background: var(--surface-panel);
+  transform: rotate(-12deg);
 }
-.themeSelector > svg {
-  pointer-events: none;
-  position: absolute;
-  inset-inline-end: var(--space-2);
-  color: var(--text-secondary);
+.themeToggle:active {
+  transform: scale(0.92);
 }
 .main {
   min-width: 0;
@@ -156,7 +156,7 @@
 }
 .footerInner p,
 .footerLinks a {
-  font-size: 0.625rem;
+  font-size: 0.75rem;
 }
 .footerLinks {
   display: flex;

@@ -2,11 +2,17 @@ import Link from "next/link";
 import type { ReactElement, ReactNode } from "react";
 
 import styles from "./Chrome.module.css";
+import { AmbientRoutes } from "./AmbientRoutes";
 
 export { Header } from "../nav/Header";
 
 export function Shell({ children }: { readonly children: ReactNode }): ReactElement {
-  return <div className={styles.shell}>{children}</div>;
+  return (
+    <div className={styles.shell}>
+      <AmbientRoutes />
+      {children}
+    </div>
+  );
 }
 
 export function Main({ children }: { readonly children: ReactNode }): ReactElement {
@@ -25,20 +31,12 @@ export function Footer(): ReactElement {
   return (
     <footer className={styles.footer}>
       <div className={styles.footerInner}>
-        <p className="mono">Built by dotmantissa</p>
-        <nav className={styles.footerLinks} aria-label="Project links">
+        <p>Testnet assets. Real confirmations.</p>
+        <nav className={styles.footerLinks} aria-label="Helpful links">
           <Link className="mono" href="/transfers">
-            Transfers
+            Transfer activity
           </Link>
-          <a className="mono" href="https://github.com/StellarHyperion/stellarhyperion-contracts">
-            Contracts
-          </a>
-          <a className="mono" href="https://github.com/StellarHyperion/stellarhyperion-backend">
-            Backend
-          </a>
-          <a className="mono" href="https://github.com/StellarHyperion/stellarhyperion-frontend">
-            This app
-          </a>
+          <Link href="/#claim-recovery">Recover a claim</Link>
         </nav>
       </div>
     </footer>
