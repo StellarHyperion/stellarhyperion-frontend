@@ -348,18 +348,19 @@ export function Bridge() {
   }, [wallet.address, result, refresh]);
   useEffect(() => {
     if (!valid || !lane?.available || locked) return;
-    let active = true;
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      void quoteTrade(destination, source, amount, route)
+      void quoteTrade(destination, source, amount, route, controller.signal)
         .then((value) => {
-          if (active) setQuoted({ key: quoteKey, value, error: null });
+          if (!controller.signal.aborted) setQuoted({ key: quoteKey, value, error: null });
         })
         .catch((cause: unknown) => {
-          if (active) setQuoted({ key: quoteKey, value: null, error: errorMessage(cause) });
+          if (!controller.signal.aborted)
+            setQuoted({ key: quoteKey, value: null, error: errorMessage(cause) });
         });
     }, 400);
     return () => {
-      active = false;
+      controller.abort();
       clearTimeout(timer);
     };
   }, [valid, lane, locked, destination, source, amount, route, quoteKey]);
