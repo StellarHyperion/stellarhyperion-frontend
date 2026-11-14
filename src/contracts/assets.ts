@@ -119,7 +119,11 @@ export interface TradeQuote {
   conversion: Conversion | null;
 }
 
-export async function quoteConversion(source: SourceAsset, amount: bigint): Promise<Conversion> {
+export async function quoteConversion(
+  source: SourceAsset,
+  amount: bigint,
+  signal?: AbortSignal,
+): Promise<Conversion> {
   const asset = stellarAsset(source);
   if (amount <= 0n || amount > (1n << 63n) - 1n)
     throw new Error("Enter a positive amount within Stellar's asset limit.");
@@ -134,7 +138,7 @@ export async function quoteConversion(source: SourceAsset, amount: bigint): Prom
     if (!issuer) throw new Error("The source asset issuer is missing.");
     params.set("source_asset_issuer", issuer);
   }
-  const paths = records(await horizon(`/paths/strict-send?${params}`))
+  const paths = records(await horizon(`/paths/strict-send?${params}`, signal))
     .flatMap((entry) => {
       if (
         entry.destination_asset_code !== USDC.code ||
@@ -172,13 +176,14 @@ export async function quoteTrade(
   source: SourceAsset,
   input: string,
   route: BridgeRoute,
+  signal?: AbortSignal,
 ): Promise<TradeQuote> {
   stellarAsset(source);
   const amount = parseUnits(input.trim(), 7);
   if (amount <= 0n || amount > (1n << 63n) - 1n)
     throw new Error("Enter a positive amount within Stellar's asset limit.");
-  const conversion = source.id === USDC.id ? null : await quoteConversion(source, amount);
-  const bridge = await quoteTransfer(destination, conversion?.usdcAmount ?? amount, route);
+  const conversion = source.id === USDC.id ? null : await quoteConversion(source, amount, signal);
+  const bridge = await quoteTransfer(destination, conversion?.usdcAmount ?? amount, route, signal);
   return { source, sourceAmount: amount, bridge, conversion };
 }
 

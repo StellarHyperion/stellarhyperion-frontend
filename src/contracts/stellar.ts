@@ -27,6 +27,13 @@ import {
   type BridgeRoute,
   type DestinationKey,
 } from "../config/testnet";
+import {
+  FEE_QUOTE_TTL_MS,
+  abortReason,
+  createSingleFlightCoalescer,
+  feeQuoteKey,
+  isAbortError,
+} from "../lib/relay-budget";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
@@ -75,12 +82,30 @@ function server() {
   return new rpc.Server(TESTNET.rpcUrl, { timeout: 15_000 });
 }
 
-async function readWithRetry<T>(read: () => Promise<T>): Promise<T> {
+async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw abortReason(signal);
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      if (signal) reject(abortReason(signal));
+    };
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function readWithRetry<T>(read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) throw abortReason(signal);
   try {
     return await read();
-  } catch (error) {
+  } catch (error: unknown) {
+    if (signal?.aborted || isAbortError(error)) throw error;
     if (!/fetch failed|timeout|timed out|429|502|503|504|ECONN/i.test(String(error))) throw error;
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await abortableDelay(300, signal);
+    if (signal?.aborted) throw abortReason(signal);
     return read();
   }
 }
@@ -367,19 +392,109 @@ export async function readLane(
   };
 }
 
-export async function quoteTransfer(
+interface ClientFeeEstimate {
+  relayGas: bigint;
+  estimatedRelayGas: bigint;
+  token: string;
+  issuer: string | null;
+  decimals: number;
+}
+
+const clientFeeQuotes = createSingleFlightCoalescer<ClientFeeEstimate>({
+  ttlMs: FEE_QUOTE_TTL_MS,
+  timeoutMs: 20_000,
+  clone: (value) => ({ ...value }),
+  validate: (value) => {
+    if (value.estimatedRelayGas <= 0n || value.estimatedRelayGas > value.relayGas) {
+      throw new Error("Invalid live fee estimate.");
+    }
+    if (value.relayGas <= 0n || value.relayGas > I128_MAX) {
+      throw new Error("Invalid relay gas estimate.");
+    }
+    return value;
+  },
+});
+
+export function resetClientFeeQuotes(): void {
+  clientFeeQuotes.clear();
+}
+
+async function readRouteFeeQuote(
+  destinationKey: DestinationKey,
+  route: BridgeRoute,
+  options: { signal?: AbortSignal | undefined; bypassCache?: boolean | undefined } = {},
+): Promise<ClientFeeEstimate> {
+  const expectedToken = route === 0 ? TESTNET.usdcCode : "XLM";
+  const expectedIssuer = route === 0 ? TESTNET.usdcIssuer : null;
+  const key = feeQuoteKey({
+    provider: route === 0 ? "circle-cctp" : "axelar-its",
+    source: "stellar-testnet",
+    destination: destinationKey,
+    token: expectedToken,
+    issuer: expectedIssuer,
+    decimals: 7,
+  });
+  return clientFeeQuotes.coalesce(
+    key,
+    async (upstreamSignal) => {
+      const endpoint =
+        route === 0
+          ? `/api/cctp-fee?destination=${encodeURIComponent(destinationKey)}`
+          : `/api/relay-fee?destination=${encodeURIComponent(destinationKey)}`;
+      const feeResponse = await readWithRetry(async () => {
+        const response = await fetch(endpoint, {
+          signal: upstreamSignal,
+          cache: "no-store",
+        });
+        if (response.status === 503) {
+          throw new Error("503: Live bridge pricing is temporarily unavailable. Try again.");
+        }
+        return response;
+      }, upstreamSignal);
+      if (!feeResponse.ok) {
+        throw new Error("Bridge fee pricing is unavailable. Try again later.");
+      }
+      const payload = object(await feeResponse.json());
+      if (typeof payload.token === "string" && payload.token !== expectedToken) {
+        throw new Error("Fee quote token does not match the selected bridge route.");
+      }
+      if (payload.issuer !== undefined && payload.issuer !== expectedIssuer) {
+        throw new Error("Fee quote token issuer does not match the configured asset.");
+      }
+      if (payload.decimals !== undefined && Number(payload.decimals) !== 7) {
+        throw new Error("Fee quote precision does not match Stellar token units.");
+      }
+      const relayGas = integer(payload.amount);
+      const estimatedRelayGas = integer(payload.estimatedAmount ?? relayGas);
+      return {
+        relayGas,
+        estimatedRelayGas,
+        token: expectedToken,
+        issuer: expectedIssuer,
+        decimals: 7,
+      };
+    },
+    options,
+  );
+}
+
+async function quoteTransferInternal(
   destinationKey: DestinationKey,
   amount: bigint,
-  route: BridgeRoute = 1,
+  route: BridgeRoute,
+  options: { signal?: AbortSignal | undefined; bypassCache?: boolean | undefined } = {},
 ): Promise<LiveQuote> {
+  if (options.signal?.aborted) throw abortReason(options.signal);
   if (amount <= 0n || amount > I128_MAX) throw new Error("Enter a valid transfer amount.");
   const lane = await readLane(destinationKey, route);
+  if (options.signal?.aborted) throw abortReason(options.signal);
   if (!lane.available || !lane.adapter) throw new Error(lane.reason ?? "This lane is unavailable.");
   const response = await view(TESTNET.router, "quote_routes", [
     new Address(TESTNET.token).toScVal(),
     nativeToScVal(amount, { type: "i128" }),
     nativeToScVal(destinationDecimals(route), { type: "u32" }),
   ]);
+  if (options.signal?.aborted) throw abortReason(options.signal);
   if (!Array.isArray(response.value)) throw new Error("The router returned an invalid quote.");
   const quote = response.value.map(object).find((q) => q.route === route);
   if (!quote) throw new Error("The router did not quote this bridge.");
@@ -389,25 +504,7 @@ export async function quoteTransfer(
       name ? `${name}: ${describeError(name).summary}` : "The router declined this amount.",
     );
   }
-  const feeResponse = await readWithRetry(async () => {
-    const response = await fetch(
-      route === 0 ? `/api/cctp-fee?destination=${destinationKey}` : "/api/relay-fee",
-      {
-        signal: AbortSignal.timeout(20_000),
-        cache: "no-store",
-      },
-    );
-    if (response.status === 503)
-      throw new Error("503: Live bridge pricing is temporarily unavailable. Try again.");
-    return response;
-  });
-  if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");
-  const fee: unknown = await feeResponse.json();
-  const relayGas = integer(object(fee).amount);
-  const estimatedRelayGas = integer(object(fee).estimatedAmount ?? relayGas);
-  if (estimatedRelayGas <= 0n || estimatedRelayGas > relayGas)
-    throw new Error("Invalid live fee estimate.");
-  if (relayGas <= 0n || relayGas > I128_MAX) throw new Error("Invalid relay gas estimate.");
+  const { relayGas, estimatedRelayGas } = await readRouteFeeQuote(destinationKey, route, options);
   if (route === 0 && (relayGas % 10n !== 0n || relayGas >= integer(quote.net_amount)))
     throw new Error("Increase the amount to cover Circle's destination forwarding fee.");
   return {
@@ -424,6 +521,15 @@ export async function quoteTransfer(
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
   };
+}
+
+export async function quoteTransfer(
+  destinationKey: DestinationKey,
+  amount: bigint,
+  route: BridgeRoute = 1,
+  signal?: AbortSignal,
+): Promise<LiveQuote> {
+  return quoteTransferInternal(destinationKey, amount, route, { signal });
 }
 
 export async function readBalance(account: string): Promise<bigint> {
@@ -582,10 +688,11 @@ export async function submitBridgeOut(
   progress?: (phase: TransactionPhase, hash?: string) => void,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
-  const refreshed = await quoteTransfer(
+  const refreshed = await quoteTransferInternal(
     quoted.destination,
     quoted.requestedAmount,
     quoted.route as BridgeRoute,
+    { bypassCache: true },
   );
   if (
     refreshed.grossAmount !== quoted.grossAmount ||
