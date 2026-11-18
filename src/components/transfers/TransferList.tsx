@@ -5,6 +5,8 @@ import { type ReactElement } from "react";
 import { ExternalLink } from "lucide-react";
 import { getRouteName, type FormattedTransfer, type TransferLifecycleStage } from "../../api";
 import { formatTokenAmount, getExplorerUrl, shortenAddress, shortenTxHash } from "../../lib/format";
+import { getEvidenceAwareStage, hasVerifiedDestinationEvidence } from "../../lib/evidence";
+import { EvidenceTimeline } from "./EvidenceTimeline";
 import styles from "./TransferList.module.css";
 
 interface TransferListProps {
@@ -40,7 +42,9 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
           <div className={styles.cardTop}>
             <div className={styles.routeAndStage}>
               <span className={styles.routeBadge}>{getRouteName(t.route)}</span>
-              <span className={`${styles.stageBadge} ${getStageClass(t.stage)}`}>{t.stage}</span>
+              <span className={`${styles.stageBadge} ${getStageClass(t.stage)}`}>
+                {getEvidenceAwareStage(t)}
+              </span>
             </div>
             <time className={styles.timestamp} dateTime={t.origin.observedAt}>
               {new Date(t.origin.observedAt).toLocaleString()}
@@ -130,18 +134,20 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
             </p>
           )}
 
+          <EvidenceTimeline transfer={t} />
+
           <div className={styles.cardBottom}>
             <div className={styles.amountGroup}>
               <span className={styles.netAmount}>
                 <small className={styles.amountLabel}>
-                  {t.destination.delivered &&
+                  {hasVerifiedDestinationEvidence(t) &&
                   t.destination.amount &&
                   t.destination.decimals !== undefined &&
                   t.destination.decimals !== null
                     ? "Received"
                     : "Bridged before relay fees"}
                 </small>
-                {t.destination.delivered &&
+                {hasVerifiedDestinationEvidence(t) &&
                 t.destination.amount &&
                 t.destination.decimals !== undefined &&
                 t.destination.decimals !== null ? (
