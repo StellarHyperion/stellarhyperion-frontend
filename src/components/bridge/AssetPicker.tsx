@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowUpRight, Check, ChevronRight, Search } from "lucide-react";
+import { parseUnits } from "@hyperion/protocol";
 import { DESTINATIONS, type BridgeRoute, type DestinationKey } from "../../config/testnet";
 import {
   issuerVerificationLabel,
@@ -83,54 +84,83 @@ export function SourceAssetPicker({
         {!loading && assets.length === 0 && (
           <p>No matching assets. Try an exact token code or issuer.</p>
         )}
-        {assets.map((asset) => (
-          <div className={styles.assetChoice} key={asset.id}>
-            <button
-              className={styles.option}
-              type="button"
-              onClick={() => {
-                onSelect(asset);
-                onClose();
-              }}
-              aria-pressed={selected.id === asset.id}
-            >
-              <AssetIcon code={asset.code} />
-              <span>
-                <strong>{asset.code}</strong>
-                <small>
-                  {asset.id === USDC.id
-                    ? "Circle USDC"
-                    : asset.issuer
-                      ? `${asset.issuer.slice(0, 7)}...${asset.issuer.slice(-7)}`
-                      : "Stellar Lumens"}
-                </small>
-              </span>
-              <span className={styles.balance}>
-                {balances.find((balance) => balance.id === asset.id)?.balance}
-                {selected.id === asset.id && <Check size={16} aria-hidden="true" />}
-              </span>
-            </button>
-            <details className={styles.issuerDetails}>
-              <summary>
-                {asset.issuer ? "Inspect issuer and trustline" : "Inspect asset identity"}
-              </summary>
-              <dl>
-                <div>
-                  <dt>Issuer</dt>
-                  <dd>{asset.issuer ?? "None. This is native XLM."}</dd>
-                </div>
-                <div>
-                  <dt>Issuer source</dt>
-                  <dd>{issuerVerificationLabel(asset)}</dd>
-                </div>
-                <div>
-                  <dt>Trustline</dt>
-                  <dd>{trustlineLabel(asset)}</dd>
-                </div>
-              </dl>
-            </details>
-          </div>
-        ))}
+        {assets.map((asset) => {
+          const walletAsset = balances.find((balance) => balance.id === asset.id);
+          const currentAsset = walletAsset ?? asset;
+          const hasLiabilities =
+            walletAsset?.sellingLiabilities &&
+            parseUnits(walletAsset.sellingLiabilities, 7) > 0n;
+          return (
+            <div className={styles.assetChoice} key={asset.id}>
+              <button
+                className={styles.option}
+                type="button"
+                onClick={() => {
+                  onSelect(currentAsset);
+                  onClose();
+                }}
+                aria-pressed={selected.id === asset.id}
+              >
+                <AssetIcon code={asset.code} />
+                <span>
+                  <strong>{asset.code}</strong>
+                  <small>
+                    {asset.id === USDC.id
+                      ? "Circle USDC"
+                      : asset.issuer
+                        ? `${asset.issuer.slice(0, 7)}...${asset.issuer.slice(-7)}`
+                        : "Stellar Lumens"}
+                  </small>
+                </span>
+                <span className={styles.balance}>
+                  {walletAsset
+                    ? hasLiabilities
+                      ? walletAsset.available ?? walletAsset.balance
+                      : walletAsset.balance
+                    : undefined}
+                  {selected.id === asset.id && <Check size={16} aria-hidden="true" />}
+                </span>
+              </button>
+              <details className={styles.issuerDetails}>
+                <summary>
+                  {asset.issuer ? "Inspect issuer and trustline" : "Inspect asset identity"}
+                </summary>
+                <dl>
+                  <div>
+                    <dt>Issuer</dt>
+                    <dd>{currentAsset.issuer ?? "None. This is native XLM."}</dd>
+                  </div>
+                  <div>
+                    <dt>Issuer source</dt>
+                    <dd>{issuerVerificationLabel(currentAsset)}</dd>
+                  </div>
+                  <div>
+                    <dt>Trustline</dt>
+                    <dd>{trustlineLabel(currentAsset)}</dd>
+                  </div>
+                  {walletAsset?.balance && (
+                    <div>
+                      <dt>Total balance</dt>
+                      <dd>{walletAsset.balance}</dd>
+                    </div>
+                  )}
+                  {hasLiabilities && walletAsset?.sellingLiabilities && (
+                    <div>
+                      <dt>Selling liabilities</dt>
+                      <dd>{walletAsset.sellingLiabilities}</dd>
+                    </div>
+                  )}
+                  {hasLiabilities && walletAsset?.available && (
+                    <div>
+                      <dt>Spendable balance</dt>
+                      <dd>{walletAsset.available}</dd>
+                    </div>
+                  )}
+                </dl>
+              </details>
+            </div>
+          );
+        })}
       </div>
       <p className={styles.note}>
         Token symbols can repeat. Verify the issuer before choosing an asset. Testnet tokens have no
