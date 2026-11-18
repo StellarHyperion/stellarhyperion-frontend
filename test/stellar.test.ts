@@ -8,6 +8,7 @@ import {
   reconcileSignatureReturn,
   validateRecipient,
   validateReviewMatch,
+  validateEnvelopeOperation,
   type LiveQuote,
   type ReviewSnapshot,
 } from "../src/contracts/stellar";
@@ -228,6 +229,53 @@ describe("Real Stellar transaction encoding", () => {
         saveCheckpoint(cp2);
       }).toThrow("Previous submissions remain pending");
       saveCheckpoint(null);
+    });
+
+    it("confirms displayed operation matches the exact envelope sent to the wallet", () => {
+      const recipient = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
+      const op = bridgeOperation(TESTNET.reader, quote, recipient);
+      const tx = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+        fee: "100",
+        networkPassphrase: TESTNET.networkPassphrase,
+      })
+        .addOperation(op)
+        .setTimeout(60)
+        .build();
+      expect(validateEnvelopeOperation(op, tx)).toBe(true);
+    });
+
+    it("detects when envelope operation does not match displayed operation", () => {
+      const recipient = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
+      const op1 = bridgeOperation(TESTNET.reader, quote, recipient);
+      const alteredQuote: LiveQuote = { ...quote, requestedAmount: 20000000n };
+      const op2 = bridgeOperation(TESTNET.reader, alteredQuote, recipient);
+      const tx = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+        fee: "100",
+        networkPassphrase: TESTNET.networkPassphrase,
+      })
+        .addOperation(op2)
+        .setTimeout(60)
+        .build();
+      expect(validateEnvelopeOperation(op1, tx)).toBe(false);
+    });
+
+    it("keeps amount units and fee categories distinct in review snapshots", () => {
+      const snapshot1: ReviewSnapshot = {
+        account: TESTNET.reader,
+        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        destination: "sepolia",
+        route: 1,
+        bridgeAmount: 10000009n,
+        stage: "bridge",
+        resourceFee: 45000n,
+        networkFee: 100n,
+      };
+      const snapshot2: ReviewSnapshot = {
+        ...snapshot1,
+        resourceFee: 50000n,
+      };
+      expect(validateReviewMatch(snapshot1, { ...snapshot1 })).toBe(true);
+      expect(validateReviewMatch(snapshot1, snapshot2)).toBe(false);
     });
   });
 });
