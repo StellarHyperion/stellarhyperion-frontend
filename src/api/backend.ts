@@ -58,6 +58,12 @@ export interface FormattedTransfer {
   readonly claim: {
     readonly id: string;
     readonly settled: boolean;
+    /** Claims without provenance remain visible but cannot be offered for settlement. */
+    readonly deployment?: {
+      readonly chain: string;
+      readonly router: string;
+      readonly revision: string;
+    } | null;
   } | null;
 }
 

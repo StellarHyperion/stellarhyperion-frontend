@@ -37,8 +37,16 @@ function formatStatusLabel(status: WalletAvailabilityStatus): string {
 }
 
 export function StellarWalletButton() {
-  const { isConnected, isConnecting, shortAddress, address, error, connect, disconnect } =
-    useStellarWallet();
+  const {
+    isConnected,
+    isConnecting,
+    shortAddress,
+    address,
+    error,
+    pendingSigningRequest,
+    connect,
+    disconnect,
+  } = useStellarWallet();
   const [menuOpen, setMenuOpen] = useState(false);
   const [localNotice, setLocalNotice] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -88,7 +96,9 @@ export function StellarWalletButton() {
     );
   }
 
-  const walletDisplayName = activeCapabilities?.name ?? walletId ?? "stellar";
+  const signingLabel = pendingSigningRequest
+    ? `${pendingSigningRequest.operation} signing for ${pendingSigningRequest.account.slice(0, 6)}...${pendingSigningRequest.account.slice(-6)}`
+    : null;
 
   return (
     <div className={styles.container} ref={containerRef}>
@@ -172,6 +182,11 @@ export function StellarWalletButton() {
             disconnect
           </button>
         </div>
+      )}
+      {signingLabel && (
+        <span role="status" className={styles.network}>
+          {signingLabel}
+        </span>
       )}
     </div>
   );
