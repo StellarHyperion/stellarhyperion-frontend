@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { destinationFor } from "../../../config/testnet";
 import { relayBudget } from "../../../lib/relay-budget";
+import { validateProviderFee } from "../../../lib/fee-schema";
 
 export async function GET(request: Request) {
   let domain: number;
@@ -34,14 +35,22 @@ export async function GET(request: Request) {
     );
     if (!fee || !Number.isSafeInteger(fee.forwardFee.med) || fee.forwardFee.med <= 0)
       throw new Error("No finalized forwarding estimate.");
-    return NextResponse.json(
+    const quote = validateProviderFee(
       {
         amount: String(relayBudget(BigInt(fee.forwardFee.med)) * 10n),
         estimatedAmount: String(BigInt(fee.forwardFee.med) * 10n),
         token: "USDC",
         decimals: 7,
+        destination: destinationFor(new URL(request.url).searchParams.get("destination") ?? "").key,
         finality: 2000,
       },
+      {
+        token: "USDC",
+        destination: destinationFor(new URL(request.url).searchParams.get("destination") ?? "").key,
+      },
+    );
+    return NextResponse.json(
+      quote,
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch {

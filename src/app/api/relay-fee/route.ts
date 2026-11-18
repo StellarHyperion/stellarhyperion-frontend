@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { relayBudget } from "../../../lib/relay-budget";
+import { validateProviderFee } from "../../../lib/fee-schema";
 // The fee API expects a method in the JSON body. Its /gmp/estimateITSFee path returns help text.
 export async function GET() {
   try {
@@ -18,13 +19,18 @@ export async function GET() {
     const value = (await response.text()).trim().replace(/^"(\d+)"$/, "$1");
     if (!response.ok || !/^\d+$/.test(value) || BigInt(value) <= 0n)
       throw new Error("Invalid gas estimate");
-    return NextResponse.json(
+    const quote = validateProviderFee(
       {
         amount: String(relayBudget(BigInt(value))),
         estimatedAmount: value,
         token: "XLM",
         decimals: 7,
+        destination: "ethereum-sepolia",
       },
+      { token: "XLM", destination: "ethereum-sepolia" },
+    );
+    return NextResponse.json(
+      quote,
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch {
