@@ -1,13 +1,58 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useStellarWallet } from "../../wallets/stellar";
+import { useStellarWallet, type WalletAvailabilityStatus } from "../../wallets/stellar";
 import styles from "./StellarWalletButton.module.css";
 
+function getStatusClass(status: WalletAvailabilityStatus): string {
+  switch (status) {
+    case "installed":
+      return styles.statusInstalled;
+    case "missing_extension":
+      return styles.statusMissing;
+    case "popup_required":
+      return styles.statusPopup;
+    case "available":
+      return styles.statusAvailable;
+    case "unsupported":
+    default:
+      return styles.statusUnsupported;
+  }
+}
+
+function formatStatusLabel(status: WalletAvailabilityStatus): string {
+  switch (status) {
+    case "installed":
+      return "installed";
+    case "missing_extension":
+      return "missing extension";
+    case "popup_required":
+      return "popup required";
+    case "available":
+      return "available";
+    case "unsupported":
+    default:
+      return "unsupported";
+  }
+}
+
 export function StellarWalletButton() {
-  const { isConnected, isConnecting, shortAddress, address, network, connect, disconnect } =
-    useStellarWallet();
+  const {
+    isConnected,
+    isConnecting,
+    shortAddress,
+    address,
+    network,
+    walletId,
+    activeCapabilities,
+    wallets,
+    error,
+    connect,
+    disconnect,
+  } = useStellarWallet();
+
   const [menuOpen, setMenuOpen] = useState(false);
+  const [localNotice, setLocalNotice] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,21 +69,83 @@ export function StellarWalletButton() {
     }
   }, [menuOpen]);
 
+  const handleWalletSelect = async (selectedId: string, status: WalletAvailabilityStatus) => {
+    setLocalNotice(null);
+    if (status === "missing_extension") {
+      setLocalNotice(
+        `Wallet "${selectedId}" extension not detected. Install the extension to connect.`,
+      );
+      return;
+    }
+    const res = await connect(selectedId);
+    if (res) {
+      setMenuOpen(false);
+    }
+  };
+
   if (!isConnected) {
     return (
-      <button
-        type="button"
-        className={styles.button}
-        onClick={() => {
-          void connect();
-        }}
-        disabled={isConnecting}
-      >
-        <span className={styles.dot} />
-        <span>{isConnecting ? "connecting..." : "connect stellar"}</span>
-      </button>
+      <div className={styles.container} ref={containerRef}>
+        <button
+          type="button"
+          className={styles.button}
+          onClick={() => {
+            setMenuOpen((prev) => !prev);
+          }}
+          disabled={isConnecting}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+        >
+          <span className={styles.dot} />
+          <span>{isConnecting ? "connecting..." : "connect stellar"}</span>
+        </button>
+
+        {menuOpen && (
+          <div className={styles.menu} role="menu">
+            <div className={styles.addressLabel}>select stellar wallet</div>
+
+            <div className={styles.walletList}>
+              {wallets.map((w) => (
+                <button
+                  key={w.walletId}
+                  type="button"
+                  className={styles.walletOption}
+                  onClick={() => {
+                    void handleWalletSelect(w.walletId, w.availability);
+                  }}
+                  disabled={isConnecting}
+                >
+                  <span>{w.name}</span>
+                  <span className={`${styles.statusPill} ${getStatusClass(w.availability)}`}>
+                    {formatStatusLabel(w.availability)}
+                  </span>
+                </button>
+              ))}
+
+              <button
+                type="button"
+                className={styles.walletOption}
+                onClick={() => {
+                  void connect();
+                  setMenuOpen(false);
+                }}
+                disabled={isConnecting}
+              >
+                <span>kit modal</span>
+                <span className={`${styles.statusPill} ${styles.statusAvailable}`}>any</span>
+              </button>
+            </div>
+
+            {(localNotice || error) && (
+              <div className={styles.errorBox}>{localNotice ?? error}</div>
+            )}
+          </div>
+        )}
+      </div>
     );
   }
+
+  const walletDisplayName = activeCapabilities?.name ?? walletId ?? "stellar";
 
   return (
     <div className={styles.container} ref={containerRef}>
@@ -53,6 +160,7 @@ export function StellarWalletButton() {
       >
         <span className={styles.dot} />
         <span>{shortAddress}</span>
+        <span className={styles.walletBadge}>[{walletDisplayName}]</span>
         <span className={styles.network}>({network.toLowerCase()})</span>
       </button>
 
@@ -62,6 +170,55 @@ export function StellarWalletButton() {
             <span className={styles.addressLabel}>stellar account</span>
             <span className={styles.fullAddress}>{address}</span>
           </div>
+
+          <div className={styles.diagnosticsSection}>
+            <span className={styles.diagTitle}>adapter diagnostics</span>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>wallet</span>
+              <span className={styles.diagVal}>{walletDisplayName}</span>
+            </div>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>availability</span>
+              <span className={styles.diagVal}>
+                {formatStatusLabel(activeCapabilities?.availability ?? "available")}
+              </span>
+            </div>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>tx signing</span>
+              <span className={styles.diagVal}>
+                {activeCapabilities?.signingLimitations.canSignTransaction
+                  ? "supported"
+                  : "unsupported"}
+              </span>
+            </div>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>auth entry</span>
+              <span className={styles.diagVal}>
+                {activeCapabilities?.signingLimitations.canSignAuthEntry
+                  ? "supported"
+                  : "unsupported"}
+              </span>
+            </div>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>account events</span>
+              <span className={styles.diagVal}>
+                {activeCapabilities?.supportedAccountQueries.canListenAccountChange
+                  ? "live sync"
+                  : "static"}
+              </span>
+            </div>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>active lane</span>
+              <span className={styles.diagVal}>{network.toLowerCase()}</span>
+            </div>
+          </div>
+
           <button
             type="button"
             className={styles.disconnectBtn}
