@@ -48,8 +48,7 @@ export function SourceAssetPicker({
     const timer = setTimeout(() => {
       void searchAssets(query, controller.signal)
         .then((assets) => {
-          if (!controller.signal.aborted)
-            setRemote({ key: query, version, assets, error: null });
+          if (!controller.signal.aborted) setRemote({ key: query, version, assets, error: null });
         })
         .catch((error: unknown) => {
           if (!controller.signal.aborted)
@@ -65,12 +64,11 @@ export function SourceAssetPicker({
   const defaults = [
     ...new Map([USDC, XLM, ...balances].map((asset) => [asset.id, asset])).values(),
   ];
-  const assets =
-    query.trim()
-      ? remote?.key === query && remote.version === queryVersion
-        ? remote.assets
-        : []
-      : defaults;
+  const assets = query.trim()
+    ? remote?.key === query && remote.version === queryVersion
+      ? remote.assets
+      : []
+    : defaults;
   return (
     <Dialog title="Choose a token" onClose={onClose}>
       <label className={styles.search}>

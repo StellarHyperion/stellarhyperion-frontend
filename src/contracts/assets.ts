@@ -309,7 +309,7 @@ export async function revalidateConversion(reviewed: Conversion): Promise<Conver
     current.path.length !== reviewed.path.length ||
     current.path.some((asset, index) => {
       const original = reviewed.path[index];
-      return !original || asset.code !== original.code || asset.issuer !== original.issuer;
+      return asset.code !== original?.code || asset.issuer !== original.issuer;
     })
   )
     throw new Error("The conversion path changed. Review the updated path before signing.");

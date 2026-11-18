@@ -32,9 +32,7 @@ try {
   await page.getByRole("button", { name: "Choose destination network and token" }).click();
   const destinationDialog = page.getByRole("dialog", { name: "Choose a destination" });
   for (const name of ["Ethereum Sepolia", "Base Sepolia", "Arc Testnet"])
-    await destinationDialog
-      .getByRole("button", { name: new RegExp(name, "i") })
-      .waitFor();
+    await destinationDialog.getByRole("button", { name: new RegExp(name, "i") }).waitFor();
   const itsOption = destinationDialog.getByRole("button", { name: /USDC \(ITS\)/ });
   assert.equal(await itsOption.isEnabled(), true);
   for (const name of ["Base Sepolia", "Arc Testnet"]) {
