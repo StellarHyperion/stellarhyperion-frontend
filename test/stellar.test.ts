@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Account, Contract, TransactionBuilder, rpc, scValToNative } from "@stellar/stellar-sdk";
+import {
+  Account,
+  Contract,
+  TransactionBuilder,
+  rpc,
+  scValToNative,
+  xdr,
+} from "@stellar/stellar-sdk";
 import {
   bridgeOperation,
   claimMatchesDeployment,
@@ -28,8 +35,37 @@ const quote: LiveQuote = {
 afterEach(() => vi.unstubAllGlobals());
 describe("Real Stellar transaction encoding", () => {
   it("only advertises batch settlement when the router exposes its batch entrypoint", () => {
-    expect(supportsBatchClaimSettlement([{ name: "settle_claim" }])).toBe(false);
-    expect(supportsBatchClaimSettlement([{ name: "settle_claims" }])).toBe(true);
+    const method = (
+      name: string,
+      elementType: xdr.ScSpecTypeDef = xdr.ScSpecTypeDef.scSpecTypeU64(),
+    ) =>
+      new xdr.ScSpecFunctionV0({
+        doc: "",
+        name,
+        outputs: [],
+        inputs: [
+          new xdr.ScSpecFunctionInputV0({
+            doc: "",
+            name: "sender",
+            type: xdr.ScSpecTypeDef.scSpecTypeAddress(),
+          }),
+          new xdr.ScSpecFunctionInputV0({
+            doc: "",
+            name: "ids",
+            type: xdr.ScSpecTypeDef.scSpecTypeVec(new xdr.ScSpecTypeVec({ elementType })),
+          }),
+        ],
+      });
+    expect(supportsBatchClaimSettlement([method("settle_claim")])).toBe(false);
+    expect(supportsBatchClaimSettlement([method("settle_claims")])).toBe(true);
+    expect(
+      supportsBatchClaimSettlement([method("settle_claims", xdr.ScSpecTypeDef.scSpecTypeU32())]),
+    ).toBe(false);
+    expect(
+      supportsBatchClaimSettlement([
+        new xdr.ScSpecFunctionV0({ doc: "", name: "settle_claims", inputs: [], outputs: [] }),
+      ]),
+    ).toBe(false);
   });
 
   it("encodes every exact claim id in the supported batch entrypoint", () => {

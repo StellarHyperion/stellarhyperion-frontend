@@ -29,6 +29,7 @@ import {
   type DestinationKey,
 } from "../config/testnet";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
+import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
@@ -97,8 +98,17 @@ export function claimMatchesDeployment(
 
 export const MAX_BATCH_CLAIMS = 20;
 
-export function supportsBatchClaimSettlement(methods: readonly { name: string }[]): boolean {
-  return methods.some((method) => method.name === "settle_claims");
+export function supportsBatchClaimSettlement(methods: readonly xdr.ScSpecFunctionV0[]): boolean {
+  return methods.some((method) => {
+    const [sender, ids] = method.inputs;
+    return (
+      method.name.toString() === "settle_claims" &&
+      method.inputs.length === 2 &&
+      sender?.type.type === "scSpecTypeAddress" &&
+      ids?.type.type === "scSpecTypeVec" &&
+      ids.type.value.elementType.type === "scSpecTypeU64"
+    );
+  });
 }
 
 function server() {
@@ -702,12 +712,23 @@ export async function getClaims(ids: readonly bigint[]): Promise<PendingClaim[]>
 }
 
 export async function batchClaimSettlementSupport(): Promise<boolean> {
-  return supportsBatchClaimSettlement(await contractMethods(TESTNET.router));
+  await verifyRouterDeployment();
+  const client = await ContractClient.from({
+    contractId: TESTNET.router,
+    rpcUrl: TESTNET.rpcUrl,
+    networkPassphrase: TESTNET.networkPassphrase,
+  });
+  return supportsBatchClaimSettlement(client.spec.funcs());
 }
 
 export function settleClaimsOperation(sender: string, ids: readonly bigint[]) {
   if (ids.length < 2 || ids.length > MAX_BATCH_CLAIMS)
     throw new Error(`Batch settlement requires two to ${MAX_BATCH_CLAIMS} claims.`);
+  if (
+    new Set(ids.map(String)).size !== ids.length ||
+    ids.some((id) => id <= 0n || id > (1n << 64n) - 1n)
+  )
+    throw new Error("Use distinct valid claim numbers.");
   return new Contract(TESTNET.router).call(
     "settle_claims",
     new Address(sender).toScVal(),
@@ -759,6 +780,23 @@ export async function submitSettleClaims(
     );
   if (!(await batchClaimSettlementSupport()))
     throw new Error("This router supports single-claim settlement only.");
+  const current = await getClaims(claims.map((claim) => claim.id));
+  if (
+    current.some((claim, index) => {
+      const reviewed = claims[index];
+      return (
+        !reviewed ||
+        claim.settled ||
+        claim.recipient !== reviewed.recipient ||
+        claim.token !== reviewed.token ||
+        claim.amount !== reviewed.amount ||
+        claim.deployment.router !== reviewed.deployment.router ||
+        claim.deployment.chain !== reviewed.deployment.chain ||
+        claim.deployment.wasmHash !== reviewed.deployment.wasmHash
+      );
+    })
+  )
+    throw new Error("The claims changed. Review them again before signing.");
   return submitOperation(
     sender,
     settleClaimsOperation(
