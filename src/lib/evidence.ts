@@ -40,9 +40,7 @@ export function getEvidenceTimeline(transfer: FormattedTransfer): readonly Evide
       label: "Source transaction",
       status: sourceHash ? "confirmed" : "unknown",
       detail: sourceHash ? "Committed on the origin chain." : "Source confirmation is unknown.",
-      ...(sourceHash
-        ? { href: getExplorerUrl(transfer.origin.chain, "tx", sourceHash) }
-        : {}),
+      ...(sourceHash ? { href: getExplorerUrl(transfer.origin.chain, "tx", sourceHash) } : {}),
       observedAt: transfer.origin.observedAt,
     },
     {

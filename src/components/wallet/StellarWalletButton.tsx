@@ -5,8 +5,16 @@ import { useStellarWallet } from "../../wallets/stellar";
 import styles from "./StellarWalletButton.module.css";
 
 export function StellarWalletButton() {
-  const { isConnected, isConnecting, shortAddress, address, error, connect, disconnect } =
-    useStellarWallet();
+  const {
+    isConnected,
+    isConnecting,
+    shortAddress,
+    address,
+    error,
+    pendingSigningRequest,
+    connect,
+    disconnect,
+  } = useStellarWallet();
   const [menuOpen, setMenuOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -41,6 +49,10 @@ export function StellarWalletButton() {
     );
   }
 
+  const signingLabel = pendingSigningRequest
+    ? `${pendingSigningRequest.operation} signing for ${pendingSigningRequest.account.slice(0, 6)}...${pendingSigningRequest.account.slice(-6)}`
+    : null;
+
   return (
     <div className={styles.container} ref={containerRef}>
       <button
@@ -74,6 +86,11 @@ export function StellarWalletButton() {
             disconnect
           </button>
         </div>
+      )}
+      {signingLabel && (
+        <span role="status" className={styles.network}>
+          {signingLabel}
+        </span>
       )}
     </div>
   );
