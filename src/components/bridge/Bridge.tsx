@@ -778,8 +778,7 @@ export function Bridge() {
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>
-            {walletAsset?.sellingLiabilities &&
-            parseUnits(walletAsset.sellingLiabilities, 7) > 0n
+            {walletAsset?.sellingLiabilities && parseUnits(walletAsset.sellingLiabilities, 7) > 0n
               ? `Your spendable ${source.code} balance (${spendableBalance(walletAsset)} ${source.code}) is lower than this amount due to selling liabilities.`
               : `Your ${source.code} balance is lower than this amount.`}
           </p>
