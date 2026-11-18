@@ -3,6 +3,27 @@
   font-size: var(--type-mono-sm-size);
 }
 
+.indexerStatus {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-panel);
+}
+
+.indexerStatus h2 {
+  margin: 0;
+  font-family: var(--face-display);
+  font-size: 1rem;
+}
+
+.indexerStatus p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--type-mono-sm-size);
+}
+
 .searchInput {
   width: 100%;
   padding: var(--space-2) var(--space-3);
