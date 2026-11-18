@@ -48,8 +48,20 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [authorizing, setAuthorizing] = useState<StellarWalletId | null>(null);
+  const [isSigning, setSigning] = useState(false);
   const pending = useRef<((address: string | null) => void) | null>(null);
   const attempt = useRef(0);
+  // Outstanding signature requests, keyed by attempt id. A request is removed when it settles
+  // (either way) and can also be force-settled from here on disconnect or explicit cancellation,
+  // so a vanished wallet extension/popup can never leave this locked forever.
+  const signCancelers = useRef(new Map<number, (reason: Error) => void>());
+  const signAttempt = useRef(0);
+
+  const abandonSignatures = useCallback((reason: Error) => {
+    for (const cancel of signCancelers.current.values()) cancel(reason);
+    signCancelers.current.clear();
+    setSigning(false);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -118,18 +130,48 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(() => {
     closePicker();
+    // A pending approval must never be left to resolve against a wallet we've already walked
+    // away from: settle it to an explicit failure instead of letting it hang or complete silently.
+    abandonSignatures(
+      new Error("Wallet disconnected before the signature completed. Reconnect and try again."),
+    );
     setAddress(null);
     setWalletId(null);
     saveWallet(null);
     return Promise.resolve();
-  }, [closePicker]);
+  }, [closePicker, abandonSignatures]);
+
+  const cancelSignature = useCallback(() => {
+    abandonSignatures(new Error("Signature cancelled. Try again when you are ready."));
+  }, [abandonSignatures]);
 
   const signTransaction = useCallback(
     async (transaction: string, opts?: { networkPassphrase?: string }) => {
       if (!address || !walletId) throw new Error("Connect your Stellar wallet first.");
       if (opts?.networkPassphrase && opts.networkPassphrase !== TESTNET.networkPassphrase)
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
-      return walletSign(walletId, transaction, address);
+      // Only one outstanding approval at a time: a wallet extension popup generally can't field a
+      // second concurrent request, and serializing them keeps "which request failed" unambiguous.
+      if (signCancelers.current.size > 0)
+        throw new Error("Finish or cancel the signature already in progress.");
+      const signingWallet = walletId;
+      const signingAddress = address;
+      const id = ++signAttempt.current;
+      setSigning(true);
+      const walletPromise = walletSign(signingWallet, transaction, signingAddress);
+      const cancellation = new Promise<never>((_resolve, reject) => {
+        signCancelers.current.set(id, reject);
+      });
+      try {
+        return await Promise.race([walletPromise, cancellation]);
+      } finally {
+        signCancelers.current.delete(id);
+        if (signCancelers.current.size === 0) setSigning(false);
+        // If the cancellation won the race, the wallet call may still settle later. Observe it so
+        // it never surfaces as an unhandled rejection; its outcome is otherwise discarded, so a
+        // late response is never resubmitted or treated as success.
+        walletPromise.catch(() => undefined);
+      }
     },
     [address, walletId],
   );
@@ -140,12 +182,23 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       shortAddress: address ? `${address.slice(0, 6)}...${address.slice(-6)}` : null,
       isConnected: address !== null,
       isConnecting,
+      isSigning,
       error,
       connect,
       disconnect,
       signTransaction,
+      cancelSignature,
     }),
-    [address, isConnecting, error, connect, disconnect, signTransaction],
+    [
+      address,
+      isConnecting,
+      isSigning,
+      error,
+      connect,
+      disconnect,
+      signTransaction,
+      cancelSignature,
+    ],
   );
   return (
     <Context.Provider value={value}>

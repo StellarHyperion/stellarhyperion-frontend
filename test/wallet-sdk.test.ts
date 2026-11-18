@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Account, Asset, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { TESTNET } from "../src/config/testnet";
-import { walletAddress, walletSign } from "../src/wallets/stellar/sdk";
+import { WALLET_SIGN_TIMEOUT_MS, walletAddress, walletSign } from "../src/wallets/stellar/sdk";
+import { verifyWalletSignature } from "../src/wallets/stellar/signature";
 
 const api = vi.hoisted(() => ({
   freighter: {
@@ -144,6 +145,69 @@ describe("Direct Stellar wallet adapters", () => {
     api.lobstr.signTransaction.mockResolvedValue(original);
     await expect(walletSign("lobstr", original, signer.publicKey())).rejects.toThrow(
       "did not sign",
+    );
+  });
+  it("rejects an empty or missing signature instead of assuming success", () => {
+    const { original } = envelope();
+    expect(() => verifyWalletSignature(original, "", signer.publicKey())).toThrow(
+      "did not return a signed transaction",
+    );
+  });
+});
+
+describe("An outstanding approval resolves to an explicit failure instead of hanging forever", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("gives up on a Freighter signature that never responds (extension removed or popup closed)", async () => {
+    vi.useFakeTimers();
+    api.freighter.signTransaction.mockReturnValue(new Promise(() => undefined));
+    const pending = walletSign("freighter", envelope().original, signer.publicKey());
+    const assertion = expect(pending).rejects.toThrow(
+      "Freighter closed or did not respond to the signature request",
+    );
+    await vi.advanceTimersByTimeAsync(WALLET_SIGN_TIMEOUT_MS);
+    await assertion;
+    expect(api.freighter.getNetworkDetails).toHaveBeenCalled();
+  });
+
+  it("never treats a signature that arrives after giving up as a success", async () => {
+    vi.useFakeTimers();
+    const late: { resolve: ((value: { signedTxXdr: string }) => void) | null } = {
+      resolve: null,
+    };
+    api.freighter.signTransaction.mockReturnValue(
+      new Promise<{ signedTxXdr: string }>((resolve) => {
+        late.resolve = resolve;
+      }),
+    );
+    const pending = walletSign("freighter", envelope().original, signer.publicKey());
+    const assertion = expect(pending).rejects.toThrow("did not respond to the signature request");
+    await vi.advanceTimersByTimeAsync(WALLET_SIGN_TIMEOUT_MS);
+    await assertion;
+    // The wallet eventually answers long after Hyperion gave up on it. The stale answer must be
+    // discarded, never resubmitted or accepted as a late success.
+    late.resolve?.({ signedTxXdr: envelope().signed });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it("still closes xBull's bridge connections when its popup closes without responding", async () => {
+    vi.useFakeTimers();
+    api.xbull.sign.mockReturnValue(new Promise(() => undefined));
+    const pending = walletSign("xbull", envelope().original, signer.publicKey());
+    const assertion = expect(pending).rejects.toThrow(
+      "xBull closed or did not respond to the signature request",
+    );
+    await vi.advanceTimersByTimeAsync(WALLET_SIGN_TIMEOUT_MS);
+    await assertion;
+    expect(api.xbull.closeConnections).toHaveBeenCalledOnce();
+  });
+
+  it("turns a lost extension connection into an actionable message instead of a raw runtime error", async () => {
+    api.freighter.signTransaction.mockRejectedValue(new Error("Extension context invalidated."));
+    await expect(walletSign("freighter", envelope().original, signer.publicKey())).rejects.toThrow(
+      "The wallet extension was removed or reloaded. Reopen it and try again.",
     );
   });
 });
