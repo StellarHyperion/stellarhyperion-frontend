@@ -11,6 +11,7 @@ import {
 import { toHex } from "@hyperion/protocol";
 import { submitSettleClaim } from "../src/contracts/stellar";
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
+import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
 
 // Deterministic test-only signer; this test never connects to a network.
 const key = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(7));
@@ -62,6 +63,32 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("distinguishes durable recovery storage from a blocked preference store", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+      removeItem: (key: string) => void values.delete(key),
+    };
+    expect(inspectCheckpointStorage(storage)).toMatchObject({
+      available: true,
+      persistent: true,
+      kind: "transaction-recovery",
+      reason: null,
+    });
+    const blocked = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("quota");
+      },
+      removeItem: () => undefined,
+    };
+    expect(inspectCheckpointStorage(blocked)).toMatchObject({
+      available: false,
+      persistent: false,
+      kind: "transaction-recovery",
+    });
+  });
   it("never asks the wallet or submits when simulation fails", async () => {
     const { simulation, send } = setup();
     simulation.mockResolvedValueOnce({

@@ -51,6 +51,7 @@ import {
 } from "../../contracts/assets";
 import {
   saveCheckpoint,
+  assertCheckpointStorage,
   useTransferCheckpoint,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
@@ -190,6 +191,12 @@ function PendingTransferCard({
   };
   const continueBridge = async () => {
     if (!review || !sameAccount || checking) return;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setChecking(true);
     setError(null);
     try {
@@ -453,6 +460,12 @@ export function Bridge() {
       return;
     }
     const reviewedQuote = reviewed.quote;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setReviewing(false);
     setBusy(true);
     setError(null);

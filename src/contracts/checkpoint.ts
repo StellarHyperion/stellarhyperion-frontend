@@ -14,6 +14,43 @@ export interface TransferCheckpoint {
 }
 const key = "hyperion.testnet.pending-transfer";
 const event = "hyperion:pending-transfer";
+const probeKey = `${key}.probe`;
+export interface CheckpointStorageDiagnostics {
+  readonly available: boolean;
+  readonly persistent: boolean;
+  readonly kind: "transaction-recovery";
+  readonly reason: string | null;
+}
+
+export function inspectCheckpointStorage(
+  storage: Pick<Storage, "getItem" | "setItem" | "removeItem">,
+): CheckpointStorageDiagnostics {
+  try {
+    storage.setItem(probeKey, "ok");
+    const persistent = storage.getItem(probeKey) === "ok";
+    storage.removeItem(probeKey);
+    return {
+      available: persistent,
+      persistent,
+      kind: "transaction-recovery",
+      reason: persistent ? null : "The browser did not retain the recovery probe.",
+    };
+  } catch {
+    return {
+      available: false,
+      persistent: false,
+      kind: "transaction-recovery",
+      reason: "Browser recovery storage is blocked or full.",
+    };
+  }
+}
+
+export function assertCheckpointStorage(): void {
+  if (typeof window === "undefined") throw new Error("Transaction recovery storage is unavailable.");
+  const diagnostics = inspectCheckpointStorage(window.localStorage);
+  if (!diagnostics.available)
+    throw new Error(`${diagnostics.reason} No transaction will be signed or broadcast.`);
+}
 function snapshot(): string | null {
   try {
     return localStorage.getItem(key);
