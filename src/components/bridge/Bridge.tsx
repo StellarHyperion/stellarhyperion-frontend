@@ -870,7 +870,8 @@ export function ClaimRecovery() {
           </button>
           {error && (
             <p role="alert" className={styles.error}>
-              {error}
+              {error} Claim settlement remains unavailable until the verified router deployment
+              matches.
             </p>
           )}
           {claim && (
@@ -883,6 +884,11 @@ export function ClaimRecovery() {
                   : `${claim.amount} base units of ${claim.token}`}
               </p>
               <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
+              <p className={styles.address}>
+                Verified router: {claim.deployment.router} (revision {claim.deployment.commit},
+                deployed at ledger {claim.deployment.deployedLedger})
+              </p>
+              <p className={styles.address}>Router WASM: {claim.deployment.wasmHash}</p>
               {!claim.settled && (
                 <button
                   type="button"
