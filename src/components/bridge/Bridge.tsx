@@ -51,6 +51,7 @@ import {
   type SourceAsset,
   type TradeQuote,
 } from "../../contracts/assets";
+import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import {
   saveCheckpoint,
   useTransferCheckpoint,
@@ -378,6 +379,28 @@ export function Bridge() {
       : sourceBalance;
   const spendableUnits =
     spendableStr !== undefined ? parseUnits(spendableStr, 7) : undefined;
+  const xlmAsset = balances.find((asset) => asset.id === "native");
+  const xlmSpendable =
+    xlmAsset?.available !== undefined ? parseUnits(xlmAsset.available, 7) : 0n;
+  // Conservative maximum: for USDC source requires a live quote with relay pricing;
+  // for non-USDC source the spendable asset balance is the binding spending cap.
+  const isUsdcSource = source.id === USDC.id;
+  const trustlineOk =
+    activeSource.trustline === "present" || activeSource.trustline === "native";
+  const conservativeMax: bigint | null = isUsdcSource
+    ? quote !== null && lane !== null
+      ? planMaxUsdcAmount({
+          route,
+          usdcSpendable: spendableUnits ?? 0n,
+          xlmSpendable,
+          flowAvailable: quote.bridge.flowAvailable,
+          estimatedRelayGas: quote.bridge.estimatedRelayGas ?? quote.bridge.relayGas,
+        })
+      : null
+    : planMaxSourceAmount({
+        spendableSourceUnits: spendableUnits ?? 0n,
+        trustlineOk,
+      });
   const locked = busy || checkpoint !== null;
   let inputError: string | null = null;
   let valid = false;
@@ -538,6 +561,13 @@ export function Bridge() {
   };
   const insufficient =
     quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
+  // Exceeds route liquidity even when the wallet balance is sufficient.
+  const exceedsFlow =
+    !insufficient &&
+    quote !== null &&
+    conservativeMax !== null &&
+    quote.sourceAmount > conservativeMax &&
+    isUsdcSource;
   return (
     <>
       {checkpoint && (
@@ -590,12 +620,15 @@ export function Bridge() {
                 aria-label="Use spendable balance"
                 disabled={
                   locked ||
+                  conservativeMax === null ||
                   activeSource.trustline === "frozen" ||
                   activeSource.trustline === "unauthorized"
                 }
                 onClick={() => {
-                  setAmount(suggestSourceSpend(activeSource));
-                  setError(null);
+                  if (conservativeMax !== null) {
+                    setAmount(formatUnits(conservativeMax, 7));
+                    setError(null);
+                  }
                 }}
               >
                 Max
@@ -789,6 +822,11 @@ export function Bridge() {
             parseUnits(walletAsset.sellingLiabilities, 7) > 0n
               ? `Your spendable ${source.code} balance (${spendableBalance(walletAsset)} ${source.code}) is lower than this amount due to selling liabilities.`
               : `Your ${source.code} balance is lower than this amount.`}
+          </p>
+        )}
+        {exceedsFlow && conservativeMax !== null && (
+          <p role="alert" className={styles.error}>
+            {`This amount exceeds the available route limit. Maximum bridgeable: ${formatUnits(conservativeMax, 7)} USDC.`}
           </p>
         )}
         {busy && (
