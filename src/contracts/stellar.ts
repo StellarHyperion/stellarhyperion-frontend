@@ -71,6 +71,12 @@ export interface PendingClaim {
   settled: boolean;
 }
 
+export const MAX_BATCH_CLAIMS = 20;
+
+export function supportsBatchClaimSettlement(methods: readonly { name: string }[]): boolean {
+  return methods.some((method) => method.name === "settle_claims");
+}
+
 function server() {
   return new rpc.Server(TESTNET.rpcUrl, { timeout: 15_000 });
 }
@@ -615,6 +621,29 @@ export async function getClaim(id: bigint): Promise<PendingClaim> {
   };
 }
 
+export async function getClaims(ids: readonly bigint[]): Promise<PendingClaim[]> {
+  if (ids.length === 0) throw new Error("Enter at least one claim number.");
+  if (ids.length > MAX_BATCH_CLAIMS)
+    throw new Error(`Review at most ${MAX_BATCH_CLAIMS} claims at a time.`);
+  const unique = new Set(ids.map(String));
+  if (unique.size !== ids.length) throw new Error("Each claim number can appear only once.");
+  return Promise.all(ids.map((id) => getClaim(id)));
+}
+
+export async function batchClaimSettlementSupport(): Promise<boolean> {
+  return supportsBatchClaimSettlement(await contractMethods(TESTNET.router));
+}
+
+export function settleClaimsOperation(sender: string, ids: readonly bigint[]) {
+  if (ids.length < 2 || ids.length > MAX_BATCH_CLAIMS)
+    throw new Error(`Batch settlement requires two to ${MAX_BATCH_CLAIMS} claims.`);
+  return new Contract(TESTNET.router).call(
+    "settle_claims",
+    new Address(sender).toScVal(),
+    nativeToScVal([...ids], { type: "u64" }),
+  );
+}
+
 export async function submitSettleClaim(
   sender: string,
   id: bigint,
@@ -628,6 +657,28 @@ export async function submitSettleClaim(
       "settle_claim",
       new Address(sender).toScVal(),
       nativeToScVal(id, { type: "u64" }),
+    ),
+    sign,
+  );
+}
+
+export async function submitSettleClaims(
+  sender: string,
+  claims: readonly PendingClaim[],
+  sign: WalletSigner,
+): Promise<TransactionResult> {
+  if (claims.length < 2) throw new Error("Batch settlement requires at least two claims.");
+  if (claims.length > MAX_BATCH_CLAIMS)
+    throw new Error(`Review at most ${MAX_BATCH_CLAIMS} claims at a time.`);
+  if (claims.some((claim) => claim.settled))
+    throw new Error("Remove already settled claims before signing the batch.");
+  if (!(await batchClaimSettlementSupport()))
+    throw new Error("This router supports single-claim settlement only.");
+  return submitOperation(
+    sender,
+    settleClaimsOperation(
+      sender,
+      claims.map((claim) => claim.id),
     ),
     sign,
   );

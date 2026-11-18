@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
+import { fetchClaims } from "../../api";
 import {
   TESTNET,
   destinationFor,
@@ -23,12 +24,14 @@ import {
 } from "../../config/testnet";
 import {
   errorMessage,
-  getClaim,
+  batchClaimSettlementSupport,
+  getClaims,
   quoteTransfer,
   readLane,
   readTransaction,
   submitBridgeOut,
   submitSettleClaim,
+  submitSettleClaims,
   validateRecipient,
   type LaneState,
   type LiveQuote,
@@ -804,17 +807,58 @@ export function Bridge() {
 export function ClaimRecovery() {
   const wallet = useStellarWallet();
   const [id, setId] = useState("");
-  const [claim, setClaim] = useState<PendingClaim | null>(null);
+  const [claims, setClaims] = useState<PendingClaim[]>([]);
+  const [batchSupported, setBatchSupported] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<TransactionResult | null>(null);
   const lookup = async () => {
     setBusy(true);
     setError(null);
-    setClaim(null);
+    setClaims([]);
     setResult(null);
     try {
-      setClaim(await getClaim(BigInt(id)));
+      const ids = id
+        .split(/[\s,]+/)
+        .filter(Boolean)
+        .map((value) => BigInt(value));
+      setClaims(await getClaims(ids));
+      setBatchSupported(ids.length > 1 ? await batchClaimSettlementSupport() : null);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const loadOpenClaims = async () => {
+    setBusy(true);
+    setError(null);
+    setClaims([]);
+    setResult(null);
+    try {
+      const response = await fetchClaims({
+        chain: "stellar-testnet",
+        settled: "false",
+        limit: "20",
+      });
+      const ids = response.claims.map((claim) => BigInt(claim.claimId));
+      setId(ids.join(", "));
+      setClaims(await getClaims(ids));
+      setBatchSupported(ids.length > 1 ? await batchClaimSettlementSupport() : null);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const settleOne = async (claim: PendingClaim) => {
+    if (!wallet.address || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const transaction = await submitSettleClaim(wallet.address, claim.id, wallet.signTransaction);
+      setResult(transaction);
+      if (transaction.status === "confirmed") setClaims(await getClaims([claim.id]));
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -822,15 +866,23 @@ export function ClaimRecovery() {
     }
   };
   const settle = async () => {
-    if (!claim || !wallet.address || busy) return;
+    if (claims.length < 2 || !wallet.address || busy) return;
     setBusy(true);
     setError(null);
     try {
-      const transaction = await submitSettleClaim(wallet.address, claim.id, wallet.signTransaction);
+      const transaction = await submitSettleClaims(wallet.address, claims, wallet.signTransaction);
       setResult(transaction);
-      if (transaction.status === "confirmed") setClaim(await getClaim(claim.id));
+      if (transaction.status === "confirmed")
+        setClaims(await getClaims(claims.map((claim) => claim.id)));
     } catch (cause) {
-      setError(errorMessage(cause));
+      try {
+        setClaims(await getClaims(claims.map((claim) => claim.id)));
+      } catch {
+        // Keep the original contract error when the follow-up read is unavailable.
+      }
+      setError(
+        `Batch settlement was rejected by the router: ${errorMessage(cause)} Review each claim before trying again.`,
+      );
     } finally {
       setBusy(false);
     }
@@ -851,48 +903,79 @@ export function ClaimRecovery() {
         </summary>
         <div className={styles.recoveryBody}>
           <p>
-            Look up a claim on the deployed Stellar router. Settlement always pays its recorded
-            recipient.
+            Review parked claims from the indexer or enter claim numbers. Every recipient and amount
+            below is re-read from the deployed Stellar router before signing.
           </p>
+          <button type="button" disabled={busy} onClick={() => void loadOpenClaims()}>
+            {busy ? "Checking..." : "Load parked claims"}
+          </button>
           <label htmlFor="claim-id">Claim number</label>
           <input
             id="claim-id"
             inputMode="numeric"
+            placeholder="1, 2, 3"
             value={id}
             onChange={(event) => {
               setId(event.target.value);
-              setClaim(null);
+              setClaims([]);
+              setBatchSupported(null);
             }}
             disabled={busy}
           />
-          <button type="button" disabled={!/^\d+$/.test(id) || busy} onClick={() => void lookup()}>
-            {busy ? "Checking..." : "Look up claim"}
+          <button
+            type="button"
+            disabled={!/^\d+(?:[\s,]+\d+)*$/.test(id.trim()) || busy}
+            onClick={() => void lookup()}
+          >
+            {busy ? "Checking..." : "Review claims"}
           </button>
           {error && (
             <p role="alert" className={styles.error}>
               {error}
             </p>
           )}
-          {claim && (
+          {claims.length > 0 && (
             <>
-              <p className={styles.address}>Recipient: {claim.recipient}</p>
-              <p>
-                Amount:{" "}
-                {claim.token === TESTNET.token
-                  ? `${formatUnits(claim.amount, 7)} USDC`
-                  : `${claim.amount} base units of ${claim.token}`}
-              </p>
-              <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
-              {!claim.settled && (
+              <ul>
+                {claims.map((claim) => (
+                  <li key={claim.id.toString()}>
+                    <p className={styles.address}>
+                      Claim {claim.id.toString()} recipient: {claim.recipient}
+                    </p>
+                    <p>
+                      Amount:{" "}
+                      {claim.token === TESTNET.token
+                        ? `${formatUnits(claim.amount, 7)} USDC`
+                        : `${claim.amount} base units of ${claim.token}`}
+                    </p>
+                    <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
+                    {(claims.length === 1 || batchSupported === false) && !claim.settled && (
+                      <button
+                        type="button"
+                        disabled={!wallet.address || busy}
+                        onClick={() => void settleOne(claim)}
+                      >
+                        Sign claim settlement
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {claims.length > 1 && batchSupported === false && (
+                <p>
+                  Batch settlement is not supported by this router. Settle each claim separately.
+                </p>
+              )}
+              {claims.length > 1 && batchSupported === true && (
                 <button
                   type="button"
                   disabled={!wallet.address || busy || result?.status === "pending"}
                   onClick={() => void settle()}
                 >
-                  Sign claim settlement
+                  Sign batch settlement
                 </button>
               )}
-              {!wallet.address && !claim.settled && (
+              {!wallet.address && claims.some((claim) => !claim.settled) && (
                 <p>Connect your Stellar wallet to pay the settlement network fee.</p>
               )}
             </>

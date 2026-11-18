@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Account, Contract, TransactionBuilder, scValToNative } from "@stellar/stellar-sdk";
 import {
   bridgeOperation,
+  settleClaimsOperation,
+  supportsBatchClaimSettlement,
   parseSendAmount,
   readTransaction,
   validateRecipient,
@@ -23,6 +25,29 @@ const quote: LiveQuote = {
 };
 afterEach(() => vi.unstubAllGlobals());
 describe("Real Stellar transaction encoding", () => {
+  it("only advertises batch settlement when the router exposes its batch entrypoint", () => {
+    expect(supportsBatchClaimSettlement([{ name: "settle_claim" }])).toBe(false);
+    expect(supportsBatchClaimSettlement([{ name: "settle_claims" }])).toBe(true);
+  });
+
+  it("encodes every exact claim id in the supported batch entrypoint", () => {
+    const operation = settleClaimsOperation(TESTNET.reader, [1n, 9007199254740993n]);
+    const tx = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(60)
+      .build();
+    const op = tx.operations[0];
+    if (op?.type !== "invokeHostFunction" || op.func.type !== "hostFunctionTypeInvokeContract")
+      throw new Error("Wrong batch settlement operation.");
+    expect(op.func.invokeContract.functionName.toString()).toBe("settle_claims");
+    const ids = op.func.invokeContract.args[1];
+    if (!ids) throw new Error("Missing claim ids.");
+    expect(scValToNative(ids)).toEqual([1n, 9007199254740993n]);
+  });
+
   it("keeps values beyond Number precision exact and rejects invalid amounts", () => {
     expect(parseSendAmount("900719925.4740993")).toBe(9007199254740993n);
     for (const value of ["", "0", "-1", "1.12345678", "1e3", "NaN", "1,000"])

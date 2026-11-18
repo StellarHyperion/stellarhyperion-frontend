@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchTransferByTx, fetchTransfers } from "../src/api/backend";
+import { fetchClaims, fetchTransferByTx, fetchTransfers } from "../src/api/backend";
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -33,6 +33,18 @@ describe("Real indexer client", () => {
     expect(await fetchTransfers({ search: "hash & recipient", offset: "40" })).toEqual(payload);
     expect(fetcher.mock.calls[0]?.[0]).toBe(
       "https://indexer.example/v1/transfers?search=hash+%26+recipient&offset=40",
+    );
+  });
+  it("lists claims with explicit chain and settlement filters", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const payload = { claims: [], count: 0, limit: 20, offset: 0 };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)));
+    vi.stubGlobal("fetch", fetcher);
+    expect(await fetchClaims({ chain: "stellar-testnet", settled: "false", limit: "20" })).toEqual(
+      payload,
+    );
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      "https://indexer.example/v1/claims?chain=stellar-testnet&settled=false&limit=20",
     );
   });
 });
