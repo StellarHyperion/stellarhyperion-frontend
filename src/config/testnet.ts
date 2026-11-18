@@ -16,6 +16,14 @@ export const TESTNET = {
   networkPassphrase: "Test SDF Network ; September 2015",
   horizonUrl: "https://horizon-testnet.stellar.org",
 } as const;
+export const STELLAR_DEPLOYMENT = {
+  chain: "stellar-testnet",
+  router: stellar.router,
+  networkPassphrase: stellar.networkPassphrase,
+  wasmHash: stellar.wasmHashes.router,
+  commit: stellar.commit,
+  deployedLedger: stellar.deployedAt.ledger,
+} as const;
 export type BridgeRoute = 0 | 1;
 export const CIRCLE_STELLAR = {
   messenger: "CDNG7HXAPBWICI2E3AUBP3YZWZELJLYSB6F5CC7WLDTLTHVM74SLRTHP",

@@ -1,21 +1,34 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Column } from "../../components/chrome";
 import { fetchTransfers, type FormattedTransfer } from "../../api";
 import { TransferList } from "../../components/transfers";
 import { errorMessage } from "../../contracts";
+import { ActivityRequestGuard } from "../../lib/activity-request";
 import { useStellarWallet } from "../../wallets";
 import styles from "./page.module.css";
 export default function TransfersPage() {
   const { address } = useStellarWallet();
+  return <TransfersPageContent key={address ?? "public"} address={address} />;
+}
+function TransfersPageContent({ address }: { address?: string | null }) {
   const [transfers, setTransfers] = useState<readonly FormattedTransfer[]>([]);
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
-    let active = true;
+    const guard = requestGuard.current;
+    const identityChanged = guard.setIdentity(address ?? null);
+    if (identityChanged) {
+      setTransfers([]);
+      setError(null);
+      setLoading(true);
+    }
+    guard.invalidate();
     const load = async () => {
+      const token = guard.begin();
       try {
         const response = await fetchTransfers({
           ...(address ? { sender: address } : {}),
@@ -23,17 +36,16 @@ export default function TransfersPage() {
           limit: "20",
           offset: String(offset),
         });
-        if (active) {
+        if (guard.isCurrent(token)) {
           setTransfers(response.transfers);
           setError(null);
         }
       } catch (cause) {
-        if (active) {
+        if (guard.isCurrent(token)) {
           setError(errorMessage(cause));
-          setTransfers([]);
         }
       } finally {
-        if (active) setLoading(false);
+        if (guard.isCurrent(token)) setLoading(false);
       }
     };
     const delay = setTimeout(() => {
@@ -42,11 +54,11 @@ export default function TransfersPage() {
     }, 300);
     const timer = setInterval(() => void load(), 10_000);
     return () => {
-      active = false;
+      guard.invalidate();
       clearTimeout(delay);
       clearInterval(timer);
     };
-  }, [address, search, offset]);
+  }, [address, offset, search]);
   return (
     <Column>
       <h1 className="display">Transfer history</h1>
@@ -69,9 +81,8 @@ export default function TransfersPage() {
           setOffset(0);
         }}
       />
-      {error ? (
-        <p role="alert">{error}</p>
-      ) : loading ? (
+      {error && <p role="alert">{error}</p>}
+      {loading && transfers.length === 0 ? (
         <p role="status">Loading indexed transfers...</p>
       ) : (
         <TransferList transfers={transfers} />
