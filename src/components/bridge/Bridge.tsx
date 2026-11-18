@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import {
   TESTNET,
@@ -367,7 +367,10 @@ export function Bridge() {
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
   const balances = accounts?.account === wallet.address ? accounts.assets : [];
   const walletAsset = balances.find((asset) => asset.id === source.id);
-  const activeSource: SourceAsset = walletAsset ? { ...source, ...walletAsset } : source;
+  const activeSource: SourceAsset = useMemo(
+    () => (walletAsset ? { ...source, ...walletAsset } : source),
+    [source, walletAsset],
+  );
   const sourceBalance =
     accounts?.account === wallet.address && !accounts.error
       ? (walletAsset?.balance ?? "0")
@@ -376,8 +379,7 @@ export function Bridge() {
     accounts?.account === wallet.address && !accounts.error && walletAsset
       ? spendableBalance(walletAsset)
       : sourceBalance;
-  const spendableUnits =
-    spendableStr !== undefined ? parseUnits(spendableStr, 7) : undefined;
+  const spendableUnits = spendableStr !== undefined ? parseUnits(spendableStr, 7) : undefined;
   const locked = busy || checkpoint !== null;
   let inputError: string | null = null;
   let valid = false;
@@ -536,8 +538,7 @@ export function Bridge() {
     setAmount("");
     setRefresh((value) => value + 1);
   };
-  const insufficient =
-    quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
+  const insufficient = quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
   return (
     <>
       {checkpoint && (
@@ -583,7 +584,7 @@ export function Bridge() {
                 setError(null);
               }}
             />
-            {wallet.address && walletAsset && (
+            {wallet.address && walletAsset && source.id !== "native" && (
               <button
                 type="button"
                 className={styles.maxSpend}
@@ -616,21 +617,14 @@ export function Bridge() {
             </button>
           </div>
           <p className={styles.balance}>
-            {wallet.address ? (
-              sourceBalance !== undefined ? (
-                walletAsset &&
-                walletAsset.sellingLiabilities &&
-                parseUnits(walletAsset.sellingLiabilities, 7) > 0n ? (
-                  `Balance: ${sourceBalance} ${source.code} (Spendable: ${spendableBalance(walletAsset)} ${source.code})`
-                ) : (
-                  `Balance: ${sourceBalance} ${source.code}`
-                )
-              ) : (
-                accounts?.error ?? "Reading your balance..."
-              )
-            ) : (
-              "Choose any liquid Stellar asset"
-            )}
+            {wallet.address
+              ? sourceBalance !== undefined
+                ? walletAsset?.sellingLiabilities &&
+                  parseUnits(walletAsset.sellingLiabilities, 7) > 0n
+                  ? `Balance: ${sourceBalance} ${source.code} (Spendable: ${spendableBalance(walletAsset)} ${source.code})`
+                  : `Balance: ${sourceBalance} ${source.code}`
+                : (accounts?.error ?? "Reading your balance...")
+              : "Choose any liquid Stellar asset"}
           </p>
           <p className={styles.balance}>
             {issuerVerificationLabel(activeSource)}. {trustlineLabel(activeSource)}.
@@ -784,8 +778,7 @@ export function Bridge() {
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>
-            {walletAsset &&
-            walletAsset.sellingLiabilities &&
+            {walletAsset?.sellingLiabilities &&
             parseUnits(walletAsset.sellingLiabilities, 7) > 0n
               ? `Your spendable ${source.code} balance (${spendableBalance(walletAsset)} ${source.code}) is lower than this amount due to selling liabilities.`
               : `Your ${source.code} balance is lower than this amount.`}

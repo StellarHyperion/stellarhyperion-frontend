@@ -185,7 +185,14 @@ describe("Real Stellar conversion transaction boundaries", () => {
     expect(spendableBalance(overCommitted)).toBe("0.0000000");
     expect(suggestSourceSpend(overCommitted)).toBe("0.0000000");
 
-    const noLiabilities = { ...asset, sellingLiabilities: undefined };
+    const noLiabilities = {
+      id: asset.id,
+      code: asset.code,
+      issuer: asset.issuer,
+      verification: asset.verification,
+      trustline: asset.trustline,
+      balance: asset.balance,
+    };
     expect(spendableBalance(noLiabilities)).toBe("100.0000000");
     expect(suggestSourceSpend(noLiabilities)).toBe("100.0000000");
   });
@@ -233,38 +240,37 @@ describe("Real Stellar conversion transaction boundaries", () => {
   });
   it("frozen or unauthorized trustlines block conversion with a clear reason", async () => {
     const issuer = Keypair.random().publicKey();
-    const request = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          balances: [
-            {
-              asset_type: "credit_alphanum4",
-              asset_code: "FROZ",
-              asset_issuer: issuer,
-              balance: "100.0000000",
-              is_authorized: false,
-              is_authorized_to_maintain_liabilities: true,
-            },
-            {
-              asset_type: "credit_alphanum4",
-              asset_code: "UNAT",
-              asset_issuer: issuer,
-              balance: "50.0000000",
-              is_authorized: false,
-              is_authorized_to_maintain_liabilities: false,
-            },
-            {
-              asset_type: "credit_alphanum4",
-              asset_code: "LIAB",
-              asset_issuer: issuer,
-              balance: "20.0000000",
-              selling_liabilities: "15.0000000",
-              is_authorized: true,
-            },
-          ],
-        }),
-      ),
+    const response = new Response(
+      JSON.stringify({
+        balances: [
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "FROZ",
+            asset_issuer: issuer,
+            balance: "100.0000000",
+            is_authorized: false,
+            is_authorized_to_maintain_liabilities: true,
+          },
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "UNAT",
+            asset_issuer: issuer,
+            balance: "50.0000000",
+            is_authorized: false,
+            is_authorized_to_maintain_liabilities: false,
+          },
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "LIAB",
+            asset_issuer: issuer,
+            balance: "20.0000000",
+            selling_liabilities: "15.0000000",
+            is_authorized: true,
+          },
+        ],
+      }),
     );
+    const request = vi.fn().mockImplementation(() => Promise.resolve(response.clone()));
     vi.stubGlobal("fetch", request);
     const assets = await accountAssets(TESTNET.reader);
     const froz = assets.find((a) => a.code === "FROZ");

@@ -23,12 +23,7 @@ export interface SourceAsset {
 }
 export type AssetVerification =
   "configured" | "wallet-trustline" | "horizon-search" | "horizon-path";
-export type TrustlineState =
-  | "native"
-  | "present"
-  | "not-checked"
-  | "frozen"
-  | "unauthorized";
+export type TrustlineState = "native" | "present" | "not-checked" | "frozen" | "unauthorized";
 
 export const XLM: SourceAsset = {
   id: "native",
@@ -67,6 +62,11 @@ export function trustlineLabel(asset: SourceAsset): string {
   }
 }
 
+function formatSpendableUnits(units: bigint): string {
+  const scale = 10_000_000n;
+  return `${units / scale}.${(units % scale).toString().padStart(7, "0")}`;
+}
+
 export function spendableBalance(asset: SourceAsset): string {
   if (asset.trustline === "frozen" || asset.trustline === "unauthorized") {
     return "0.0000000";
@@ -75,7 +75,7 @@ export function spendableBalance(asset: SourceAsset): string {
   const balanceUnits = parseUnits(asset.balance, 7);
   const liabilitiesUnits = asset.sellingLiabilities ? parseUnits(asset.sellingLiabilities, 7) : 0n;
   const availableUnits = balanceUnits > liabilitiesUnits ? balanceUnits - liabilitiesUnits : 0n;
-  return formatUnits(availableUnits, 7);
+  return formatSpendableUnits(availableUnits);
 }
 
 export function suggestSourceSpend(asset: SourceAsset): string {
@@ -136,12 +136,11 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
           ...XLM,
           balance: entry.balance,
           sellingLiabilities,
-          available: formatUnits(availableUnits, 7),
+          available: formatSpendableUnits(availableUnits),
         },
       ];
     }
-    if (typeof entry.asset_code !== "string" || typeof entry.asset_issuer !== "string")
-      return [];
+    if (typeof entry.asset_code !== "string" || typeof entry.asset_issuer !== "string") return [];
     const sellingLiabilities =
       typeof entry.selling_liabilities === "string" ? entry.selling_liabilities : "0.0000000";
     const isFrozen =
@@ -170,7 +169,7 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
       trustline,
       balance: entry.balance,
       sellingLiabilities,
-      available: formatUnits(availableUnits, 7),
+      available: formatSpendableUnits(availableUnits),
     };
     stellarAsset(asset);
     return [asset];
