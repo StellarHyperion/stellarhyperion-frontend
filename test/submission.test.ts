@@ -9,7 +9,11 @@ import {
   type xdr,
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
-import { submitSettleClaim } from "../src/contracts/stellar";
+import {
+  classifySubmissionFailure,
+  submitSettleClaim,
+  SubmissionFailure,
+} from "../src/contracts/stellar";
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 
 // Deterministic test-only signer; this test never connects to a network.
@@ -62,6 +66,13 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("classifies bounded pre-broadcast failures without attaching a fake hash", () => {
+    const failure = classifySubmissionFailure("approval", new Error("declined\nsecret details"));
+    expect(failure).toBeInstanceOf(SubmissionFailure);
+    expect(failure.stage).toBe("approval");
+    expect(failure.message).toBe("declined");
+    expect(failure.txHash).toBeUndefined();
+  });
   it("never asks the wallet or submits when simulation fails", async () => {
     const { simulation, send } = setup();
     simulation.mockResolvedValueOnce({

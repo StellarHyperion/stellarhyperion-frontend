@@ -170,6 +170,34 @@ export function errorMessage(error: unknown): string {
   return message.split("\n")[0] ?? "The network request failed. Please try again.";
 }
 
+export type SubmissionFailureStage =
+  | "build"
+  | "simulation"
+  | "approval"
+  | "checkpoint"
+  | "broadcast"
+  | "confirmation";
+
+export class SubmissionFailure extends Error {
+  constructor(
+    readonly stage: SubmissionFailureStage,
+    message: string,
+    readonly txHash?: string,
+  ) {
+    super(message);
+    this.name = "SubmissionFailure";
+  }
+}
+
+export function classifySubmissionFailure(
+  stage: SubmissionFailureStage,
+  error: unknown,
+  txHash?: string,
+): SubmissionFailure {
+  const message = errorMessage(error);
+  return new SubmissionFailure(stage, message, txHash);
+}
+
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("The contract returned an unexpected response.");
@@ -554,7 +582,8 @@ async function submitOperation(
     .build();
   const simulation = await client.simulateTransaction(transaction);
   if (!rpc.Api.isSimulationSuccess(simulation)) {
-    throw new Error(
+    throw classifySubmissionFailure(
+      "simulation",
       rpc.Api.isSimulationError(simulation)
         ? simulation.error
         : "Contract state needs restoration. Ask the operator to restore it.",
@@ -592,28 +621,40 @@ async function signAndSubmit(
   const client = server();
   progress?.("signing");
   const signOptions = { networkPassphrase: TESTNET.networkPassphrase };
-  const signed = await sign(
-    prepared.toXdr(),
-    approval ? { ...signOptions, approval } : signOptions,
-  );
+  let signed: Awaited<ReturnType<WalletSigner>>;
+  try {
+    signed = await sign(prepared.toXdr(), approval ? { ...signOptions, approval } : signOptions);
+  } catch (error) {
+    throw classifySubmissionFailure("approval", error);
+  }
   const signedTransaction = TransactionBuilder.fromXdr(
     signed.signedTxXdr,
     TESTNET.networkPassphrase,
   );
   if (toHex(signedTransaction.hash()) !== toHex(prepared.hash())) {
-    throw new Error("The wallet returned a different transaction. Nothing was submitted.");
+    throw classifySubmissionFailure(
+      "approval",
+      "The wallet returned a different transaction. Nothing was submitted.",
+    );
   }
   const hash = toHex(prepared.hash()).slice(2);
   progress?.("submitting", hash);
   try {
     const submitted = await client.sendTransaction(signedTransaction);
     if (submitted.status === "ERROR")
-      throw new Error(
+      throw classifySubmissionFailure(
+        "broadcast",
         "The network rejected the signed transaction. Refresh the quote and try again.",
+        hash,
       );
     if (submitted.status === "TRY_AGAIN_LATER")
-      throw new Error("The network is busy. Nothing was accepted; please try again.");
+      throw classifySubmissionFailure(
+        "broadcast",
+        "The network is busy. Nothing was accepted; please try again.",
+        hash,
+      );
   } catch (error) {
+    if (error instanceof SubmissionFailure) throw error;
     if (error instanceof Error && /network rejected|Nothing was accepted/.test(error.message))
       throw error;
     // A network timeout after submission has an unknown outcome. Preserve the real hash for checking.
