@@ -32,6 +32,18 @@ const transfer = (overrides: Partial<FormattedTransfer> = {}): FormattedTransfer
 });
 
 describe("transfer evidence timeline", () => {
+  it("does not publish provider URLs containing embedded credentials", () => {
+    const result = transfer({
+      rail: {
+        status: "candidate",
+        railStatus: "pending",
+        reference: "https://user:private@example.com/transfer",
+        attestedAt: null,
+        lastError: null,
+      },
+    });
+    expect(getEvidenceTimeline(result)[1]?.href).toBeUndefined();
+  });
   it("keeps provider execution separate from verified destination delivery", () => {
     const result = transfer({
       stage: "delivered",

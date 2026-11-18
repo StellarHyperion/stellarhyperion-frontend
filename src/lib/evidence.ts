@@ -17,7 +17,9 @@ function publicReference(reference: string | null | undefined): string | undefin
   if (!reference) return undefined;
   try {
     const url = new URL(reference.trim());
-    return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+    return (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
+      ? url.href
+      : undefined;
   } catch {
     return undefined;
   }
