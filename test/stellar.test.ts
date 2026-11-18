@@ -1,3 +1,9 @@
+import {
+  claimOperationOwnership,
+  getOperationOwnership,
+  releaseOperationOwnership,
+  saveCheckpoint,
+} from "../src/contracts/checkpoint";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Account, Contract, TransactionBuilder, rpc, scValToNative } from "@stellar/stellar-sdk";
 import {
@@ -6,6 +12,7 @@ import {
   parseSendAmount,
   readTransaction,
   reconcileSignatureReturn,
+  validateReviewMatch,
   validateRecipient,
   verifyRouterDeployment,
   type LiveQuote,
@@ -294,8 +301,52 @@ describe("Real Stellar transaction encoding", () => {
       saveCheckpoint(cp1);
       expect(() => {
         saveCheckpoint(cp2);
-      }).toThrow("Previous submissions remain pending");
+      }).toThrow("previous transaction remains pending");
       saveCheckpoint(null);
+    });
+    it("retains a pending hash when writes fail but storage reads still work", () => {
+      const checkpoint = {
+        router: TESTNET.router,
+        account: TESTNET.reader,
+        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        destination: "sepolia" as const,
+        route: 1 as const,
+        bridgeAmount: "1000000",
+        stage: "bridge" as const,
+        txHash: "a".repeat(64),
+      };
+      vi.stubGlobal("localStorage", {
+        getItem: () => null,
+        setItem: () => {
+          throw new Error("quota exceeded");
+        },
+        removeItem: vi.fn(),
+      });
+      expect(() => {
+        saveCheckpoint(checkpoint);
+      }).toThrow("Browser storage is unavailable");
+      expect(() => {
+        saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) });
+      }).toThrow("previous transaction remains pending");
+      saveCheckpoint(null);
+    });
+
+    it("blocks ownership creation before signing when storage is unavailable", () => {
+      vi.stubGlobal("localStorage", {
+        setItem: () => {
+          throw new Error("quota exceeded");
+        },
+      });
+      expect(() =>
+        claimOperationOwnership({
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "1000000",
+          stage: "bridge",
+        }),
+      ).toThrow("Browser storage is unavailable");
     });
   });
 });

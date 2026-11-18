@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import {
   TESTNET,
@@ -379,11 +379,30 @@ export function Bridge() {
     accounts?.account === wallet.address && !accounts.error
       ? (walletAsset?.balance ?? "0")
       : undefined;
+  const liveReview = useRef({
+    account: wallet.address,
+    recipient,
+    amount,
+    sourceId: source.id,
+    destination,
+    route,
+  });
+  useLayoutEffect(() => {
+    liveReview.current = {
+      account: wallet.address,
+      recipient,
+      amount,
+      sourceId: source.id,
+      destination,
+      route,
+    };
+  }, [wallet.address, recipient, amount, source.id, destination, route]);
   const spendableStr =
     accounts?.account === wallet.address && !accounts.error && walletAsset
       ? spendableBalance(walletAsset)
       : sourceBalance;
   const spendableUnits = spendableStr !== undefined ? parseUnits(spendableStr, 7) : undefined;
+
   const locked = busy || checkpoint !== null;
   let inputError: string | null = null;
   let valid = false;
@@ -480,26 +499,34 @@ export function Bridge() {
     const initialSourceId = source.id;
     const initialDestination = destination;
     const initialRoute = route;
-    const ownership = claimOperationOwnership({
-      account: sender,
-      recipient: validateRecipient(recipient),
-      destination,
-      route,
-      bridgeAmount: String(quote.bridge.requestedAmount),
-      stage: quote.conversion ? "conversion" : "bridge",
-    });
+    let ownership: ReturnType<typeof claimOperationOwnership>;
+    try {
+      ownership = claimOperationOwnership({
+        account: sender,
+        recipient: validateRecipient(recipient),
+        destination,
+        route,
+        bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
+        stage: reviewedQuote.conversion ? "conversion" : "bridge",
+      });
+    } catch (cause) {
+      setError(errorMessage(cause));
+      setBusy(false);
+      setPhase(null);
+      return;
+    }
     const isSuperseded = () => {
       const currentOwner = getOperationOwnership();
       if (currentOwner?.id !== ownership.id) return true;
+      const current = liveReview.current;
       if (
-        recipient !== initialRecipient ||
-        amount !== initialAmount ||
-        source.id !== initialSourceId ||
-        destination !== initialDestination ||
-        route !== initialRoute
-      ) {
+        current.recipient !== initialRecipient ||
+        current.amount !== initialAmount ||
+        current.sourceId !== initialSourceId ||
+        current.destination !== initialDestination ||
+        current.route !== initialRoute
+      )
         return true;
-      }
       return false;
     };
     let converted: TransferCheckpoint | null = null;
@@ -515,7 +542,7 @@ export function Bridge() {
     });
     const conversionReconcile: SubmissionReconciliation = {
       expectedAccount: sender,
-      getCurrentAccount: () => wallet.address,
+      getCurrentAccount: () => liveReview.current.account ?? null,
       isSuperseded,
       onAccountSwitch: (hash) => {
         saveCheckpoint(pending("conversion", hash));
@@ -523,7 +550,7 @@ export function Bridge() {
     };
     const bridgeReconcile: SubmissionReconciliation = {
       expectedAccount: sender,
-      getCurrentAccount: () => wallet.address,
+      getCurrentAccount: () => liveReview.current.account ?? null,
       isSuperseded,
       onAccountSwitch: (hash) => {
         saveCheckpoint(pending("bridge", hash));
@@ -541,6 +568,7 @@ export function Bridge() {
             if (hash) saveCheckpoint(pending("conversion", hash));
           },
           { ...reviewApproval, operation: "conversion" },
+          conversionReconcile,
         );
         if (swap.status !== "confirmed") {
           setResult(swap);
@@ -566,6 +594,7 @@ export function Bridge() {
           }
         },
         { ...reviewApproval, operation: "bridge" },
+        bridgeReconcile,
       );
       setResult(submitted);
     } catch (cause) {
