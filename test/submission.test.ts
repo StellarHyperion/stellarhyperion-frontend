@@ -9,7 +9,7 @@ import {
   type xdr,
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
-import { submitSettleClaim } from "../src/contracts/stellar";
+import { quoteFreshness, submitSettleClaim } from "../src/contracts/stellar";
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 
 // Deterministic test-only signer; this test never connects to a network.
@@ -62,6 +62,12 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("labels provider observations by freshness without implying delivery", () => {
+    const observedAt = "2026-11-18T20:00:00.000Z";
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:29.000Z"))).toBe("current");
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:31.000Z"))).toBe("stale");
+    expect(quoteFreshness({ observedAt: "not-a-date" })).toBe("unknown");
+  });
   it("never asks the wallet or submits when simulation fails", async () => {
     const { simulation, send } = setup();
     simulation.mockResolvedValueOnce({

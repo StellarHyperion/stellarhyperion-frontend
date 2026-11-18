@@ -56,6 +56,20 @@ export interface LiveQuote {
   requestedAmount: bigint;
   relayGas: bigint;
   estimatedRelayGas?: bigint;
+  readonly observedAt: string;
+  readonly scope: {
+    readonly destination: DestinationKey;
+    readonly route: BridgeRoute;
+    readonly adapter: string;
+    readonly ledger: number;
+  };
+}
+export type QuoteFreshness = "current" | "stale" | "unknown";
+const QUOTE_MAX_AGE_MS = 30_000;
+export function quoteFreshness(quote: Pick<LiveQuote, "observedAt">, now = Date.now()): QuoteFreshness {
+  const observed = Date.parse(quote.observedAt);
+  if (!Number.isFinite(observed)) return "unknown";
+  return now - observed <= QUOTE_MAX_AGE_MS ? "current" : "stale";
 }
 export interface LaneState {
   available: boolean;
@@ -480,6 +494,13 @@ export async function quoteTransfer(
     destinationAmount: integer(quote.destination_amount) - (route === 0 ? relayGas / 10n : 0n),
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
+    observedAt: new Date().toISOString(),
+    scope: {
+      destination: destinationKey,
+      route,
+      adapter: lane.adapter,
+      ledger: response.ledger,
+    },
   };
 }
 

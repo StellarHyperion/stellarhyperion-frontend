@@ -25,6 +25,7 @@ import {
   errorMessage,
   getClaim,
   quoteTransfer,
+  quoteFreshness,
   readLane,
   readTransaction,
   submitBridgeOut,
@@ -84,6 +85,7 @@ function ApprovalDetails({
 }
 
 function QuoteDetails({ quote }: { quote: LiveQuote }) {
+  const freshness = quoteFreshness(quote);
   return (
     <dl className={styles.summary}>
       <div>
@@ -105,6 +107,20 @@ function QuoteDetails({ quote }: { quote: LiveQuote }) {
         <dd>
           {formatUnits(quote.destinationAmount, destinationDecimals(quote.route))}{" "}
           {receiveSymbol(quote.route)}
+        </dd>
+      </div>
+      <div>
+        <dt>Quote observation</dt>
+        <dd>
+          {freshness === "current" ? "Current" : freshness === "stale" ? "Stale" : "Unknown"} ·{" "}
+          {new Date(quote.observedAt).toLocaleString()}
+        </dd>
+      </div>
+      <div>
+        <dt>Quote scope</dt>
+        <dd>
+          {quote.scope.destination} · {quote.scope.route === 0 ? "Circle CCTP" : "Axelar ITS"} ·
+          {" "}{quote.scope.adapter} · ledger {quote.scope.ledger}
         </dd>
       </div>
     </dl>
