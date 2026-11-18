@@ -121,4 +121,55 @@ describe("Signed Stellar submission failure boundaries", () => {
     });
     await expect(submitSettleClaim(key.publicKey(), 1n, sign)).rejects.toThrow("network rejected");
   });
+  it("never automatically submits a signature for a superseded review", async () => {
+    const { send } = setup();
+    let superseded = false;
+    const wallet = (value: string) => {
+      superseded = true;
+      return sign(value);
+    };
+    await expect(
+      submitSettleClaim(key.publicKey(), 1n, wallet, undefined, {
+        expectedAccount: key.publicKey(),
+        isSuperseded: () => superseded,
+      }),
+    ).rejects.toThrow("superseded");
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("preserves exact signed hash and safe recovery state when account switches during signing", async () => {
+    const { send } = setup();
+    let activeAccount = key.publicKey();
+    const switchedAccount = Keypair.random().publicKey();
+    let recoveredHash: string | undefined;
+    const wallet = (value: string) => {
+      activeAccount = switchedAccount;
+      return sign(value);
+    };
+    await expect(
+      submitSettleClaim(key.publicKey(), 1n, wallet, undefined, {
+        expectedAccount: key.publicKey(),
+        getCurrentAccount: () => activeAccount,
+        onAccountSwitch: (hash) => {
+          recoveredHash = hash;
+        },
+      }),
+    ).rejects.toThrow("switched");
+    expect(send).not.toHaveBeenCalled();
+    expect(recoveredHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("does not broadcast after the wallet disconnects while signing", async () => {
+    const { send } = setup();
+    let account: string | null = key.publicKey();
+    const wallet = (value: string) => {
+      account = null;
+      return sign(value);
+    };
+    await expect(
+      submitSettleClaim(key.publicKey(), 1n, wallet, undefined, {
+        expectedAccount: key.publicKey(),
+        getCurrentAccount: () => account,
+      }),
+    ).rejects.toThrow("switched");
+    expect(send).not.toHaveBeenCalled();
+  });
 });

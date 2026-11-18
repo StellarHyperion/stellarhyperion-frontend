@@ -44,6 +44,30 @@ try {
   await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
   await page.getByText("Freighter", { exact: true }).waitFor();
   await page.getByText("Albedo", { exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => {
+    localStorage.setItem(
+      "hyperion.testnet.pending-transfer",
+      JSON.stringify({
+        router: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        destination: "sepolia",
+        route: 1,
+        bridgeAmount: "10000000",
+        stage: "bridge",
+        txHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      }),
+    );
+    window.dispatchEvent(new Event("hyperion:pending-transfer"));
+  });
+  await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+  await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
+  await page.getByRole("button", { name: "Check status" }).waitFor();
+  await page.evaluate(() => {
+    localStorage.removeItem("hyperion.testnet.pending-transfer");
+    window.dispatchEvent(new Event("hyperion:pending-transfer"));
+  });
   for (const route of ["/", "/transfers"]) {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}${route}`, { waitUntil: "networkidle" });

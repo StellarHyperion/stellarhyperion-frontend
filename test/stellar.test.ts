@@ -1,4 +1,10 @@
 import { parseClaimPreview } from "../src/contracts/stellar";
+import {
+  claimOperationOwnership,
+  getOperationOwnership,
+  releaseOperationOwnership,
+  saveCheckpoint,
+} from "../src/contracts/checkpoint";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Account, Contract, TransactionBuilder, rpc, scValToNative } from "@stellar/stellar-sdk";
 import {
@@ -6,9 +12,12 @@ import {
   claimMatchesDeployment,
   parseSendAmount,
   readTransaction,
+  reconcileSignatureReturn,
+  validateReviewMatch,
   validateRecipient,
   verifyRouterDeployment,
   type LiveQuote,
+  type ReviewSnapshot,
 } from "../src/contracts/stellar";
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 const quote: LiveQuote = {
@@ -194,5 +203,128 @@ describe("Real Stellar transaction encoding", () => {
     expect(request.route).toBe(0);
     expect(request.destination_decimals).toBe(6);
     expect(request.min_destination_amount).toBe(900000n);
+  });
+  describe("Signature return reconciliation and review state matching", () => {
+    const baseReview: ReviewSnapshot = {
+      account: TESTNET.reader,
+      recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+      destination: "sepolia",
+      route: 1,
+      bridgeAmount: 9007199254740993n,
+      stage: "bridge",
+      sourceId: "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      sourceAmount: 9007199254740993n,
+    };
+
+    it("accepts an exact review match with identical integer amounts and token identity", () => {
+      expect(validateReviewMatch(baseReview, { ...baseReview })).toBe(true);
+      const result = reconcileSignatureReturn(
+        baseReview,
+        { ...baseReview },
+        TESTNET.reader,
+        "a".repeat(64),
+      );
+      expect(result).toEqual({ valid: true });
+    });
+
+    it("rejects an altered integer amount or different issuer token identity", () => {
+      expect(
+        validateReviewMatch(baseReview, { ...baseReview, bridgeAmount: 9007199254740994n }),
+      ).toBe(false);
+      expect(
+        validateReviewMatch(baseReview, {
+          ...baseReview,
+          sourceId: "USDC:GDIFFERENTISSUER335X2KGX3IHOJAPP5RE34K4KZVN",
+        }),
+      ).toBe(false);
+      const result = reconcileSignatureReturn(
+        baseReview,
+        { ...baseReview, bridgeAmount: 1000n },
+        TESTNET.reader,
+        "a".repeat(64),
+      );
+      expect(result).toEqual({ valid: false, reason: "superseded" });
+    });
+
+    it("detects an account switch when the active wallet differs from the review owner", () => {
+      const result = reconcileSignatureReturn(
+        baseReview,
+        { ...baseReview },
+        "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "a".repeat(64),
+      );
+      expect(result).toEqual({ valid: false, reason: "account_switch" });
+    });
+
+    it("coordinates operation ownership under concurrent operations", () => {
+      const op1 = claimOperationOwnership({
+        account: TESTNET.reader,
+        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        destination: "sepolia",
+        route: 1,
+        bridgeAmount: "1000000",
+        stage: "bridge",
+      });
+      expect(getOperationOwnership()?.id).toBe(op1.id);
+
+      const op2 = claimOperationOwnership({
+        account: TESTNET.reader,
+        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        destination: "sepolia",
+        route: 1,
+        bridgeAmount: "2000000",
+        stage: "bridge",
+      });
+      expect(getOperationOwnership()?.id).toBe(op2.id);
+      expect(getOperationOwnership()?.id).not.toBe(op1.id);
+
+      releaseOperationOwnership(op2.id);
+      expect(getOperationOwnership()).toBeNull();
+    });
+
+    it("retains a pending hash when writes fail but storage reads still work", () => {
+      const checkpoint = {
+        router: TESTNET.router,
+        account: TESTNET.reader,
+        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        destination: "sepolia" as const,
+        route: 1 as const,
+        bridgeAmount: "1000000",
+        stage: "bridge" as const,
+        txHash: "a".repeat(64),
+      };
+      vi.stubGlobal("localStorage", {
+        getItem: () => null,
+        setItem: () => {
+          throw new Error("quota exceeded");
+        },
+        removeItem: vi.fn(),
+      });
+      expect(() => {
+        saveCheckpoint(checkpoint);
+      }).toThrow("Browser storage is unavailable");
+      expect(() => {
+        saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) });
+      }).toThrow("previous transaction remains pending");
+      saveCheckpoint(null);
+    });
+
+    it("blocks ownership creation before signing when storage is unavailable", () => {
+      vi.stubGlobal("localStorage", {
+        setItem: () => {
+          throw new Error("quota exceeded");
+        },
+      });
+      expect(() =>
+        claimOperationOwnership({
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "1000000",
+          stage: "bridge",
+        }),
+      ).toThrow("Browser storage is unavailable");
+    });
   });
 });
