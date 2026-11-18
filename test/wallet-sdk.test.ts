@@ -57,6 +57,16 @@ beforeEach(() => {
   api.lobstr.getPublicKey.mockResolvedValue(signer.publicKey());
 });
 describe("Direct Stellar wallet adapters", () => {
+  it("rejects stale approval provenance before opening a wallet prompt", async () => {
+    await expect(
+      walletSign("freighter", envelope().original, signer.publicKey(), {
+        account: Keypair.random().publicKey(),
+        network: TESTNET.networkPassphrase,
+        operation: "bridge",
+      }),
+    ).rejects.toThrow("account changed");
+    expect(api.freighter.signTransaction).not.toHaveBeenCalled();
+  });
   it("restores Freighter with silent lookup and requests access only for explicit connection", async () => {
     expect(await walletAddress("freighter", false)).toBe(signer.publicKey());
     expect(api.freighter.requestAccess).not.toHaveBeenCalled();

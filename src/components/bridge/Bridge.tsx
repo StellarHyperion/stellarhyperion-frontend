@@ -50,11 +50,33 @@ import {
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
 import { useStellarWallet } from "../../wallets";
+import type { WalletApprovalProvenance } from "../../wallets/stellar";
 import { AssetIcon, DestinationPicker, ReviewDialog, SourceAssetPicker } from "./AssetPicker";
 import styles from "./Bridge.module.css";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
+
+function ApprovalDetails({
+  approval,
+  issuer,
+}: {
+  approval: WalletApprovalProvenance;
+  issuer?: string;
+}) {
+  return (
+    <div className={styles.assetNote}>
+      <strong>Wallet approval</strong>
+      <div>Account: {approval.account}</div>
+      <div>Network: {approval.network}</div>
+      <div>
+        Operation:{" "}
+        {approval.operation === "claim-settlement" ? "Claim settlement" : approval.operation}
+      </div>
+      {issuer && <div>Source issuer: {issuer}</div>}
+    </div>
+  );
+}
 
 function QuoteDetails({ quote }: { quote: LiveQuote }) {
   return (
@@ -233,6 +255,13 @@ function PendingTransferCard({
           <p className={styles.reviewNote}>
             Conversion confirmed. This step bridges the USDC already in your wallet.
           </p>
+          <ApprovalDetails
+            approval={{
+              account: checkpoint.account,
+              network: TESTNET.networkPassphrase,
+              operation: "bridge",
+            }}
+          />
           <QuoteDetails quote={review} />
           <p className={styles.address}>Recipient: {checkpoint.recipient}</p>
           <button
@@ -263,6 +292,7 @@ export function Bridge() {
   const [touched, setTouched] = useState(false);
   const [picker, setPicker] = useState<"source" | "destination" | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  const [reviewApproval, setReviewApproval] = useState<WalletApprovalProvenance | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [laneState, setLaneState] = useState<{
     key: string;
@@ -365,6 +395,12 @@ export function Bridge() {
   }, [valid, lane, locked, destination, source, amount, route, quoteKey]);
   const submit = async () => {
     if (!quote || !wallet.address || busy || checkpoint) return;
+    if (reviewApproval?.account !== wallet.address) {
+      setReviewing(false);
+      setReviewApproval(null);
+      setError("Your wallet account changed. Review the transfer again.");
+      return;
+    }
     setReviewing(false);
     setBusy(true);
     setError(null);
@@ -393,6 +429,7 @@ export function Bridge() {
             setPhase(next);
             if (hash) saveCheckpoint(pending("conversion", hash));
           },
+          { ...reviewApproval, operation: "conversion" },
         );
         if (swap.status !== "confirmed") {
           setResult(swap);
@@ -417,6 +454,7 @@ export function Bridge() {
             setResult({ status: "pending", txHash: hash });
           }
         },
+        { ...reviewApproval, operation: "bridge" },
       );
       setResult(submitted);
     } catch (cause) {
@@ -689,6 +727,12 @@ export function Bridge() {
               className={styles.primary}
               disabled={!quote || busy || !!insufficient || sourceBalance === undefined}
               onClick={() => {
+                if (!wallet.address || !quote) return;
+                setReviewApproval({
+                  account: wallet.address,
+                  network: TESTNET.networkPassphrase,
+                  operation: quote.conversion ? "conversion" : "bridge",
+                });
                 setReviewing(true);
               }}
             >
@@ -776,6 +820,12 @@ export function Bridge() {
           {source.issuer && source.id !== USDC.id && (
             <p className={styles.address}>Source issuer: {source.issuer}</p>
           )}
+          {reviewApproval && (
+            <ApprovalDetails
+              approval={reviewApproval}
+              {...(source.issuer ? { issuer: source.issuer } : {})}
+            />
+          )}
           <QuoteDetails quote={quote.bridge} />
           {quote.conversion && (
             <p className={styles.reviewNote}>
@@ -808,6 +858,13 @@ export function ClaimRecovery() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<TransactionResult | null>(null);
+  const claimApproval: WalletApprovalProvenance | null = wallet.address
+    ? {
+        account: wallet.address,
+        network: TESTNET.networkPassphrase,
+        operation: "claim-settlement",
+      }
+    : null;
   const lookup = async () => {
     setBusy(true);
     setError(null);
@@ -826,7 +883,12 @@ export function ClaimRecovery() {
     setBusy(true);
     setError(null);
     try {
-      const transaction = await submitSettleClaim(wallet.address, claim.id, wallet.signTransaction);
+      const transaction = await submitSettleClaim(
+        wallet.address,
+        claim.id,
+        wallet.signTransaction,
+        claimApproval ?? undefined,
+      );
       setResult(transaction);
       if (transaction.status === "confirmed") setClaim(await getClaim(claim.id));
     } catch (cause) {
@@ -883,14 +945,17 @@ export function ClaimRecovery() {
                   : `${claim.amount} base units of ${claim.token}`}
               </p>
               <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
-              {!claim.settled && (
-                <button
-                  type="button"
-                  disabled={!wallet.address || busy || result?.status === "pending"}
-                  onClick={() => void settle()}
-                >
-                  Sign claim settlement
-                </button>
+              {!claim.settled && claimApproval && (
+                <>
+                  <ApprovalDetails approval={claimApproval} />
+                  <button
+                    type="button"
+                    disabled={busy || result?.status === "pending"}
+                    onClick={() => void settle()}
+                  >
+                    Sign claim settlement
+                  </button>
+                </>
               )}
               {!wallet.address && !claim.settled && (
                 <p>Connect your Stellar wallet to pay the settlement network fee.</p>

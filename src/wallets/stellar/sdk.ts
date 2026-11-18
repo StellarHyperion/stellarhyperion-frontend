@@ -1,4 +1,6 @@
 import { TESTNET } from "../../config/testnet";
+import { assertWalletApproval } from "./signature";
+import type { WalletApprovalProvenance } from "./types";
 
 export const STELLAR_WALLETS = [
   { id: "freighter", name: "Freighter", url: "https://www.freighter.app/" },
@@ -65,7 +67,18 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true): 
   }
 }
 
-export async function walletSign(id: StellarWalletId, xdr: string, address: string) {
+export async function walletSign(
+  id: StellarWalletId,
+  xdr: string,
+  address: string,
+  approval?: WalletApprovalProvenance,
+) {
+  if (approval) assertWalletApproval(approval, address);
+  if (approval && (id === "albedo" || id === "xbull")) {
+    const actual = await walletAddress(id, false);
+    if (actual !== address)
+      throw new Error("The wallet account changed. Review the transaction again.");
+  }
   let signed: string;
   switch (id) {
     case "freighter": {
