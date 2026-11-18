@@ -5,6 +5,7 @@ import {
   quoteTransfer,
   submitClassicOperations,
   type LiveQuote,
+  type SubmissionReconciliation,
   type TransactionPhase,
   type TransactionResult,
   type WalletSigner,
@@ -209,6 +210,7 @@ export async function submitConversion(
   conversion: Conversion,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  reconcile?: SubmissionReconciliation,
 ): Promise<TransactionResult> {
   const assets = await accountAssets(sender);
   const balance = assets.find((asset) => asset.id === conversion.source.id)?.balance ?? "0";
@@ -219,5 +221,6 @@ export async function submitConversion(
     conversionOperations(sender, conversion, !assets.some((asset) => asset.id === USDC.id)),
     sign,
     progress,
+    reconcile,
   );
 }

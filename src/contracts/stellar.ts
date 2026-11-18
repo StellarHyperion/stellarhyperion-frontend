@@ -5,6 +5,7 @@ import {
   BASE_FEE,
   Contract,
   TransactionBuilder,
+  type FeeBumpTransaction,
   type Transaction,
   nativeToScVal,
   rpc,
@@ -475,11 +476,72 @@ export async function readTransaction(hash: string): Promise<TransactionResult |
   return { status: "pending", txHash: hash };
 }
 
-async function submitOperation(
+export interface ReviewSnapshot {
+  account: string;
+  recipient: string;
+  destination: DestinationKey;
+  route: BridgeRoute;
+  bridgeAmount: bigint;
+  stage: "conversion" | "bridge";
+  sourceId?: string;
+  sourceAmount?: bigint;
+}
+
+export interface SubmissionReconciliation {
+  expectedAccount: string;
+  getCurrentAccount?: () => string | null;
+  isSuperseded?: () => boolean;
+  onAccountSwitch?: (
+    hash: string,
+    signedTx: Transaction | FeeBumpTransaction,
+  ) => void | Promise<void>;
+  validate?: (hash: string, signedTx: Transaction | FeeBumpTransaction) => void | Promise<void>;
+}
+
+export function validateReviewMatch(original: ReviewSnapshot, current: ReviewSnapshot): boolean {
+  if (
+    original.account !== current.account ||
+    original.recipient.trim().toLowerCase() !== current.recipient.trim().toLowerCase() ||
+    original.destination !== current.destination ||
+    original.route !== current.route ||
+    original.bridgeAmount !== current.bridgeAmount ||
+    original.stage !== current.stage
+  ) {
+    return false;
+  }
+  if (original.sourceId !== undefined && original.sourceId !== current.sourceId) {
+    return false;
+  }
+  if (original.sourceAmount !== undefined && original.sourceAmount !== current.sourceAmount) {
+    return false;
+  }
+  return true;
+}
+
+export function reconcileSignatureReturn(
+  original: ReviewSnapshot,
+  current: ReviewSnapshot | null,
+  currentAccount: string | null,
+  hash: string,
+): { valid: true } | { valid: false; reason: "superseded" | "account_switch" } {
+  if (!/^[0-9a-fA-F]{64}$/.test(hash)) {
+    return { valid: false, reason: "superseded" };
+  }
+  if (!current || !validateReviewMatch(original, current)) {
+    return { valid: false, reason: "superseded" };
+  }
+  if (currentAccount && currentAccount !== original.account) {
+    return { valid: false, reason: "account_switch" };
+  }
+  return { valid: true };
+}
+
+export async function submitOperation(
   sender: string,
   operation: xdr.Operation,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  reconcile?: SubmissionReconciliation,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("preparing");
@@ -504,7 +566,7 @@ async function submitOperation(
   }
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
   progress?.("signing");
-  return signAndSubmit(prepared, sign, progress);
+  return signAndSubmit(prepared, sign, progress, reconcile);
 }
 
 export async function submitClassicOperations(
@@ -512,6 +574,7 @@ export async function submitClassicOperations(
   operations: readonly xdr.Operation[],
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  reconcile?: SubmissionReconciliation,
 ): Promise<TransactionResult> {
   const client = server();
   if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
@@ -521,13 +584,14 @@ export async function submitClassicOperations(
     networkPassphrase: TESTNET.networkPassphrase,
   });
   for (const operation of operations) builder.addOperation(operation);
-  return signAndSubmit(builder.setTimeout(180).build(), sign, progress);
+  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, reconcile);
 }
 
 async function signAndSubmit(
   prepared: Transaction,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  reconcile?: SubmissionReconciliation,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("signing");
@@ -542,6 +606,25 @@ async function signAndSubmit(
     throw new Error("The wallet returned a different transaction. Nothing was submitted.");
   }
   const hash = toHex(prepared.hash()).slice(2);
+  if (reconcile) {
+    if (reconcile.isSuperseded?.()) {
+      throw new Error("The review was superseded before signing completed. Nothing was submitted.");
+    }
+    const currentAccount = reconcile.getCurrentAccount
+      ? reconcile.getCurrentAccount()
+      : reconcile.expectedAccount;
+    if (currentAccount && currentAccount !== reconcile.expectedAccount) {
+      if (reconcile.onAccountSwitch) {
+        await reconcile.onAccountSwitch(hash, signedTransaction);
+      }
+      throw new Error(
+        "Wallet account switched. The transaction was preserved in recovery and not submitted.",
+      );
+    }
+    if (reconcile.validate) {
+      await reconcile.validate(hash, signedTransaction);
+    }
+  }
   progress?.("submitting", hash);
   try {
     const submitted = await client.sendTransaction(signedTransaction);
@@ -552,7 +635,10 @@ async function signAndSubmit(
     if (submitted.status === "TRY_AGAIN_LATER")
       throw new Error("The network is busy. Nothing was accepted; please try again.");
   } catch (error) {
-    if (error instanceof Error && /network rejected|Nothing was accepted/.test(error.message))
+    if (
+      error instanceof Error &&
+      /network rejected|Nothing was accepted|superseded|switched/.test(error.message)
+    )
       throw error;
     // A network timeout after submission has an unknown outcome. Preserve the real hash for checking.
     return { status: "pending", txHash: hash };
@@ -580,6 +666,7 @@ export async function submitBridgeOut(
   recipient: string,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  reconcile?: SubmissionReconciliation,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
   const refreshed = await quoteTransfer(
@@ -598,7 +685,13 @@ export async function submitBridgeOut(
   const balance = await readBalance(sender);
   if (balance < refreshed.grossAmount)
     throw new Error(`Insufficient testnet USDC. Your balance is ${formatUnits(balance, 7)} USDC.`);
-  return submitOperation(sender, bridgeOperation(sender, quoted, recipient), sign, progress);
+  return submitOperation(
+    sender,
+    bridgeOperation(sender, quoted, recipient),
+    sign,
+    progress,
+    reconcile,
+  );
 }
 
 export async function getClaim(id: bigint): Promise<PendingClaim> {
@@ -619,6 +712,8 @@ export async function submitSettleClaim(
   sender: string,
   id: bigint,
   sign: WalletSigner,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
+  reconcile?: SubmissionReconciliation,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
@@ -630,5 +725,7 @@ export async function submitSettleClaim(
       nativeToScVal(id, { type: "u64" }),
     ),
     sign,
+    progress,
+    reconcile,
   );
 }

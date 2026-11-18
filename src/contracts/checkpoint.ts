@@ -67,14 +67,146 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
 }
 export function saveCheckpoint(value: TransferCheckpoint | null) {
   try {
-    if (value) localStorage.setItem(key, JSON.stringify(value));
-    else localStorage.removeItem(key);
+    if (typeof localStorage !== "undefined") {
+      if (value) localStorage.setItem(key, JSON.stringify(value));
+      else localStorage.removeItem(key);
+    }
   } catch {
     throw new Error("Browser storage is unavailable. The next transaction was not submitted.");
   }
-  window.dispatchEvent(new Event(event));
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    try {
+      window.dispatchEvent(new Event(event));
+    } catch {
+      /* ignore */
+    }
+  }
 }
 export function useTransferCheckpoint(): TransferCheckpoint | null {
   const raw = useSyncExternalStore(subscribe, snapshot, () => null);
   return useMemo(() => parseCheckpoint(raw), [raw]);
+}
+
+export interface OperationOwnership {
+  id: string;
+  account: string;
+  recipient: string;
+  destination: DestinationKey;
+  route: BridgeRoute;
+  bridgeAmount: string;
+  stage: "conversion" | "bridge";
+  timestamp: number;
+}
+const ownershipKey = "hyperion.testnet.operation-ownership";
+const ownershipEvent = "hyperion:operation-ownership";
+
+let memoryOwnership: string | null = null;
+
+export function parseOwnership(raw: string | null): OperationOwnership | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as {
+      id: string;
+      account: string;
+      recipient: string;
+      destination: string;
+      route: number;
+      bridgeAmount: string;
+      stage: string;
+      timestamp: number;
+    };
+    if (
+      typeof value.id !== "string" ||
+      !value.id ||
+      !StrKey.isValidEd25519PublicKey(value.account) ||
+      !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||
+      /^0x0{40}$/.test(value.recipient) ||
+      !/^\d+$/.test(value.bridgeAmount) ||
+      BigInt(value.bridgeAmount) <= 0n ||
+      (value.route !== 0 && value.route !== 1) ||
+      (value.stage !== "conversion" && value.stage !== "bridge") ||
+      typeof value.timestamp !== "number"
+    ) {
+      return null;
+    }
+    destinationFor(value.destination);
+    return {
+      ...value,
+      destination: destinationFor(value.destination).key,
+      route: value.route,
+      stage: value.stage,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function getOperationOwnership(): OperationOwnership | null {
+  try {
+    if (typeof localStorage !== "undefined") {
+      return parseOwnership(localStorage.getItem(ownershipKey));
+    }
+    return parseOwnership(memoryOwnership);
+  } catch {
+    return parseOwnership(memoryOwnership);
+  }
+}
+
+export function claimOperationOwnership(
+  ownership: Omit<OperationOwnership, "id" | "timestamp"> & {
+    id?: string;
+    timestamp?: number;
+  },
+): OperationOwnership {
+  const id =
+    ownership.id ??
+    (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
+  const record: OperationOwnership = {
+    ...ownership,
+    id,
+    timestamp: ownership.timestamp ?? Date.now(),
+  };
+  const serialized = JSON.stringify(record);
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(ownershipKey, serialized);
+    }
+  } catch {
+    /* browser storage unavailable */
+  }
+  memoryOwnership = serialized;
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    try {
+      window.dispatchEvent(new Event(ownershipEvent));
+    } catch {
+      /* ignore */
+    }
+  }
+  return record;
+}
+
+export function releaseOperationOwnership(id?: string): void {
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (id) {
+        const current = parseOwnership(localStorage.getItem(ownershipKey));
+        if (current && current.id !== id) return;
+      }
+      localStorage.removeItem(ownershipKey);
+    }
+  } catch {
+    /* browser storage unavailable */
+  }
+  if (!id || (memoryOwnership && parseOwnership(memoryOwnership)?.id === id)) {
+    memoryOwnership = null;
+  }
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    try {
+      window.dispatchEvent(new Event(ownershipEvent));
+    } catch {
+      /* ignore */
+    }
+  }
 }

@@ -33,6 +33,7 @@ import {
   type LaneState,
   type LiveQuote,
   type PendingClaim,
+  type SubmissionReconciliation,
   type TransactionPhase,
   type TransactionResult,
 } from "../../contracts";
@@ -45,6 +46,9 @@ import {
   type TradeQuote,
 } from "../../contracts/assets";
 import {
+  claimOperationOwnership,
+  getOperationOwnership,
+  releaseOperationOwnership,
   saveCheckpoint,
   useTransferCheckpoint,
   type TransferCheckpoint,
@@ -371,6 +375,33 @@ export function Bridge() {
     setResult(null);
     setPhase("preparing");
     const sender = wallet.address;
+    const initialRecipient = recipient;
+    const initialAmount = amount;
+    const initialSourceId = source.id;
+    const initialDestination = destination;
+    const initialRoute = route;
+    const ownership = claimOperationOwnership({
+      account: sender,
+      recipient: validateRecipient(recipient),
+      destination,
+      route,
+      bridgeAmount: String(quote.bridge.requestedAmount),
+      stage: quote.conversion ? "conversion" : "bridge",
+    });
+    const isSuperseded = () => {
+      const currentOwner = getOperationOwnership();
+      if (currentOwner?.id !== ownership.id) return true;
+      if (
+        recipient !== initialRecipient ||
+        amount !== initialAmount ||
+        source.id !== initialSourceId ||
+        destination !== initialDestination ||
+        route !== initialRoute
+      ) {
+        return true;
+      }
+      return false;
+    };
     let converted: TransferCheckpoint | null = null;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
       router: TESTNET.router,
@@ -382,6 +413,22 @@ export function Bridge() {
       stage,
       txHash: hash,
     });
+    const conversionReconcile: SubmissionReconciliation = {
+      expectedAccount: sender,
+      getCurrentAccount: () => wallet.address,
+      isSuperseded,
+      onAccountSwitch: (hash) => {
+        saveCheckpoint(pending("conversion", hash));
+      },
+    };
+    const bridgeReconcile: SubmissionReconciliation = {
+      expectedAccount: sender,
+      getCurrentAccount: () => wallet.address,
+      isSuperseded,
+      onAccountSwitch: (hash) => {
+        saveCheckpoint(pending("bridge", hash));
+      },
+    };
     try {
       if (quote.conversion) {
         setStep("conversion");
@@ -393,6 +440,7 @@ export function Bridge() {
             setPhase(next);
             if (hash) saveCheckpoint(pending("conversion", hash));
           },
+          conversionReconcile,
         );
         if (swap.status !== "confirmed") {
           setResult(swap);
@@ -417,6 +465,7 @@ export function Bridge() {
             setResult({ status: "pending", txHash: hash });
           }
         },
+        bridgeReconcile,
       );
       setResult(submitted);
     } catch (cause) {
@@ -424,6 +473,7 @@ export function Bridge() {
       if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(converted);
       setError(message);
     } finally {
+      releaseOperationOwnership(ownership.id);
       setBusy(false);
       setPhase(null);
     }
