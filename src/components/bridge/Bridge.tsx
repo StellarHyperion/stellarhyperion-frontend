@@ -137,7 +137,7 @@ function PendingTransferCard({
         checkpoint.account,
         review,
         checkpoint.recipient,
-        wallet.signTransaction,
+        (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "bridge" }),
         (_phase, hash) => {
           if (hash) saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
         },
@@ -388,7 +388,7 @@ export function Bridge() {
         const swap = await submitConversion(
           wallet.address,
           quote.conversion,
-          wallet.signTransaction,
+          (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "conversion" }),
           (next, hash) => {
             setPhase(next);
             if (hash) saveCheckpoint(pending("conversion", hash));
@@ -409,7 +409,7 @@ export function Bridge() {
         wallet.address,
         quote.bridge,
         recipient,
-        wallet.signTransaction,
+        (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "bridge" }),
         (next, hash) => {
           setPhase(next);
           if (hash) {
@@ -826,7 +826,9 @@ export function ClaimRecovery() {
     setBusy(true);
     setError(null);
     try {
-      const transaction = await submitSettleClaim(wallet.address, claim.id, wallet.signTransaction);
+      const transaction = await submitSettleClaim(wallet.address, claim.id, (xdr, opts) =>
+        wallet.signTransaction(xdr, { ...opts, operation: "claim" }),
+      );
       setResult(transaction);
       if (transaction.status === "confirmed") setClaim(await getClaim(claim.id));
     } catch (cause) {
