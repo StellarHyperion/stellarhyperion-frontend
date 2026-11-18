@@ -83,8 +83,8 @@ describe("Real indexer client", () => {
       "https://indexer.example/v1/metrics",
       expect.objectContaining({ cache: "no-store" }),
     );
-    expect(cursorFreshness(payload.cursors[0], Date.parse("2026-11-18T12:31:00.000Z"))).toBe(
-      "stale",
-    );
+    expect(
+      cursorFreshness(payload.cursors[0] ?? null, Date.parse("2026-11-18T12:31:00.000Z")),
+    ).toBe("stale");
   });
 });

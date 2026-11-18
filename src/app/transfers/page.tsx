@@ -1,16 +1,16 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Column } from "../../components/chrome";
 import {
   fetchIndexerMetrics,
   fetchTransfers,
   cursorFreshness,
-  type FormattedTransfer,
   type IndexerMetrics,
   type TransfersResponse,
 } from "../../api";
 import { TransferList } from "../../components/transfers";
 import { errorMessage } from "../../contracts";
+import { ActivityRequestGuard } from "../../lib/activity-request";
 import { useStellarWallet } from "../../wallets";
 import styles from "./page.module.css";
 
@@ -67,17 +67,34 @@ function ActivityCoverage({
 
 export default function TransfersPage() {
   const { address } = useStellarWallet();
-  const [transfers, setTransfers] = useState<readonly FormattedTransfer[]>([]);
+  return <TransfersPageContent key={address ?? "public"} address={address} />;
+}
+function TransfersPageContent({ address }: { address?: string | null }) {
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<IndexerMetrics | null>(null);
-  const [metricsError, setMetricsError] = useState<string | null>(null);
-  const [response, setResponse] = useState<TransfersResponse | null>(null);
+  const scope = JSON.stringify([address ?? null, search, offset]);
+  const [snapshot, setSnapshot] = useState<{
+    scope: string;
+    response: TransfersResponse | null;
+    metrics: IndexerMetrics | null;
+    metricsError: string | null;
+    error: string | null;
+  } | null>(null);
+  const current = snapshot?.scope === scope ? snapshot : null;
+  const response = current?.response ?? null;
+  const transfers = response?.transfers ?? [];
+  const metrics = current?.metrics ?? null;
+  const metricsError = current?.metricsError ?? null;
+  const error = current?.error ?? null;
+  const pending = loading || current === null;
+  const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
-    let active = true;
+    const guard = requestGuard.current;
+    guard.setIdentity(address ?? null);
+    guard.invalidate();
     const load = async () => {
+      const token = guard.begin();
       try {
         const [historyResult, metricsResult] = await Promise.allSettled([
           fetchTransfers({
@@ -88,25 +105,17 @@ export default function TransfersPage() {
           }),
           fetchIndexerMetrics(),
         ]);
-        if (!active) return;
-        if (historyResult.status === "fulfilled") {
-          setResponse(historyResult.value);
-          setTransfers(historyResult.value.transfers);
-          setError(null);
-        } else {
-          setResponse(null);
-          setError(errorMessage(historyResult.reason));
-          setTransfers([]);
-        }
-        if (metricsResult.status === "fulfilled") {
-          setMetrics(metricsResult.value);
-          setMetricsError(null);
-        } else {
-          setMetrics(null);
-          setMetricsError(errorMessage(metricsResult.reason));
-        }
+        if (!guard.isCurrent(token)) return;
+        setSnapshot({
+          scope,
+          response: historyResult.status === "fulfilled" ? historyResult.value : null,
+          error: historyResult.status === "rejected" ? errorMessage(historyResult.reason) : null,
+          metrics: metricsResult.status === "fulfilled" ? metricsResult.value : null,
+          metricsError:
+            metricsResult.status === "rejected" ? errorMessage(metricsResult.reason) : null,
+        });
       } finally {
-        if (active) setLoading(false);
+        if (guard.isCurrent(token)) setLoading(false);
       }
     };
     const delay = setTimeout(() => {
@@ -115,11 +124,11 @@ export default function TransfersPage() {
     }, 300);
     const timer = setInterval(() => void load(), 10_000);
     return () => {
-      active = false;
+      guard.invalidate();
       clearTimeout(delay);
       clearInterval(timer);
     };
-  }, [address, search, offset]);
+  }, [address, offset, search, scope]);
   return (
     <Column>
       <h1 className="display">Transfer history</h1>
@@ -132,7 +141,7 @@ export default function TransfersPage() {
         Claim numbers appear when a destination router holds funds for recovery. Delivered transfers
         need no claim recovery. Open transfer details to check a claim and its status.
       </p>
-      {(response || metricsError) && (
+      {(response !== null || metricsError !== null) && (
         <ActivityCoverage response={response} metrics={metrics} metricsError={metricsError} />
       )}
       <input
@@ -145,9 +154,8 @@ export default function TransfersPage() {
           setOffset(0);
         }}
       />
-      {error ? (
-        <p role="alert">{error}</p>
-      ) : loading ? (
+      {error && <p role="alert">{error}</p>}
+      {pending && transfers.length === 0 ? (
         <p role="status">Loading indexed transfers...</p>
       ) : (
         <TransferList transfers={transfers} />
@@ -155,7 +163,7 @@ export default function TransfersPage() {
       <div className={styles.filterControls}>
         <button
           type="button"
-          disabled={offset === 0 || loading}
+          disabled={offset === 0 || pending}
           onClick={() => {
             setOffset((value) => Math.max(0, value - 20));
           }}
@@ -165,7 +173,7 @@ export default function TransfersPage() {
         <span>Page {offset / 20 + 1}</span>
         <button
           type="button"
-          disabled={transfers.length < 20 || loading}
+          disabled={transfers.length < 20 || pending}
           onClick={() => {
             setOffset((value) => value + 20);
           }}
