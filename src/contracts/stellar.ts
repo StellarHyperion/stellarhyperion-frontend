@@ -26,8 +26,10 @@ import {
   CIRCLE_STELLAR,
   destinationFor,
   destinationDecimals,
+  supportedLanes,
   type BridgeRoute,
   type DestinationKey,
+  type SupportedLane,
 } from "../config/testnet";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
@@ -210,6 +212,121 @@ async function claimPayoutEligibility(id: bigint, token: string): Promise<ClaimP
       trustline: "unknown",
     };
   }
+}
+
+/** The coarse family a binding limit falls into, used to pick an actionable next step. */
+export type LimitKind =
+  "flow" | "liquidity" | "routeMax" | "paused" | "disabled" | "input" | "other";
+
+/**
+ * Which specific limit blocked a requested transfer, its current value when the router reports
+ * one exactly, and what to actually do about it. Built from the same quote the router returns
+ * before anybody signs, never from a guess at what a contract might be configured with.
+ */
+export interface FlowLimitDiagnostic {
+  /** The Hyperion error name the router attached to this quote, when this build recognizes it. */
+  code: string | null;
+  kind: LimitKind;
+  /** The specific limit that is binding, named for display (e.g. "Axelar ITS flow window to Sepolia"). */
+  limitLabel: string;
+  /** A sentence naming the limit and, where known exactly, its current value. */
+  summary: string;
+  /** The exact amount still available under this limit right now, when the router reports one. */
+  available: bigint | null;
+  /** The amount that was requested and blocked. */
+  requested: bigint;
+  /** A concrete next step: an amount to try, a lane to switch to, or a reason to wait. */
+  nextStep: string;
+  /** Whether the same request could succeed later without any change. */
+  retryable: boolean;
+  /** Other lanes this testnet deployment actually carries to the same destination. */
+  alternateLanes: readonly SupportedLane[];
+}
+
+/** Raised when a live quote reports the transfer is blocked by a specific, binding limit. */
+export class TransferLimitError extends Error {
+  readonly diagnostic: FlowLimitDiagnostic;
+  constructor(diagnostic: FlowLimitDiagnostic) {
+    super(`${diagnostic.summary} ${diagnostic.nextStep}`.trim());
+    this.name = "TransferLimitError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+/**
+ * Turn a blocked `quote_routes` result into a diagnostic naming the binding limit, its exact
+ * value where the contract reports one, and an actionable next step. Pure and offline: it never
+ * queries the chain, so it can be exercised directly against any reason code a router could
+ * return.
+ */
+export function describeBindingLimit(
+  reasonCode: unknown,
+  requested: bigint,
+  flowAvailable: bigint,
+  destinationKey: DestinationKey,
+  route: BridgeRoute,
+): FlowLimitDiagnostic {
+  const destination = destinationFor(destinationKey);
+  const laneLabel = route === 0 ? "Circle CCTP" : "Axelar ITS";
+  const alternateLanes = supportedLanes(destinationKey).filter((lane) => lane.route !== route);
+  const laneSuggestion = alternateLanes.length
+    ? ` ${destination.name} also supports ${alternateLanes.map((lane) => lane.provider).join(" and ")} on this deployment; you can switch routes and try that lane instead.`
+    : "";
+  const name = sorobanErrorName(Number(reasonCode));
+  const help = name ? describeError(name) : null;
+  if (name === "FlowLimitExceeded") {
+    return {
+      code: name,
+      kind: "flow",
+      limitLabel: `${laneLabel} flow window to ${destination.name}`,
+      summary: `The ${laneLabel} lane to ${destination.name} has ${formatUnits(flowAvailable, 7)} USDC left in its current flow window, short of the ${formatUnits(requested, 7)} USDC requested.`,
+      available: flowAvailable,
+      requested,
+      nextStep:
+        flowAvailable > 0n
+          ? `Reduce the amount to ${formatUnits(flowAvailable, 7)} USDC or less, or wait for the window to roll forward and try again.${laneSuggestion}`
+          : `This window is fully used right now. Wait for it to roll forward and try again.${laneSuggestion}`,
+      retryable: true,
+      alternateLanes,
+    };
+  }
+  const kind: LimitKind =
+    name === "InsufficientLiquidity"
+      ? "liquidity"
+      : name === "ExceedsRouteLimit"
+        ? "routeMax"
+        : name === "Paused" || name === "RouteDisabled"
+          ? "paused"
+          : name === "TokenNotRegistered" || name === "TokenNotMapped"
+            ? "disabled"
+            : name === "InvalidAmount" || name === "AmountNotRepresentable"
+              ? "input"
+              : "other";
+  const nextStep =
+    kind === "liquidity"
+      ? `Try a smaller amount, or wait for liquidity on this lane to recover.${laneSuggestion}`
+      : kind === "routeMax"
+        ? `This exceeds the maximum single transfer this route allows. Split it into smaller transfers.${laneSuggestion}`
+        : kind === "paused"
+          ? `This lane is temporarily paused by the operator. Try again shortly.${laneSuggestion}`
+          : kind === "disabled"
+            ? `This asset or route is retired here and will not resume.${laneSuggestion}`
+            : kind === "input"
+              ? "Adjust the requested amount and try again."
+              : help?.retryable
+                ? `Try again shortly.${laneSuggestion}`
+                : `Review the amount or destination and try again.${laneSuggestion}`;
+  return {
+    code: name,
+    kind,
+    limitLabel: name ?? "Unrecognized limit",
+    summary: help ? `${name}: ${help.summary}` : "The router declined this amount.",
+    available: null,
+    requested,
+    nextStep,
+    retryable: help?.retryable ?? false,
+    alternateLanes,
+  };
 }
 
 function server() {
@@ -558,9 +675,14 @@ export async function quoteTransfer(
   const quote = response.value.map(object).find((q) => q.route === route);
   if (!quote) throw new Error("The router did not quote this bridge.");
   if (quote.available !== true) {
-    const name = sorobanErrorName(Number(quote.reason));
-    throw new Error(
-      name ? `${name}: ${describeError(name).summary}` : "The router declined this amount.",
+    throw new TransferLimitError(
+      describeBindingLimit(
+        quote.reason,
+        amount,
+        integer(quote.flow_available),
+        destinationKey,
+        route,
+      ),
     );
   }
   const feeResponse = await readWithRetry(async () => {

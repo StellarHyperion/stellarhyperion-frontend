@@ -34,7 +34,9 @@ import {
   submitBridgeOut,
   submitSettleClaim,
   submitSettleClaims,
+  TransferLimitError,
   validateRecipient,
+  type FlowLimitDiagnostic,
   type LaneState,
   type LiveQuote,
   type PendingClaim,
@@ -573,6 +575,7 @@ export function Bridge() {
     key: string;
     value: TradeQuote | null;
     error: string | null;
+    diagnostic: FlowLimitDiagnostic | null;
   } | null>(null);
   const [accounts, setAccounts] = useState<{
     account: string;
@@ -601,6 +604,7 @@ export function Bridge() {
   const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
   const quote = quoted?.key === quoteKey && lane?.available ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
+  const quoteDiagnostic = quoted?.key === quoteKey ? quoted.diagnostic : null;
   const simKey = `${quoteKey}:${wallet.address}`;
   const simulation = simulatedState?.key === simKey ? simulatedState.value : null;
   const simulationError = simulatedState?.key === simKey ? simulatedState.error : null;
@@ -778,10 +782,16 @@ export function Bridge() {
     const timer = setTimeout(() => {
       void quoteTrade(destination, activeSource, amount, route)
         .then((value) => {
-          if (active) setQuoted({ key: quoteKey, value, error: null });
+          if (active) setQuoted({ key: quoteKey, value, error: null, diagnostic: null });
         })
         .catch((cause: unknown) => {
-          if (active) setQuoted({ key: quoteKey, value: null, error: errorMessage(cause) });
+          if (active)
+            setQuoted({
+              key: quoteKey,
+              value: null,
+              error: errorMessage(cause),
+              diagnostic: cause instanceof TransferLimitError ? cause.diagnostic : null,
+            });
         });
     }, 400);
     return () => {
@@ -1211,10 +1221,18 @@ export function Bridge() {
             </p>
           )
         )}
-        {(error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
-          <p role="alert" className={styles.error}>
-            {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
-          </p>
+        {!error && !wallet.error && quoteError && quoteDiagnostic ? (
+          <div role="alert" className={styles.limitDiagnostic}>
+            <strong>{quoteDiagnostic.limitLabel}</strong>
+            <span>{quoteDiagnostic.summary}</span>
+            <span>{quoteDiagnostic.nextStep}</span>
+          </div>
+        ) : (
+          (error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
+            <p role="alert" className={styles.error}>
+              {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
+            </p>
+          )
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>

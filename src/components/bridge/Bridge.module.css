@@ -495,6 +495,18 @@
   color: var(--state-failed);
   overflow-wrap: anywhere;
 }
+.limitDiagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--state-failed);
+  overflow-wrap: anywhere;
+}
+.limitDiagnostic strong {
+  color: var(--text-primary);
+}
 .progress {
   display: flex;
   align-items: center;
