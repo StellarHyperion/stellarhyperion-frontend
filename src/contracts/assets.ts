@@ -14,15 +14,46 @@ export interface SourceAsset {
   id: string;
   code: string;
   issuer: string | null;
+  verification: AssetVerification;
+  trustline: TrustlineState;
   balance?: string;
 }
-export const XLM: SourceAsset = { id: "native", code: "XLM", issuer: null };
+export type AssetVerification =
+  "configured" | "wallet-trustline" | "horizon-search" | "horizon-path";
+export type TrustlineState = "native" | "present" | "not-checked";
+
+export const XLM: SourceAsset = {
+  id: "native",
+  code: "XLM",
+  issuer: null,
+  verification: "configured",
+  trustline: "native",
+};
 export const USDC: SourceAsset = {
   id: `${TESTNET.usdcCode}:${TESTNET.usdcIssuer}`,
   code: TESTNET.usdcCode,
   issuer: TESTNET.usdcIssuer,
+  verification: "configured",
+  trustline: "not-checked",
 };
 export const SLIPPAGE_BPS = 50n;
+
+export function issuerVerificationLabel(asset: SourceAsset): string {
+  if (!asset.issuer) return "Native Stellar asset; no issuer";
+  if (asset.verification === "configured") return "Issuer matches the configured testnet asset";
+  return "Issuer metadata supplied by Horizon; verify before signing";
+}
+
+export function trustlineLabel(asset: SourceAsset): string {
+  switch (asset.trustline) {
+    case "native":
+      return "Native balance";
+    case "present":
+      return "Wallet trustline present";
+    default:
+      return "Trustline not checked for this asset";
+  }
+}
 
 export function stellarAsset(asset: SourceAsset): Asset {
   if (asset.id === "native" && asset.issuer === null && asset.code === "XLM") return Asset.native();
@@ -74,10 +105,12 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
       typeof entry.asset_issuer !== "string"
     )
       return [];
-    const asset = {
+    const asset: SourceAsset = {
       id: `${entry.asset_code}:${entry.asset_issuer}`,
       code: entry.asset_code,
       issuer: entry.asset_issuer,
+      verification: "wallet-trustline",
+      trustline: "present",
       balance: entry.balance,
     };
     stellarAsset(asset);
@@ -96,10 +129,12 @@ export async function searchAssets(query: string, signal?: AbortSignal): Promise
   const body = await horizon(`/assets?${params}`, signal);
   return records(body).flatMap((entry) => {
     if (typeof entry.asset_code !== "string" || typeof entry.asset_issuer !== "string") return [];
-    const asset = {
+    const asset: SourceAsset = {
       id: `${entry.asset_code}:${entry.asset_issuer}`,
       code: entry.asset_code,
       issuer: entry.asset_issuer,
+      verification: "horizon-search",
+      trustline: "not-checked",
     };
     stellarAsset(asset);
     return [asset];
@@ -148,10 +183,12 @@ export async function quoteConversion(source: SourceAsset, amount: bigint): Prom
         if (item.asset_type === "native") return XLM;
         if (typeof item.asset_code !== "string" || typeof item.asset_issuer !== "string")
           throw new Error("Invalid Stellar path asset.");
-        const token = {
+        const token: SourceAsset = {
           id: `${item.asset_code}:${item.asset_issuer}`,
           code: item.asset_code,
           issuer: item.asset_issuer,
+          verification: "horizon-path",
+          trustline: "not-checked",
         };
         stellarAsset(token);
         return token;
