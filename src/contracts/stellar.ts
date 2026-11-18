@@ -32,6 +32,36 @@ import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
+export const TRANSACTION_TIMEOUT_SECONDS = 180;
+
+export interface TransactionDeadline {
+  readonly minTime: number;
+  readonly maxTime: number;
+  readonly remainingSeconds: number;
+  readonly expired: boolean;
+}
+
+export function transactionDeadline(
+  transaction: unknown,
+  now = Math.floor(Date.now() / 1000),
+): TransactionDeadline {
+  const value = transaction as {
+    timeBounds?: { minTime: string; maxTime: string };
+    innerTransaction?: { timeBounds?: { minTime: string; maxTime: string } };
+  };
+  const bounds = value.timeBounds ?? value.innerTransaction?.timeBounds;
+  if (!bounds) throw new Error("The transaction has no envelope time bounds.");
+  const minTime = Number(bounds.minTime);
+  const maxTime = Number(bounds.maxTime);
+  if (!Number.isSafeInteger(minTime) || !Number.isSafeInteger(maxTime) || maxTime <= minTime)
+    throw new Error("The transaction has invalid envelope time bounds.");
+  return {
+    minTime,
+    maxTime,
+    remainingSeconds: Math.max(0, maxTime - now),
+    expired: now >= maxTime,
+  };
+}
 
 export type WalletSigner = (
   xdr: string,
@@ -550,7 +580,7 @@ async function submitOperation(
     networkPassphrase: TESTNET.networkPassphrase,
   })
     .addOperation(operation)
-    .setTimeout(180)
+    .setTimeout(TRANSACTION_TIMEOUT_SECONDS)
     .build();
   const simulation = await client.simulateTransaction(transaction);
   if (!rpc.Api.isSimulationSuccess(simulation)) {
@@ -580,7 +610,12 @@ export async function submitClassicOperations(
     networkPassphrase: TESTNET.networkPassphrase,
   });
   for (const operation of operations) builder.addOperation(operation);
-  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval);
+  return signAndSubmit(
+    builder.setTimeout(TRANSACTION_TIMEOUT_SECONDS).build(),
+    sign,
+    progress,
+    approval,
+  );
 }
 
 async function signAndSubmit(
@@ -591,6 +626,8 @@ async function signAndSubmit(
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("signing");
+  if (transactionDeadline(prepared).expired)
+    throw new Error("The signed transaction envelope has expired. Review again.");
   const signOptions = { networkPassphrase: TESTNET.networkPassphrase };
   const signed = await sign(
     prepared.toXdr(),
@@ -603,6 +640,8 @@ async function signAndSubmit(
   if (toHex(signedTransaction.hash()) !== toHex(prepared.hash())) {
     throw new Error("The wallet returned a different transaction. Nothing was submitted.");
   }
+  if (transactionDeadline(signedTransaction).expired)
+    throw new Error("The signed transaction envelope expired before broadcast. Nothing was submitted.");
   const hash = toHex(prepared.hash()).slice(2);
   progress?.("submitting", hash);
   try {

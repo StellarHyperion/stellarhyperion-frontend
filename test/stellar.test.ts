@@ -5,6 +5,7 @@ import {
   claimMatchesDeployment,
   parseSendAmount,
   readTransaction,
+  transactionDeadline,
   validateRecipient,
   verifyRouterDeployment,
   type LiveQuote,
@@ -25,6 +26,19 @@ const quote: LiveQuote = {
 };
 afterEach(() => vi.unstubAllGlobals());
 describe("Real Stellar transaction encoding", () => {
+  it("diagnoses expired envelope bounds before broadcast", () => {
+    const transaction = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    })
+      .addOperation(new Contract(TESTNET.router).call("noop"))
+      .setTimeout(60)
+      .build();
+    const maxTime = Number(transaction.timeBounds?.maxTime ?? 0);
+    const deadline = transactionDeadline(transaction, maxTime + 1);
+    expect(deadline.expired).toBe(true);
+    expect(deadline.remainingSeconds).toBe(0);
+  });
   it("only offers recovery for a claim carrying the verified deployment identity", () => {
     const deployment = {
       chain: STELLAR_DEPLOYMENT.chain,
