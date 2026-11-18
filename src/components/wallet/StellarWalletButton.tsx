@@ -2,13 +2,26 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useStellarWallet } from "../../wallets/stellar";
+import { STELLAR_WALLETS } from "../../wallets/stellar/sdk";
 import styles from "./StellarWalletButton.module.css";
 
 export function StellarWalletButton() {
-  const { isConnected, isConnecting, shortAddress, address, error, connect, disconnect } =
-    useStellarWallet();
+  const {
+    isConnected,
+    isConnecting,
+    shortAddress,
+    address,
+    error,
+    rememberedWallet,
+    preferenceError,
+    connect,
+    disconnect,
+    clearRememberedWallet,
+  } = useStellarWallet();
   const [menuOpen, setMenuOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rememberedWalletName =
+    STELLAR_WALLETS.find((wallet) => wallet.id === rememberedWallet)?.name ?? null;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -26,18 +39,41 @@ export function StellarWalletButton() {
 
   if (!isConnected) {
     return (
-      <button
-        type="button"
-        className={styles.button}
-        onClick={() => {
-          void connect();
-        }}
-        disabled={isConnecting}
-      >
-        <span className={styles.dot} />
-        <span>{isConnecting ? "connecting..." : "connect stellar"}</span>
-        {error && <span role="alert">{error}</span>}
-      </button>
+      <div className={styles.disconnected}>
+        <button
+          type="button"
+          className={styles.button}
+          onClick={() => {
+            void connect();
+          }}
+          disabled={isConnecting}
+        >
+          <span className={styles.dot} />
+          <span>{isConnecting ? "connecting..." : "connect stellar"}</span>
+          {error && <span role="alert">{error}</span>}
+        </button>
+        {(rememberedWalletName || preferenceError) && (
+          <div className={styles.preference}>
+            <span className={styles.addressLabel}>
+              Remembered wallet: {rememberedWalletName ?? "unavailable"}
+            </span>
+            {(rememberedWallet || preferenceError) && (
+              <button
+                type="button"
+                className={styles.preferenceBtn}
+                onClick={clearRememberedWallet}
+              >
+                clear saved preference
+              </button>
+            )}
+            {preferenceError && (
+              <p role="alert" className={styles.preferenceError}>
+                {preferenceError}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -57,11 +93,35 @@ export function StellarWalletButton() {
         <span className={styles.network}>(testnet)</span>
       </button>
 
+      {preferenceError && !menuOpen && (
+        <p role="alert" className={styles.preferenceNotice}>
+          {preferenceError}
+        </p>
+      )}
       {menuOpen && (
         <div className={styles.menu} role="menu">
           <div className={styles.addressRow}>
             <span className={styles.addressLabel}>stellar account</span>
             <span className={styles.fullAddress}>{address}</span>
+          </div>
+          <div className={styles.preference}>
+            <span className={styles.addressLabel}>
+              Remembered wallet: {rememberedWalletName ?? "none"}
+            </span>
+            {(rememberedWallet || preferenceError) && (
+              <button
+                type="button"
+                className={styles.preferenceBtn}
+                onClick={clearRememberedWallet}
+              >
+                clear saved preference
+              </button>
+            )}
+            {preferenceError && (
+              <p role="alert" className={styles.preferenceError}>
+                {preferenceError}
+              </p>
+            )}
           </div>
           <button
             type="button"

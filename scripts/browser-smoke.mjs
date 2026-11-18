@@ -13,6 +13,12 @@ const browser = await { chromium, firefox }[engine].launch(
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const errors = [];
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("wallet-preference-smoke-seeded")) return;
+    sessionStorage.setItem("wallet-preference-smoke-seeded", "true");
+    localStorage.setItem("hyperion.stellar.walletId", "albedo");
+    localStorage.setItem("hyperion.testnet.pending-transfer", "unresolved-checkpoint");
+  });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
@@ -24,6 +30,17 @@ try {
   assert.equal(await themeToggle.getAttribute("aria-pressed"), "true");
   assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
   assert.equal(await page.getByRole("button", { name: "Toggle dark theme" }).count(), 1);
+  await page.getByText("Remembered wallet: Albedo").waitFor();
+  assert.equal(await page.getByRole("dialog", { name: "Connect a Stellar wallet" }).count(), 0);
+  await page.getByRole("button", { name: "clear saved preference" }).click();
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("hyperion.stellar.walletId")),
+    null,
+  );
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
+    "unresolved-checkpoint",
+  );
   await page.getByRole("button", { name: "Choose source token", exact: true }).click();
   await page.getByRole("dialog", { name: "Choose a token" }).waitFor();
   await page.getByLabel("Search Stellar assets").waitFor();

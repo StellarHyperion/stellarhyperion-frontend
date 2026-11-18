@@ -21,31 +21,22 @@ import {
   walletSign,
   type StellarWalletId,
 } from "./sdk";
+import {
+  isRecognizedWalletPreference,
+  readWalletPreference,
+  saveWalletPreference,
+} from "./preference";
 import styles from "./WalletPicker.module.css";
 
-const WALLET_KEY = "hyperion.stellar.walletId";
-function readSavedWallet(): string | null {
-  try {
-    return localStorage.getItem(WALLET_KEY);
-  } catch {
-    return null;
-  }
-}
-function saveWallet(id: string | null) {
-  try {
-    if (id) localStorage.setItem(WALLET_KEY, id);
-    else localStorage.removeItem(WALLET_KEY);
-  } catch {
-    /* Wallet access still works without browser storage. */
-  }
-}
 const Context = createContext<StellarWalletContextValue | null>(null);
 
 export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
   const [walletId, setWalletId] = useState<StellarWalletId | null>(null);
+  const [rememberedWallet, setRememberedWallet] = useState<StellarWalletId | null>(null);
   const [isConnecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preferenceError, setPreferenceError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [authorizing, setAuthorizing] = useState<StellarWalletId | null>(null);
   const pending = useRef<((address: string | null) => void) | null>(null);
@@ -54,7 +45,17 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     const version = attempt.current;
-    const saved = readSavedWallet();
+    const preference = readWalletPreference();
+    const saved = preference.id;
+    if (active) {
+      setRememberedWallet(isWalletId(saved) ? saved : null);
+      setPreferenceError(
+        preference.error ??
+          (!isRecognizedWalletPreference(saved)
+            ? "The saved wallet preference is not recognized. Clear it before connecting."
+            : null),
+      );
+    }
     // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
     if (isWalletId(saved) && saved === "freighter")
       void walletAddress(saved, false)
@@ -103,7 +104,12 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       if (attempt.current !== version) return;
       setAddress(value);
       setWalletId(id);
-      saveWallet(id);
+      const storageError = saveWalletPreference(id);
+      if (storageError) setPreferenceError(storageError);
+      else {
+        setRememberedWallet(id);
+        setPreferenceError(null);
+      }
       pending.current(value);
       pending.current = null;
       setPickerOpen(false);
@@ -120,9 +126,24 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     closePicker();
     setAddress(null);
     setWalletId(null);
-    saveWallet(null);
+    const storageError = saveWalletPreference(null);
+    if (storageError) setPreferenceError(storageError);
+    else {
+      setRememberedWallet(null);
+      setPreferenceError(null);
+    }
     return Promise.resolve();
   }, [closePicker]);
+
+  const clearRememberedWallet = useCallback(() => {
+    const storageError = saveWalletPreference(null);
+    if (storageError) {
+      setPreferenceError(storageError);
+      return;
+    }
+    setRememberedWallet(null);
+    setPreferenceError(null);
+  }, []);
 
   const signTransaction = useCallback(
     async (transaction: string, opts?: { networkPassphrase?: string }) => {
@@ -141,11 +162,24 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       isConnected: address !== null,
       isConnecting,
       error,
+      rememberedWallet,
+      preferenceError,
       connect,
       disconnect,
+      clearRememberedWallet,
       signTransaction,
     }),
-    [address, isConnecting, error, connect, disconnect, signTransaction],
+    [
+      address,
+      isConnecting,
+      error,
+      rememberedWallet,
+      preferenceError,
+      connect,
+      disconnect,
+      clearRememberedWallet,
+      signTransaction,
+    ],
   );
   return (
     <Context.Provider value={value}>
