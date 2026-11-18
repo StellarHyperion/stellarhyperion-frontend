@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import {
   TESTNET,
@@ -26,7 +26,7 @@ import {
   getClaim,
   quoteTransfer,
   readLane,
-  readTransaction,
+  resolveCheckpointTransaction,
   submitBridgeOut,
   submitSettleClaim,
   validateRecipient,
@@ -40,10 +40,12 @@ import {
   USDC,
   accountAssets,
   quoteTrade,
+  requireRecoveredUsdc,
   submitConversion,
   type SourceAsset,
   type TradeQuote,
 } from "../../contracts/assets";
+import type { CheckpointRecoveryResult } from "../../contracts/stellar";
 import {
   saveCheckpoint,
   useTransferCheckpoint,
@@ -119,9 +121,14 @@ function PendingTransferCard({
 }) {
   const wallet = useStellarWallet();
   const [checking, setChecking] = useState(false);
-  const [checked, setChecked] = useState<TransactionResult | null>(null);
+  const [checked, setChecked] = useState<
+    (CheckpointRecoveryResult & { txHash: string }) | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<LiveQuote | null>(null);
+  const requestId = useRef(0);
+  const requestController = useRef<AbortController | null>(null);
+  const submittedHash = useRef<string | null>(null);
   const current =
     checked?.txHash === checkpoint.txHash
       ? checked
@@ -129,65 +136,132 @@ function PendingTransferCard({
         ? latest
         : null;
   const sameAccount = wallet.address === checkpoint.account;
+  useEffect(() => {
+    if (submittedHash.current === checkpoint.txHash) {
+      submittedHash.current = null;
+      return;
+    }
+    requestId.current += 1;
+    requestController.current?.abort();
+    requestController.current = null;
+    setChecking(false);
+    setChecked(null);
+    setReview(null);
+    setError(null);
+  }, [checkpoint.txHash, checkpoint.account, wallet.address]);
+  useEffect(() => {
+    return () => {
+      requestId.current += 1;
+      requestController.current?.abort();
+    };
+  }, []);
   const check = async () => {
-    if (checking || busy) return;
+    if (checking || busy || review || requestController.current) return;
+    requestController.current?.abort();
+    const controller = new AbortController();
+    requestController.current = controller;
+    const id = ++requestId.current;
+    const isCurrentRequest = () =>
+      requestId.current === id && !controller.signal.aborted;
     setChecking(true);
     setError(null);
     try {
-      const result = await readTransaction(checkpoint.txHash);
-      setChecked(result);
-      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount)
-        setReview(
-          await quoteTransfer(
-            checkpoint.destination,
-            BigInt(checkpoint.bridgeAmount),
-            checkpoint.route,
-          ),
-        );
+      const outcome = await resolveCheckpointTransaction(checkpoint, controller.signal);
+      if (!isCurrentRequest()) return;
+      setChecked({ ...outcome, txHash: checkpoint.txHash });
+      if (outcome.status === "unknown") {
+        setError(outcome.message);
+        return;
+      }
+      if (outcome.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+        const amount = BigInt(checkpoint.bridgeAmount);
+        await requireRecoveredUsdc(checkpoint.account, amount, controller.signal);
+        if (!isCurrentRequest()) return;
+        const freshReview = await quoteTransfer(checkpoint.destination, amount, checkpoint.route);
+        if (!isCurrentRequest()) return;
+        setReview(freshReview);
+      }
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (isCurrentRequest()) setError(errorMessage(cause));
     } finally {
-      setChecking(false);
+      if (isCurrentRequest()) {
+        requestController.current = null;
+        setChecking(false);
+      }
     }
   };
   const continueBridge = async () => {
-    if (!review || !sameAccount || checking) return;
+    if (!review || !sameAccount || checking || busy || requestController.current) return;
+    requestController.current?.abort();
+    const controller = new AbortController();
+    requestController.current = controller;
+    const id = ++requestId.current;
+    const isCurrentRequest = () =>
+      requestId.current === id && !controller.signal.aborted;
     setChecking(true);
     setError(null);
     try {
+      await requireRecoveredUsdc(
+        checkpoint.account,
+        BigInt(checkpoint.bridgeAmount),
+        controller.signal,
+      );
+      if (!isCurrentRequest()) return;
       const result = await submitBridgeOut(
         checkpoint.account,
         review,
         checkpoint.recipient,
         wallet.signTransaction,
         (_phase, hash) => {
-          if (hash) saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
+          if (hash && isCurrentRequest()) {
+            submittedHash.current = hash;
+            saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
+          }
         },
       );
-      setChecked(result);
-      setReview(null);
+      if (isCurrentRequest()) {
+        setChecked(
+          result.status === "pending"
+            ? null
+            : {
+                status: result.status,
+                source: "rpc",
+                message: `The transaction is ${result.status} on Stellar Testnet.`,
+                txHash: result.txHash,
+              },
+        );
+        setReview(null);
+      }
     } catch (cause) {
       const message = errorMessage(cause);
-      if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
-      setError(message);
+      if (isCurrentRequest()) {
+        if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
+        setError(message);
+      }
     } finally {
-      setChecking(false);
+      if (isCurrentRequest()) {
+        requestController.current = null;
+        setChecking(false);
+      }
     }
   };
+  const currentStatus = current?.status;
   return (
-    <section className={styles.pending} aria-label="Transfer recovery">
+    <section className={styles.pending} aria-label="Transfer recovery" aria-busy={checking}>
       <div className={styles.pendingTitle}>
         <ShieldCheck size={18} aria-hidden="true" />
         <h2>
-          {current?.status === "failed"
-            ? "Transaction failed on Stellar"
-            : checkpoint.stage === "conversion"
-              ? current?.status === "confirmed"
-                ? "Conversion confirmed"
-                : "Conversion submitted"
-              : current?.status === "confirmed"
-                ? "Transfer confirmed on Stellar"
-                : "Transfer submitted"}
+          {currentStatus === "unknown"
+            ? "Transaction outcome unknown"
+            : currentStatus === "failed"
+              ? "Transaction failed on Stellar"
+              : checkpoint.stage === "conversion"
+                ? currentStatus === "confirmed"
+                  ? "Conversion confirmed"
+                  : "Conversion submitted"
+                : currentStatus === "confirmed"
+                  ? "Transfer source confirmed on Stellar"
+                  : "Transfer submitted"}
         </h2>
       </div>
       <p>
@@ -215,18 +289,33 @@ function PendingTransferCard({
           this transfer.
         </p>
       )}
+      {checking && (
+        <p role="status" aria-live="polite">
+          Checking Stellar RPC and Testnet transaction history...
+        </p>
+      )}
+      {checked?.txHash === checkpoint.txHash && checked.status !== "unknown" && (
+        <p role="status" aria-live="polite">
+          {checked.message}
+        </p>
+      )}
+      {checked?.txHash === checkpoint.txHash && checked.status === "unknown" && (
+        <p role="status" aria-live="polite">
+          The transaction outcome is still unknown. The saved checkpoint has been kept.
+        </p>
+      )}
       {error && (
         <p role="alert" className={styles.error}>
           {error}
         </p>
       )}
-      {current?.status === "failed" ||
-      (checkpoint.stage === "bridge" && current?.status === "confirmed") ? (
+      {currentStatus === "failed" ||
+      (checkpoint.stage === "bridge" && currentStatus === "confirmed") ? (
         <button
           type="button"
           className={styles.secondary}
           onClick={onReset}
-          disabled={busy || checking}
+          disabled={busy || checking || !!review}
         >
           Start another transfer
         </button>
