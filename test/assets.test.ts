@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Account, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Account, Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
 import {
   quoteConversion,
+  conversionExecutionIntent,
+  conversionRoute,
   conversionOperations,
   searchAssets,
   stellarAsset,
@@ -53,6 +55,43 @@ describe("Real Stellar conversion transaction boundaries", () => {
     expect(payment.destAmount).toBe("0.8955000");
     expect(payment.destination).toBe(TESTNET.reader);
     expect(payment.destAsset.getIssuer()).toBe(USDC.issuer);
+  });
+  it("exposes the exact route and execution intent used to assemble the transaction", () => {
+    const issuer = Keypair.random().publicKey();
+    const intermediate = { id: `USD:${issuer}`, code: "USD", issuer };
+    const conversion = {
+      source: XLM,
+      sourceMax: 10000000n,
+      usdcAmount: 8955000n,
+      path: [intermediate],
+    };
+    const intent = conversionExecutionIntent(conversion, true);
+    expect(intent).toMatchObject({
+      operation: "pathPaymentStrictReceive",
+      sourceMax: 10000000n,
+      destinationAmount: 8955000n,
+      addTrustline: true,
+      path: [intermediate],
+    });
+    expect(conversionRoute(conversion)).toEqual([XLM, intermediate, USDC]);
+    const operations = conversionOperations(TESTNET.reader, conversion, true);
+    expect(operations).toHaveLength(2);
+    const tx = new TransactionBuilder(new Account(TESTNET.reader, "1"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    });
+    for (const operation of operations) tx.addOperation(operation);
+    const decoded = TransactionBuilder.fromXdr(
+      tx.setTimeout(60).build().toXdr(),
+      TESTNET.networkPassphrase,
+    );
+    const payment = decoded.operations[1];
+    if (payment?.type !== "pathPaymentStrictReceive")
+      throw new Error("Missing conversion operation.");
+    expect(payment.sendMax).toBe("1.0000000");
+    expect(payment.destAmount).toBe("0.8955000");
+    expect(payment.path).toHaveLength(1);
+    expect(payment.path[0]?.getIssuer()).toBe(issuer);
   });
   it("never invents a route when liquidity or the canonical receiving asset is absent", async () => {
     answer([]);

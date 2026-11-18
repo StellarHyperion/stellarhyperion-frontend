@@ -112,6 +112,39 @@ export interface Conversion {
   usdcAmount: bigint;
   path: SourceAsset[];
 }
+export interface ConversionExecutionIntent {
+  operation: "pathPaymentStrictReceive";
+  source: SourceAsset;
+  sourceMax: bigint;
+  destination: SourceAsset;
+  destinationAmount: bigint;
+  path: SourceAsset[];
+  addTrustline: boolean;
+}
+
+export function conversionRoute(conversion: Conversion): SourceAsset[] {
+  return [conversion.source, ...conversion.path, USDC];
+}
+
+export function conversionExecutionIntent(
+  conversion: Conversion,
+  addTrustline: boolean,
+): ConversionExecutionIntent {
+  if (conversion.sourceMax <= 0n || conversion.usdcAmount <= 0n || conversion.path.length > 5)
+    throw new Error("Invalid conversion quote.");
+  stellarAsset(conversion.source);
+  conversion.path.forEach(stellarAsset);
+  stellarAsset(USDC);
+  return {
+    operation: "pathPaymentStrictReceive",
+    source: conversion.source,
+    sourceMax: conversion.sourceMax,
+    destination: USDC,
+    destinationAmount: conversion.usdcAmount,
+    path: conversion.path,
+    addTrustline,
+  };
+}
 export interface TradeQuote {
   source: SourceAsset;
   sourceAmount: bigint;
@@ -187,18 +220,17 @@ export function conversionOperations(
   conversion: Conversion,
   addTrustline: boolean,
 ): xdr.Operation[] {
-  if (conversion.sourceMax <= 0n || conversion.usdcAmount <= 0n || conversion.path.length > 5)
-    throw new Error("Invalid conversion quote.");
+  const intent = conversionExecutionIntent(conversion, addTrustline);
   const operations: xdr.Operation[] = [];
-  if (addTrustline) operations.push(Operation.changeTrust({ asset: stellarAsset(USDC) }));
+  if (intent.addTrustline) operations.push(Operation.changeTrust({ asset: stellarAsset(USDC) }));
   operations.push(
     Operation.pathPaymentStrictReceive({
-      sendAsset: stellarAsset(conversion.source),
-      sendMax: formatUnits(conversion.sourceMax, 7),
+      sendAsset: stellarAsset(intent.source),
+      sendMax: formatUnits(intent.sourceMax, 7),
       destination: sender,
-      destAsset: stellarAsset(USDC),
-      destAmount: formatUnits(conversion.usdcAmount, 7),
-      path: conversion.path.map(stellarAsset),
+      destAsset: stellarAsset(intent.destination),
+      destAmount: formatUnits(intent.destinationAmount, 7),
+      path: intent.path.map(stellarAsset),
     }),
   );
   return operations;
