@@ -10,7 +10,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
 import { submitSettleClaim } from "../src/contracts/stellar";
-import { TESTNET } from "../src/config/testnet";
+import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 
 // Deterministic test-only signer; this test never connects to a network.
 const key = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(7));
@@ -32,6 +32,15 @@ function setup() {
   vi.spyOn(rpc.Server.prototype, "getContractMethods").mockResolvedValue([
     { name: "preview_settle_claim", inputs: [], outputs: [] },
   ]);
+  vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
+    executable: {
+      type: "contractExecutableWasm",
+      wasmHash: Uint8Array.from({ length: 32 }, (_, index) =>
+        parseInt(STELLAR_DEPLOYMENT.wasmHash.slice(index * 2, index * 2 + 2), 16),
+      ),
+    },
+    storage: null,
+  } as never);
   const simulation = vi.spyOn(rpc.Server.prototype, "simulateTransaction");
   simulation.mockResolvedValueOnce(
     success(
