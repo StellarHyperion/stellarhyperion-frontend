@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import {
   TESTNET,
@@ -44,7 +44,9 @@ import {
   conversionExecutionIntent,
   conversionRoute,
   quoteTrade,
+  spendableBalance,
   submitConversion,
+  suggestSourceSpend,
   trustlineLabel,
   type Conversion,
   type SourceAsset,
@@ -368,9 +370,14 @@ export function Bridge() {
   const quote = quoted?.key === quoteKey && lane?.available ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
   const balances = accounts?.account === wallet.address ? accounts.assets : [];
+  const walletAsset = balances.find((asset) => asset.id === source.id);
+  const activeSource: SourceAsset = useMemo(
+    () => (walletAsset ? { ...source, ...walletAsset } : source),
+    [source, walletAsset],
+  );
   const sourceBalance =
     accounts?.account === wallet.address && !accounts.error
-      ? (balances.find((asset) => asset.id === source.id)?.balance ?? "0")
+      ? (walletAsset?.balance ?? "0")
       : undefined;
   const liveReview = useRef({
     account: wallet.address,
@@ -390,6 +397,12 @@ export function Bridge() {
       route,
     };
   }, [wallet.address, recipient, amount, source.id, destination, route]);
+  const spendableStr =
+    accounts?.account === wallet.address && !accounts.error && walletAsset
+      ? spendableBalance(walletAsset)
+      : sourceBalance;
+  const spendableUnits = spendableStr !== undefined ? parseUnits(spendableStr, 7) : undefined;
+
   const locked = busy || checkpoint !== null;
   let inputError: string | null = null;
   let valid = false;
@@ -445,7 +458,7 @@ export function Bridge() {
     if (!valid || !lane?.available || locked) return;
     let active = true;
     const timer = setTimeout(() => {
-      void quoteTrade(destination, source, amount, route)
+      void quoteTrade(destination, activeSource, amount, route)
         .then((value) => {
           if (active) setQuoted({ key: quoteKey, value, error: null });
         })
@@ -457,7 +470,7 @@ export function Bridge() {
       active = false;
       clearTimeout(timer);
     };
-  }, [valid, lane, locked, destination, source, amount, route, quoteKey]);
+  }, [valid, lane, locked, destination, activeSource, amount, route, quoteKey]);
   const submit = async () => {
     if (!reviewed || !wallet.address || busy || checkpoint) return;
     if (reviewApproval?.account !== wallet.address) {
@@ -602,8 +615,7 @@ export function Bridge() {
     setAmount("");
     setRefresh((value) => value + 1);
   };
-  const insufficient =
-    quote && sourceBalance !== undefined && parseUnits(sourceBalance, 7) < quote.sourceAmount;
+  const insufficient = quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
   return (
     <>
       {checkpoint && (
@@ -649,6 +661,24 @@ export function Bridge() {
                 setError(null);
               }}
             />
+            {wallet.address && walletAsset && source.id !== "native" && (
+              <button
+                type="button"
+                className={styles.maxSpend}
+                aria-label="Use spendable balance"
+                disabled={
+                  locked ||
+                  activeSource.trustline === "frozen" ||
+                  activeSource.trustline === "unauthorized"
+                }
+                onClick={() => {
+                  setAmount(suggestSourceSpend(activeSource));
+                  setError(null);
+                }}
+              >
+                Max
+              </button>
+            )}
             <button
               type="button"
               className={styles.tokenSelector}
@@ -666,12 +696,15 @@ export function Bridge() {
           <p className={styles.balance}>
             {wallet.address
               ? sourceBalance !== undefined
-                ? `Balance: ${sourceBalance} ${source.code}`
+                ? walletAsset?.sellingLiabilities &&
+                  parseUnits(walletAsset.sellingLiabilities, 7) > 0n
+                  ? `Balance: ${sourceBalance} ${source.code} (Spendable: ${spendableBalance(walletAsset)} ${source.code})`
+                  : `Balance: ${sourceBalance} ${source.code}`
                 : (accounts?.error ?? "Reading your balance...")
               : "Choose any liquid Stellar asset"}
           </p>
           <p className={styles.balance}>
-            {issuerVerificationLabel(source)}. {trustlineLabel(source)}.
+            {issuerVerificationLabel(activeSource)}. {trustlineLabel(activeSource)}.
           </p>
           {source.issuer && source.id !== USDC.id && (
             <a
@@ -822,7 +855,9 @@ export function Bridge() {
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>
-            Your {source.code} balance is lower than this amount.
+            {walletAsset?.sellingLiabilities && parseUnits(walletAsset.sellingLiabilities, 7) > 0n
+              ? `Your spendable ${source.code} balance (${spendableBalance(walletAsset)} ${source.code}) is lower than this amount due to selling liabilities.`
+              : `Your ${source.code} balance is lower than this amount.`}
           </p>
         )}
         {busy && (
@@ -857,7 +892,14 @@ export function Bridge() {
             <button
               type="button"
               className={styles.primary}
-              disabled={!quote || busy || !!insufficient || sourceBalance === undefined}
+              disabled={
+                !quote ||
+                busy ||
+                !!insufficient ||
+                sourceBalance === undefined ||
+                activeSource.trustline === "frozen" ||
+                activeSource.trustline === "unauthorized"
+              }
               onClick={() => {
                 if (!wallet.address || !quote) return;
                 setReviewApproval({
