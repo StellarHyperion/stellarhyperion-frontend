@@ -4,6 +4,7 @@ import { use, useEffect, useRef, useState } from "react";
 import { Column } from "../../../components/chrome";
 import { fetchTransferByTx, getRouteName, type FormattedTransfer } from "../../../api";
 import { readTransaction, errorMessage, type TransactionResult } from "../../../contracts";
+import { STELLAR_DEPLOYMENT } from "../../../config/testnet";
 import { formatTokenAmount, getExplorerUrl } from "../../../lib/format";
 import { ActivityRequestGuard } from "../../../lib/activity-request";
 import styles from "./page.module.css";
@@ -130,9 +131,17 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
                   ? "Settled. Funds were paid to the recorded recipient."
                   : `Funds are parked on the ${record.destination.chain} router for the recorded recipient.`}
               </p>
-              {!record.claim.settled && record.destination.chain === "stellar-testnet" && (
-                <Link href="/#claim-recovery">Recover Stellar claim {record.claim.id}</Link>
-              )}
+              {!record.claim.settled &&
+                (record.claim.deployment?.chain === STELLAR_DEPLOYMENT.chain &&
+                record.claim.deployment.router === STELLAR_DEPLOYMENT.router &&
+                record.claim.deployment.revision === STELLAR_DEPLOYMENT.wasmHash ? (
+                  <Link href="/#claim-recovery">Recover Stellar claim {record.claim.id}</Link>
+                ) : (
+                  <p>
+                    This claim is read-only here because its chain, router, or deployment revision
+                    is not supported by this app. Open it on the original verified deployment.
+                  </p>
+                ))}
             </div>
           ) : (
             <p>
