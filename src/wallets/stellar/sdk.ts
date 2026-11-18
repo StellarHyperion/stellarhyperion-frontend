@@ -1,6 +1,14 @@
 import { TESTNET } from "../../config/testnet";
 import { assertWalletApproval } from "./signature";
 import type { WalletApprovalProvenance } from "./types";
+import { withTimeout, WalletSigningUncertainError } from "./timeout";
+
+/** Checking whether an extension is installed and open. Fast by nature, so bounded tightly. */
+const AVAILABILITY_TIMEOUT_MS = 8_000;
+/** Returning an account, with or without a user-visible access prompt. */
+const ACCOUNT_TIMEOUT_MS = 20_000;
+/** Approving a signature. Generous, since this is a human reading and approving a transaction. */
+const SIGNING_TIMEOUT_MS = 120_000;
 
 export const STELLAR_WALLETS = [
   { id: "freighter", name: "Freighter", url: "https://www.freighter.app/" },
@@ -75,29 +83,58 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true): 
   switch (id) {
     case "freighter": {
       const api = await import("@stellar/freighter-api");
-      if (!(await api.isConnected()).isConnected)
-        throw new Error("Install and open Freighter to connect.");
-      const result = await (requestAccess ? api.requestAccess() : api.getAddress());
+      const connected = await withTimeout(
+        api.isConnected(),
+        AVAILABILITY_TIMEOUT_MS,
+        "Freighter did not respond. Open the extension and try again.",
+      );
+      if (!connected.isConnected) throw new Error("Install and open Freighter to connect.");
+      const result = await withTimeout(
+        requestAccess ? api.requestAccess() : api.getAddress(),
+        ACCOUNT_TIMEOUT_MS,
+        "Freighter did not return an account in time. Open the extension and try again.",
+      );
       if (result.error) throwWalletError(result.error);
       return account(result.address);
     }
     case "albedo": {
-      const result = await (await albedoClient()).publicKey({});
+      const result = await withTimeout(
+        (await albedoClient()).publicKey({}),
+        ACCOUNT_TIMEOUT_MS,
+        "Albedo did not return an account in time. Try connecting again.",
+      );
       return account(result.pubkey);
     }
     case "xbull": {
       const { xBullWalletConnect } = await import("@creit.tech/xbull-wallet-connect");
       const bridge = new xBullWalletConnect();
       try {
-        return await account(await bridge.connect());
+        return await account(
+          await withTimeout(
+            bridge.connect(),
+            ACCOUNT_TIMEOUT_MS,
+            "xBull did not return an account in time. Try connecting again.",
+          ),
+        );
       } finally {
         bridge.closeConnections();
       }
     }
     case "lobstr": {
       const api = await import("@lobstrco/signer-extension-api");
-      if (!(await api.isConnected())) throw new Error("Install and open LOBSTR to connect.");
-      return account(await api.getPublicKey());
+      const connected = await withTimeout(
+        api.isConnected(),
+        AVAILABILITY_TIMEOUT_MS,
+        "LOBSTR did not respond. Open the extension and try again.",
+      );
+      if (!connected) throw new Error("Install and open LOBSTR to connect.");
+      return account(
+        await withTimeout(
+          api.getPublicKey(),
+          ACCOUNT_TIMEOUT_MS,
+          "LOBSTR did not return an account in time. Open the extension and try again.",
+        ),
+      );
     }
   }
 }
@@ -120,27 +157,31 @@ export async function walletSign(
       const api = await import("@stellar/freighter-api");
       const actual = await walletAddress(id, false);
       if (actual !== address) throw new Error("Your wallet account changed. Connect again.");
-      const network = await api.getNetworkDetails();
+      const network = await withTimeout(
+        api.getNetworkDetails(),
+        AVAILABILITY_TIMEOUT_MS,
+        "Freighter did not return its network in time. Open the extension and try again.",
+      );
       if (network.error) throwWalletError(network.error);
       if (network.networkPassphrase !== TESTNET.networkPassphrase)
         throw new Error("Switch Freighter to Stellar Testnet before signing.");
-      const result = await api.signTransaction(xdr, {
-        networkPassphrase: TESTNET.networkPassphrase,
-        address,
-      });
+      const result = await withTimeout(
+        api.signTransaction(xdr, { networkPassphrase: TESTNET.networkPassphrase, address }),
+        SIGNING_TIMEOUT_MS,
+        "Freighter did not respond to the signature request in time. Check Freighter for a pending request - Hyperion will not resubmit automatically.",
+        WalletSigningUncertainError,
+      );
       if (result.error) throwWalletError(result.error);
       signed = result.signedTxXdr;
       break;
     }
     case "albedo": {
-      const result = await (
-        await albedoClient()
-      ).tx({
-        xdr,
-        pubkey: address,
-        network: "testnet",
-        submit: false,
-      });
+      const result = await withTimeout(
+        (await albedoClient()).tx({ xdr, pubkey: address, network: "testnet", submit: false }),
+        SIGNING_TIMEOUT_MS,
+        "Albedo did not respond to the signature request in time. Check Albedo for a pending request - Hyperion will not resubmit automatically.",
+        WalletSigningUncertainError,
+      );
       signed = result.signed_envelope_xdr;
       break;
     }
@@ -148,7 +189,12 @@ export async function walletSign(
       const { xBullWalletConnect } = await import("@creit.tech/xbull-wallet-connect");
       const bridge = new xBullWalletConnect();
       try {
-        signed = await bridge.sign({ xdr, publicKey: address, network: TESTNET.networkPassphrase });
+        signed = await withTimeout(
+          bridge.sign({ xdr, publicKey: address, network: TESTNET.networkPassphrase }),
+          SIGNING_TIMEOUT_MS,
+          "xBull did not respond to the signature request in time. Check xBull for a pending request - Hyperion will not resubmit automatically.",
+          WalletSigningUncertainError,
+        );
       } finally {
         bridge.closeConnections();
       }
@@ -158,7 +204,12 @@ export async function walletSign(
       const api = await import("@lobstrco/signer-extension-api");
       if ((await walletAddress(id, false)) !== address)
         throw new Error("Your wallet account changed. Connect again.");
-      signed = await api.signTransaction(xdr);
+      signed = await withTimeout(
+        api.signTransaction(xdr),
+        SIGNING_TIMEOUT_MS,
+        "LOBSTR did not respond to the signature request in time. Check LOBSTR for a pending request - Hyperion will not resubmit automatically.",
+        WalletSigningUncertainError,
+      );
       break;
     }
   }

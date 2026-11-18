@@ -1,7 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Account, Asset, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { TESTNET } from "../src/config/testnet";
 import { createSigningCoordinator, walletAddress, walletSign } from "../src/wallets/stellar/sdk";
+import { WalletTimeoutError, WalletSigningUncertainError } from "../src/wallets/stellar/timeout";
+
+/** A promise that never settles, standing in for a wallet extension that never answers. */
+function stalled<T>(): Promise<T> {
+  return new Promise<T>(() => undefined);
+}
 
 const api = vi.hoisted(() => ({
   freighter: {
@@ -55,6 +61,9 @@ beforeEach(() => {
   });
   api.lobstr.isConnected.mockResolvedValue(true);
   api.lobstr.getPublicKey.mockResolvedValue(signer.publicKey());
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 describe("Direct Stellar wallet adapters", () => {
   it("serializes signing requests and releases ownership after cancellation", async () => {
@@ -183,5 +192,87 @@ describe("Direct Stellar wallet adapters", () => {
     await expect(walletSign("lobstr", original, signer.publicKey())).rejects.toThrow(
       "did not sign",
     );
+  });
+});
+
+describe("Bounded wallet adapter request timeouts", () => {
+  it("frees a stalled availability check instead of hanging and never requests access", async () => {
+    vi.useFakeTimers();
+    api.freighter.isConnected.mockReturnValue(stalled());
+    const pending = walletAddress("freighter");
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletTimeoutError);
+    await vi.advanceTimersByTimeAsync(8_000);
+    await assertion;
+    expect(api.freighter.requestAccess).not.toHaveBeenCalled();
+  });
+
+  it("frees a stalled account fetch instead of hanging", async () => {
+    vi.useFakeTimers();
+    api.freighter.requestAccess.mockReturnValue(stalled());
+    const pending = walletAddress("freighter");
+    const assertion = expect(pending).rejects.toThrow(/did not return an account/);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await assertion;
+  });
+
+  it("frees a stalled LOBSTR availability check instead of hanging", async () => {
+    vi.useFakeTimers();
+    api.lobstr.isConnected.mockReturnValue(stalled());
+    const pending = walletAddress("lobstr");
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletTimeoutError);
+    await vi.advanceTimersByTimeAsync(8_000);
+    await assertion;
+    expect(api.lobstr.getPublicKey).not.toHaveBeenCalled();
+  });
+
+  it("frees a stalled xBull connect and still closes the bridge connection", async () => {
+    vi.useFakeTimers();
+    api.xbull.connect.mockReturnValue(stalled());
+    const pending = walletAddress("xbull");
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletTimeoutError);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await assertion;
+    expect(api.xbull.closeConnections).toHaveBeenCalledOnce();
+  });
+
+  it("treats a Freighter signing timeout as uncertain rather than failed, without resubmitting", async () => {
+    const { original } = envelope();
+    vi.useFakeTimers();
+    api.freighter.signTransaction.mockReturnValue(stalled());
+    const pending = walletSign("freighter", original, signer.publicKey());
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletSigningUncertainError);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await assertion;
+    expect(api.freighter.signTransaction).toHaveBeenCalledOnce();
+  });
+
+  it("treats an xBull signing timeout as uncertain and still closes the bridge connection", async () => {
+    const { original } = envelope();
+    vi.useFakeTimers();
+    api.xbull.sign.mockReturnValue(stalled());
+    const pending = walletSign("xbull", original, signer.publicKey());
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletSigningUncertainError);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await assertion;
+    expect(api.xbull.closeConnections).toHaveBeenCalledOnce();
+  });
+
+  it("never lets a late adapter response resolve a signing call that already timed out", async () => {
+    const { original, signed } = envelope();
+    let resolveLate: ((value: { signedTxXdr: string }) => void) | undefined;
+    api.freighter.signTransaction.mockReturnValue(
+      new Promise((resolve) => {
+        resolveLate = resolve;
+      }),
+    );
+    vi.useFakeTimers();
+    const pending = walletSign("freighter", original, signer.publicKey());
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletSigningUncertainError);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await assertion;
+    // The real wallet response arrives only after Hyperion already treated the request as
+    // uncertain and moved on. It must be dropped, not retroactively resubmitted or trusted.
+    resolveLate?.({ signedTxXdr: signed });
+    await vi.advanceTimersByTimeAsync(0);
   });
 });
