@@ -371,7 +371,7 @@ function PendingTransferCard({
               operation: "bridge",
             }}
           />
-          <QuoteDetails quote={review} />
+          <QuoteDetails quote={review} simulation={cardSimulation} />
           <p className={styles.address}>Recipient: {checkpoint.recipient}</p>
           {cardSimulation && (
             <p className={styles.address}>
@@ -1144,7 +1144,7 @@ export function Bridge() {
               addTrustline={reviewed.addTrustline}
             />
           )}
-          <QuoteDetails quote={reviewed.quote.bridge} />
+          <QuoteDetails quote={reviewed.quote.bridge} simulation={reviewed.simulation} />
           {reviewed.quote.conversion && (
             <p className={styles.reviewNote}>
               Two signatures: convert to USDC, then bridge. Price tolerance is 0.5%. If the bridge
@@ -1154,12 +1154,10 @@ export function Bridge() {
           <p className={styles.reviewNote}>
             Source confirmation starts the transfer. Destination delivery is verified separately.
           </p>
-          {reviewed.simulation && (
-            <p className={styles.address}>
-              Operation: bridge_out_with_gas ({formatUnits(reviewed.simulation.totalFee, 7)} XLM
-              total envelope fee)
-            </p>
-          )}
+          <p className={styles.address}>
+            Operation: bridge_out_with_gas ({formatUnits(reviewed.simulation.totalFee, 7)} XLM total
+            envelope fee)
+          </p>
           {simulationError && (
             <p role="alert" className={styles.error}>
               Simulation failed: {simulationError}. Approval blocked.
