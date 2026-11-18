@@ -39,8 +39,10 @@ import {
 import {
   USDC,
   accountAssets,
+  issuerVerificationLabel,
   quoteTrade,
   submitConversion,
+  trustlineLabel,
   type SourceAsset,
   type TradeQuote,
 } from "../../contracts/assets";
@@ -541,6 +543,9 @@ export function Bridge() {
                 : (accounts?.error ?? "Reading your balance...")
               : "Choose any liquid Stellar asset"}
           </p>
+          <p className={styles.balance}>
+            {issuerVerificationLabel(source)}. {trustlineLabel(source)}.
+          </p>
           {source.issuer && source.id !== USDC.id && (
             <a
               className={styles.balance}
@@ -826,6 +831,9 @@ export function Bridge() {
               {...(source.issuer ? { issuer: source.issuer } : {})}
             />
           )}
+          <p className={styles.reviewNote}>
+            {issuerVerificationLabel(source)}. {trustlineLabel(source)}.
+          </p>
           <QuoteDetails quote={quote.bridge} />
           {quote.conversion && (
             <p className={styles.reviewNote}>

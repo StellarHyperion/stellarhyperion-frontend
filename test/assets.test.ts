@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Account, TransactionBuilder } from "@stellar/stellar-sdk";
 import {
   quoteConversion,
+  accountAssets,
   conversionOperations,
+  issuerVerificationLabel,
   searchAssets,
   stellarAsset,
   USDC,
   XLM,
+  trustlineLabel,
 } from "../src/contracts/assets";
 import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
 import { TESTNET } from "../src/config/testnet";
@@ -67,6 +70,49 @@ describe("Real Stellar conversion transaction boundaries", () => {
     await expect(quoteConversion(XLM, 1n << 63n)).rejects.toThrow("limit");
     await expect(searchAssets("not a valid asset code")).rejects.toThrow("Search by");
     expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("keeps same-symbol assets distinct and marks Horizon issuer metadata for review", async () => {
+    answer([
+      { asset_code: "USDC", asset_issuer: USDC.issuer },
+      { asset_code: "USDC", asset_issuer: TESTNET.reader },
+    ]);
+    const assets = await searchAssets("USDC");
+    expect(assets.map((asset) => asset.id)).toEqual([
+      `${USDC.code}:${USDC.issuer}`,
+      `USDC:${TESTNET.reader}`,
+    ]);
+    expect(assets.every((asset) => asset.verification === "horizon-search")).toBe(true);
+    expect(assets.every((asset) => asset.trustline === "not-checked")).toBe(true);
+    const first = assets[0];
+    if (!first) throw new Error("Missing searched asset.");
+    expect(issuerVerificationLabel(first)).toContain("verify before signing");
+    expect(trustlineLabel(first)).toBe("Trustline not checked for this asset");
+  });
+  it("records an authorized wallet trustline as present without calling it configured", async () => {
+    const request = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          balances: [
+            {
+              asset_type: "credit_alphanum4",
+              asset_code: "USDC",
+              asset_issuer: USDC.issuer,
+              balance: "2.0000000",
+              is_authorized: true,
+            },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", request);
+    const asset = (await accountAssets(TESTNET.reader))[0];
+    if (!asset) throw new Error("Missing wallet asset.");
+    expect(asset).toMatchObject({
+      id: USDC.id,
+      verification: "wallet-trustline",
+      trustline: "present",
+    });
+    expect(issuerVerificationLabel(asset)).toContain("verify before signing");
   });
 });
 describe("Interrupted transfer recovery", () => {
