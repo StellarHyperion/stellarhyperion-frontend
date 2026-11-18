@@ -10,20 +10,52 @@ import {
   type TransactionResult,
   type WalletSigner,
 } from "./stellar";
+import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 
 export interface SourceAsset {
   id: string;
   code: string;
   issuer: string | null;
+  verification: AssetVerification;
+  trustline: TrustlineState;
   balance?: string;
 }
-export const XLM: SourceAsset = { id: "native", code: "XLM", issuer: null };
+export type AssetVerification =
+  "configured" | "wallet-trustline" | "horizon-search" | "horizon-path";
+export type TrustlineState = "native" | "present" | "not-checked";
+
+export const XLM: SourceAsset = {
+  id: "native",
+  code: "XLM",
+  issuer: null,
+  verification: "configured",
+  trustline: "native",
+};
 export const USDC: SourceAsset = {
   id: `${TESTNET.usdcCode}:${TESTNET.usdcIssuer}`,
   code: TESTNET.usdcCode,
   issuer: TESTNET.usdcIssuer,
+  verification: "configured",
+  trustline: "not-checked",
 };
 export const SLIPPAGE_BPS = 50n;
+
+export function issuerVerificationLabel(asset: SourceAsset): string {
+  if (!asset.issuer) return "Native Stellar asset; no issuer";
+  if (asset.verification === "configured") return "Issuer matches the configured testnet asset";
+  return "Issuer metadata supplied by Horizon; verify before signing";
+}
+
+export function trustlineLabel(asset: SourceAsset): string {
+  switch (asset.trustline) {
+    case "native":
+      return "Native balance";
+    case "present":
+      return "Wallet trustline present";
+    default:
+      return "Trustline not checked for this asset";
+  }
+}
 
 export function stellarAsset(asset: SourceAsset): Asset {
   if (asset.id === "native" && asset.issuer === null && asset.code === "XLM") return Asset.native();
@@ -75,10 +107,12 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
       typeof entry.asset_issuer !== "string"
     )
       return [];
-    const asset = {
+    const asset: SourceAsset = {
       id: `${entry.asset_code}:${entry.asset_issuer}`,
       code: entry.asset_code,
       issuer: entry.asset_issuer,
+      verification: "wallet-trustline",
+      trustline: "present",
       balance: entry.balance,
     };
     stellarAsset(asset);
@@ -97,10 +131,12 @@ export async function searchAssets(query: string, signal?: AbortSignal): Promise
   const body = await horizon(`/assets?${params}`, signal);
   return records(body).flatMap((entry) => {
     if (typeof entry.asset_code !== "string" || typeof entry.asset_issuer !== "string") return [];
-    const asset = {
+    const asset: SourceAsset = {
       id: `${entry.asset_code}:${entry.asset_issuer}`,
       code: entry.asset_code,
       issuer: entry.asset_issuer,
+      verification: "horizon-search",
+      trustline: "not-checked",
     };
     stellarAsset(asset);
     return [asset];
@@ -112,6 +148,39 @@ export interface Conversion {
   sourceMax: bigint;
   usdcAmount: bigint;
   path: SourceAsset[];
+}
+export interface ConversionExecutionIntent {
+  operation: "pathPaymentStrictReceive";
+  source: SourceAsset;
+  sourceMax: bigint;
+  destination: SourceAsset;
+  destinationAmount: bigint;
+  path: SourceAsset[];
+  addTrustline: boolean;
+}
+
+export function conversionRoute(conversion: Conversion): SourceAsset[] {
+  return [conversion.source, ...conversion.path, USDC];
+}
+
+export function conversionExecutionIntent(
+  conversion: Conversion,
+  addTrustline: boolean,
+): ConversionExecutionIntent {
+  if (conversion.sourceMax <= 0n || conversion.usdcAmount <= 0n || conversion.path.length > 5)
+    throw new Error("Invalid conversion quote.");
+  stellarAsset(conversion.source);
+  conversion.path.forEach(stellarAsset);
+  stellarAsset(USDC);
+  return {
+    operation: "pathPaymentStrictReceive",
+    source: conversion.source,
+    sourceMax: conversion.sourceMax,
+    destination: USDC,
+    destinationAmount: conversion.usdcAmount,
+    path: conversion.path,
+    addTrustline,
+  };
 }
 export interface TradeQuote {
   source: SourceAsset;
@@ -149,10 +218,12 @@ export async function quoteConversion(source: SourceAsset, amount: bigint): Prom
         if (item.asset_type === "native") return XLM;
         if (typeof item.asset_code !== "string" || typeof item.asset_issuer !== "string")
           throw new Error("Invalid Stellar path asset.");
-        const token = {
+        const token: SourceAsset = {
           id: `${item.asset_code}:${item.asset_issuer}`,
           code: item.asset_code,
           issuer: item.asset_issuer,
+          verification: "horizon-path",
+          trustline: "not-checked",
         };
         stellarAsset(token);
         return token;
@@ -188,18 +259,17 @@ export function conversionOperations(
   conversion: Conversion,
   addTrustline: boolean,
 ): xdr.Operation[] {
-  if (conversion.sourceMax <= 0n || conversion.usdcAmount <= 0n || conversion.path.length > 5)
-    throw new Error("Invalid conversion quote.");
+  const intent = conversionExecutionIntent(conversion, addTrustline);
   const operations: xdr.Operation[] = [];
-  if (addTrustline) operations.push(Operation.changeTrust({ asset: stellarAsset(USDC) }));
+  if (intent.addTrustline) operations.push(Operation.changeTrust({ asset: stellarAsset(USDC) }));
   operations.push(
     Operation.pathPaymentStrictReceive({
-      sendAsset: stellarAsset(conversion.source),
-      sendMax: formatUnits(conversion.sourceMax, 7),
+      sendAsset: stellarAsset(intent.source),
+      sendMax: formatUnits(intent.sourceMax, 7),
       destination: sender,
-      destAsset: stellarAsset(USDC),
-      destAmount: formatUnits(conversion.usdcAmount, 7),
-      path: conversion.path.map(stellarAsset),
+      destAsset: stellarAsset(intent.destination),
+      destAmount: formatUnits(intent.destinationAmount, 7),
+      path: intent.path.map(stellarAsset),
     }),
   );
   return operations;
@@ -210,7 +280,7 @@ export async function submitConversion(
   conversion: Conversion,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
-  reconcile?: SubmissionReconciliation,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   const assets = await accountAssets(sender);
   const balance = assets.find((asset) => asset.id === conversion.source.id)?.balance ?? "0";
@@ -221,6 +291,6 @@ export async function submitConversion(
     conversionOperations(sender, conversion, !assets.some((asset) => asset.id === USDC.id)),
     sign,
     progress,
-    reconcile,
+    approval,
   );
 }

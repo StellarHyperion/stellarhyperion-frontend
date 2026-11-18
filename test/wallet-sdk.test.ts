@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Account, Asset, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { TESTNET } from "../src/config/testnet";
-import { walletAddress, walletSign } from "../src/wallets/stellar/sdk";
+import { createSigningCoordinator, walletAddress, walletSign } from "../src/wallets/stellar/sdk";
 
 const api = vi.hoisted(() => ({
   freighter: {
@@ -57,6 +57,44 @@ beforeEach(() => {
   api.lobstr.getPublicKey.mockResolvedValue(signer.publicKey());
 });
 describe("Direct Stellar wallet adapters", () => {
+  it("serializes signing requests and releases ownership after cancellation", async () => {
+    let cancel!: (error: Error) => void;
+    const coordinator = createSigningCoordinator();
+    const first = coordinator.run(
+      { operation: "conversion", account: signer.publicKey() },
+      () => new Promise<never>((_, reject) => (cancel = reject)),
+    );
+
+    expect(coordinator.pending).toEqual({
+      operation: "conversion",
+      account: signer.publicKey(),
+    });
+    await expect(
+      coordinator.run({ operation: "bridge", account: signer.publicKey() }, () =>
+        Promise.resolve("not reached"),
+      ),
+    ).rejects.toThrow("conversion signing request is already waiting");
+
+    cancel(new Error("Request declined"));
+    await expect(first).rejects.toThrow("Request declined");
+    expect(coordinator.pending).toBeNull();
+    await expect(
+      coordinator.run({ operation: "bridge", account: signer.publicKey() }, () =>
+        Promise.resolve("available"),
+      ),
+    ).resolves.toBe("available");
+  });
+
+  it("rejects stale approval provenance before opening a wallet prompt", async () => {
+    await expect(
+      walletSign("freighter", envelope().original, signer.publicKey(), {
+        account: Keypair.random().publicKey(),
+        network: TESTNET.networkPassphrase,
+        operation: "bridge",
+      }),
+    ).rejects.toThrow("account changed");
+    expect(api.freighter.signTransaction).not.toHaveBeenCalled();
+  });
   it("restores Freighter with silent lookup and requests access only for explicit connection", async () => {
     expect(await walletAddress("freighter", false)).toBe(signer.publicKey());
     expect(api.freighter.requestAccess).not.toHaveBeenCalled();

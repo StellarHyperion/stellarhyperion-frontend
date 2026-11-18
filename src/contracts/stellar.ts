@@ -22,19 +22,21 @@ import {
 } from "@hyperion/protocol";
 import {
   TESTNET,
+  STELLAR_DEPLOYMENT,
   CIRCLE_STELLAR,
   destinationFor,
   destinationDecimals,
   type BridgeRoute,
   type DestinationKey,
 } from "../config/testnet";
+import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
 
 export type WalletSigner = (
   xdr: string,
-  opts: { networkPassphrase: string },
+  opts: { networkPassphrase: string; approval?: WalletApprovalProvenance },
 ) => Promise<{ signedTxXdr: string }>;
 export type TransactionPhase = "preparing" | "signing" | "submitting" | "pending" | "confirmed";
 export interface TransactionResult {
@@ -70,10 +72,65 @@ export interface PendingClaim {
   token: string;
   amount: bigint;
   settled: boolean;
+  deployment: RouterDeploymentIdentity;
+}
+export interface RouterDeploymentIdentity {
+  chain: string;
+  router: string;
+  networkPassphrase: string;
+  wasmHash: string;
+  commit: string;
+  deployedLedger: number;
+}
+
+export function claimMatchesDeployment(
+  claim: {
+    deployment?: Pick<RouterDeploymentIdentity, "chain" | "router" | "wasmHash"> | null;
+  } | null,
+  deployment: Pick<RouterDeploymentIdentity, "chain" | "router" | "wasmHash">,
+): boolean {
+  return (
+    claim?.deployment?.chain === deployment.chain &&
+    claim.deployment.router === deployment.router &&
+    claim.deployment.wasmHash === deployment.wasmHash
+  );
 }
 
 function server() {
   return new rpc.Server(TESTNET.rpcUrl, { timeout: 15_000 });
+}
+
+export async function verifyRouterDeployment(): Promise<RouterDeploymentIdentity> {
+  const rpcServer = server();
+  const network = await rpcServer.getNetwork();
+  if (network.passphrase !== STELLAR_DEPLOYMENT.networkPassphrase)
+    throw new Error("Claim recovery is unavailable: the RPC endpoint is not Stellar Testnet.");
+  if (TESTNET.router !== STELLAR_DEPLOYMENT.router)
+    throw new Error(
+      "Claim recovery is read-only: the configured router is not a verified deployment.",
+    );
+  const instance = await rpcServer.getContractInstance(TESTNET.router);
+  let wasmHash: Uint8Array;
+  if (instance.executable.type === "contractExecutableWasm") {
+    const value = instance.executable.wasmHash;
+    wasmHash = value instanceof Uint8Array ? value : value.toBytes();
+  } else if (instance.executable.type === "contractExecutableExternalRef")
+    wasmHash = await rpcServer.getExternalRefWasmHash(instance.executable.externalRef);
+  else
+    throw new Error(
+      "Claim recovery is read-only: the router has no supported contract executable.",
+    );
+  const actual = toHex(wasmHash).slice(2).toLowerCase();
+  if (actual !== STELLAR_DEPLOYMENT.wasmHash.toLowerCase())
+    throw new Error("Claim recovery is read-only: the router revision is not verified.");
+  return {
+    chain: STELLAR_DEPLOYMENT.chain,
+    router: STELLAR_DEPLOYMENT.router,
+    networkPassphrase: STELLAR_DEPLOYMENT.networkPassphrase,
+    wasmHash: actual,
+    commit: STELLAR_DEPLOYMENT.commit,
+    deployedLedger: STELLAR_DEPLOYMENT.deployedLedger,
+  };
 }
 
 async function readWithRetry<T>(read: () => Promise<T>): Promise<T> {
@@ -541,7 +598,7 @@ export async function submitOperation(
   operation: xdr.Operation,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
-  reconcile?: SubmissionReconciliation,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("preparing");
@@ -566,7 +623,7 @@ export async function submitOperation(
   }
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
   progress?.("signing");
-  return signAndSubmit(prepared, sign, progress, reconcile);
+  return signAndSubmit(prepared, sign, progress, approval);
 }
 
 export async function submitClassicOperations(
@@ -574,7 +631,7 @@ export async function submitClassicOperations(
   operations: readonly xdr.Operation[],
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
-  reconcile?: SubmissionReconciliation,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   const client = server();
   if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
@@ -584,20 +641,22 @@ export async function submitClassicOperations(
     networkPassphrase: TESTNET.networkPassphrase,
   });
   for (const operation of operations) builder.addOperation(operation);
-  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, reconcile);
+  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval);
 }
 
 async function signAndSubmit(
   prepared: Transaction,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
-  reconcile?: SubmissionReconciliation,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("signing");
-  const signed = await sign(prepared.toXdr(), {
-    networkPassphrase: TESTNET.networkPassphrase,
-  });
+  const signOptions = { networkPassphrase: TESTNET.networkPassphrase };
+  const signed = await sign(
+    prepared.toXdr(),
+    approval ? { ...signOptions, approval } : signOptions,
+  );
   const signedTransaction = TransactionBuilder.fromXdr(
     signed.signedTxXdr,
     TESTNET.networkPassphrase,
@@ -666,7 +725,7 @@ export async function submitBridgeOut(
   recipient: string,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
-  reconcile?: SubmissionReconciliation,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
   const refreshed = await quoteTransfer(
@@ -690,12 +749,13 @@ export async function submitBridgeOut(
     bridgeOperation(sender, quoted, recipient),
     sign,
     progress,
-    reconcile,
+    approval,
   );
 }
 
 export async function getClaim(id: bigint): Promise<PendingClaim> {
   if (id <= 0n || id > (1n << 64n) - 1n) throw new Error("Enter a valid claim number.");
+  const deployment = await verifyRouterDeployment();
   const result = object(
     (await view(TESTNET.router, "get_claim", [nativeToScVal(id, { type: "u64" })])).value,
   );
@@ -705,6 +765,7 @@ export async function getClaim(id: bigint): Promise<PendingClaim> {
     token: address(result.token),
     amount: integer(result.amount),
     settled: result.settled === true,
+    deployment,
   };
 }
 
@@ -712,11 +773,15 @@ export async function submitSettleClaim(
   sender: string,
   id: bigint,
   sign: WalletSigner,
-  progress?: (phase: TransactionPhase, hash?: string) => void,
-  reconcile?: SubmissionReconciliation,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
+  const deployment = await verifyRouterDeployment();
+  if (deployment.wasmHash !== claim.deployment.wasmHash)
+    throw new Error(
+      "Claim recovery is read-only: the verified router changed. Look up the claim again.",
+    );
   return submitOperation(
     sender,
     new Contract(TESTNET.router).call(
@@ -725,7 +790,7 @@ export async function submitSettleClaim(
       nativeToScVal(id, { type: "u64" }),
     ),
     sign,
-    progress,
-    reconcile,
+    undefined,
+    approval,
   );
 }
