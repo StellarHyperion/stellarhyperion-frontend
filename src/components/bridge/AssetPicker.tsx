@@ -26,34 +26,43 @@ export function SourceAssetPicker({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const [queryVersion, setQueryVersion] = useState(0);
   const [remote, setRemote] = useState<{
     key: string;
+    version: number;
     assets: SourceAsset[];
     error: string | null;
   } | null>(null);
   useEffect(() => {
     if (!query.trim()) return;
     const controller = new AbortController();
+    const version = queryVersion;
     const timer = setTimeout(() => {
       void searchAssets(query, controller.signal)
         .then((assets) => {
-          if (!controller.signal.aborted) setRemote({ key: query, assets, error: null });
+          if (!controller.signal.aborted)
+            setRemote({ key: query, version, assets, error: null });
         })
         .catch((error: unknown) => {
           if (!controller.signal.aborted)
-            setRemote({ key: query, assets: [], error: errorMessage(error) });
+            setRemote({ key: query, version, assets: [], error: errorMessage(error) });
         });
     }, 250);
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query]);
-  const loading = !!query.trim() && remote?.key !== query;
+  }, [query, queryVersion]);
+  const loading = !!query.trim() && (remote?.key !== query || remote.version !== queryVersion);
   const defaults = [
     ...new Map([USDC, XLM, ...balances].map((asset) => [asset.id, asset])).values(),
   ];
-  const assets = query.trim() ? (remote?.key === query ? remote.assets : []) : defaults;
+  const assets =
+    query.trim()
+      ? remote?.key === query && remote.version === queryVersion
+        ? remote.assets
+        : []
+      : defaults;
   return (
     <Dialog title="Choose a token" onClose={onClose}>
       <label className={styles.search}>
@@ -64,6 +73,7 @@ export function SourceAssetPicker({
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
+            setQueryVersion((version) => version + 1);
           }}
         />
       </label>
@@ -72,7 +82,9 @@ export function SourceAssetPicker({
       </p>
       <div className={styles.list} aria-busy={loading}>
         {loading && <p role="status">Searching Stellar assets...</p>}
-        {remote?.key === query && remote.error && <p role="alert">{remote.error}</p>}
+        {remote?.key === query && remote.version === queryVersion && remote.error && (
+          <p role="alert">{remote.error}</p>
+        )}
         {!loading && assets.length === 0 && (
           <p>No matching assets. Try an exact token code or issuer.</p>
         )}
@@ -133,6 +145,7 @@ export function DestinationPicker({
             key={item.key}
             type="button"
             className={styles.network}
+            disabled={!item.routes.includes(0)}
             aria-pressed={chain === item.key}
             onClick={() => {
               setChain(item.key);
@@ -170,7 +183,7 @@ export function DestinationPicker({
       <button
         className={styles.option}
         type="button"
-        disabled={chain !== "sepolia"}
+        disabled={!DESTINATIONS.find((item) => item.key === chain)?.routes.includes(1)}
         onClick={() => {
           onSelect(chain, 1);
           onClose();
@@ -189,8 +202,8 @@ export function DestinationPicker({
         <ChevronRight size={18} aria-hidden="true" />
       </button>
       <p className={styles.note}>
-        Both bridges quote live. Route availability and receiving contracts are checked before you
-        can sign.
+        Only independently verified testnet lanes are offered. Route availability and receiving
+        contracts are checked again before you can sign.
       </p>
     </Dialog>
   );

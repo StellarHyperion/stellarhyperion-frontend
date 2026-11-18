@@ -167,6 +167,15 @@ export async function quoteConversion(source: SourceAsset, amount: bigint): Prom
   return { source, sourceMax: amount, usdcAmount, path: best.path };
 }
 
+export async function revalidateConversion(reviewed: Conversion): Promise<Conversion> {
+  const current = await quoteConversion(reviewed.source, reviewed.sourceMax);
+  if (current.usdcAmount < reviewed.usdcAmount)
+    throw new Error(
+      "The Stellar conversion path no longer meets the reviewed USDC minimum. Refresh the quote before signing.",
+    );
+  return { ...reviewed, path: current.path };
+}
+
 export async function quoteTrade(
   destination: DestinationKey,
   source: SourceAsset,
@@ -216,7 +225,10 @@ export async function submitConversion(
     throw new Error(`Insufficient ${conversion.source.code} balance.`);
   return submitClassicOperations(
     sender,
-    conversionOperations(sender, conversion, !assets.some((asset) => asset.id === USDC.id)),
+    async () => {
+      const current = await revalidateConversion(conversion);
+      return conversionOperations(sender, current, !assets.some((asset) => asset.id === USDC.id));
+    },
     sign,
     progress,
   );
