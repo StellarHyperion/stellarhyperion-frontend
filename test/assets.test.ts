@@ -1,13 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Account, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Account, Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
 import {
   quoteConversion,
+  accountAssets,
+  conversionExecutionIntent,
+  conversionRoute,
   conversionOperations,
   revalidateConversion,
+  issuerVerificationLabel,
+  quoteTrade,
   searchAssets,
+  spendableBalance,
   stellarAsset,
+  submitConversion,
+  suggestSourceSpend,
   USDC,
   XLM,
+  trustlineLabel,
 } from "../src/contracts/assets";
 import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
 import { DESTINATIONS, TESTNET } from "../src/config/testnet";
@@ -55,6 +64,49 @@ describe("Real Stellar conversion transaction boundaries", () => {
     expect(payment.destination).toBe(TESTNET.reader);
     expect(payment.destAsset.getIssuer()).toBe(USDC.issuer);
   });
+  it("exposes the exact route and execution intent used to assemble the transaction", () => {
+    const issuer = Keypair.random().publicKey();
+    const intermediate = {
+      id: `USD:${issuer}`,
+      code: "USD",
+      issuer,
+      verification: "horizon-path" as const,
+      trustline: "not-checked" as const,
+    };
+    const conversion = {
+      source: XLM,
+      sourceMax: 10000000n,
+      usdcAmount: 8955000n,
+      path: [intermediate],
+    };
+    const intent = conversionExecutionIntent(conversion, true);
+    expect(intent).toMatchObject({
+      operation: "pathPaymentStrictReceive",
+      sourceMax: 10000000n,
+      destinationAmount: 8955000n,
+      addTrustline: true,
+      path: [intermediate],
+    });
+    expect(conversionRoute(conversion)).toEqual([XLM, intermediate, USDC]);
+    const operations = conversionOperations(TESTNET.reader, conversion, true);
+    expect(operations).toHaveLength(2);
+    const tx = new TransactionBuilder(new Account(TESTNET.reader, "1"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    });
+    for (const operation of operations) tx.addOperation(operation);
+    const decoded = TransactionBuilder.fromXdr(
+      tx.setTimeout(60).build().toXdr(),
+      TESTNET.networkPassphrase,
+    );
+    const payment = decoded.operations[1];
+    if (payment?.type !== "pathPaymentStrictReceive")
+      throw new Error("Missing conversion operation.");
+    expect(payment.sendMax).toBe("1.0000000");
+    expect(payment.destAmount).toBe("0.8955000");
+    expect(payment.path).toHaveLength(1);
+    expect(payment.path[0]?.getIssuer()).toBe(issuer);
+  });
   it("never invents a route when liquidity or the canonical receiving asset is absent", async () => {
     answer([]);
     await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow("No liquid");
@@ -76,12 +128,9 @@ describe("Real Stellar conversion transaction boundaries", () => {
         ],
       },
     ]);
-    const refreshed = await revalidateConversion(reviewed);
-    expect(refreshed.sourceMax).toBe(reviewed.sourceMax);
-    expect(refreshed.usdcAmount).toBe(reviewed.usdcAmount);
-    expect(refreshed.path).toEqual([
-      { id: `EUR:${USDC.issuer}`, code: "EUR", issuer: USDC.issuer },
-    ]);
+    await expect(revalidateConversion(reviewed)).rejects.toThrow("conversion path changed");
+    answer([{ ...path, destination_amount: "0.8100000", path: [] }]);
+    expect(await revalidateConversion(reviewed)).toBe(reviewed);
     answer([{ ...path, destination_amount: "0.8000000" }]);
     await expect(revalidateConversion(reviewed)).rejects.toThrow("reviewed USDC minimum");
     answer([]);
@@ -95,12 +144,250 @@ describe("Real Stellar conversion transaction boundaries", () => {
     await expect(searchAssets("not a valid asset code")).rejects.toThrow("Search by");
     expect(fetcher).not.toHaveBeenCalled();
   });
+  it("keeps same-symbol assets distinct and marks Horizon issuer metadata for review", async () => {
+    answer([
+      { asset_code: "USDC", asset_issuer: USDC.issuer },
+      { asset_code: "USDC", asset_issuer: TESTNET.reader },
+    ]);
+    const assets = await searchAssets("USDC");
+    expect(assets.map((asset) => asset.id)).toEqual([
+      `${USDC.code}:${USDC.issuer}`,
+      `USDC:${TESTNET.reader}`,
+    ]);
+    expect(assets.every((asset) => asset.verification === "horizon-search")).toBe(true);
+    expect(assets.every((asset) => asset.trustline === "not-checked")).toBe(true);
+    const first = assets[0];
+    if (!first) throw new Error("Missing searched asset.");
+    expect(issuerVerificationLabel(first)).toContain("verify before signing");
+    expect(trustlineLabel(first)).toBe("Trustline not checked for this asset");
+  });
+  it("records an authorized wallet trustline as present without calling it configured", async () => {
+    const request = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          balances: [
+            {
+              asset_type: "credit_alphanum4",
+              asset_code: "USDC",
+              asset_issuer: USDC.issuer,
+              balance: "2.0000000",
+              is_authorized: true,
+            },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", request);
+    const asset = (await accountAssets(TESTNET.reader))[0];
+    if (!asset) throw new Error("Missing wallet asset.");
+    expect(asset).toMatchObject({
+      id: USDC.id,
+      verification: "wallet-trustline",
+      trustline: "present",
+    });
+    expect(issuerVerificationLabel(asset)).toContain("verify before signing");
+  });
+  it("computes spendable balance by subtracting selling liabilities from total balance", () => {
+    const issuer = Keypair.random().publicKey();
+    const asset = {
+      id: `TEST:${issuer}`,
+      code: "TEST",
+      issuer,
+      verification: "wallet-trustline" as const,
+      trustline: "present" as const,
+      balance: "100.0000000",
+      sellingLiabilities: "25.0000000",
+    };
+    expect(spendableBalance(asset)).toBe("75.0000000");
+    expect(suggestSourceSpend(asset)).toBe("75.0000000");
+
+    const fullyCommitted = { ...asset, sellingLiabilities: "100.0000000" };
+    expect(spendableBalance(fullyCommitted)).toBe("0.0000000");
+    expect(suggestSourceSpend(fullyCommitted)).toBe("0.0000000");
+
+    const overCommitted = { ...asset, sellingLiabilities: "105.0000000" };
+    expect(spendableBalance(overCommitted)).toBe("0.0000000");
+    expect(suggestSourceSpend(overCommitted)).toBe("0.0000000");
+
+    const noLiabilities = {
+      id: asset.id,
+      code: asset.code,
+      issuer: asset.issuer,
+      verification: asset.verification,
+      trustline: asset.trustline,
+      balance: asset.balance,
+    };
+    expect(spendableBalance(noLiabilities)).toBe("100.0000000");
+    expect(suggestSourceSpend(noLiabilities)).toBe("100.0000000");
+  });
+  it("suggested source spend does not exceed available issued-asset balance", async () => {
+    const issuer = Keypair.random().publicKey();
+    const request = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          balances: [
+            {
+              asset_type: "credit_alphanum4",
+              asset_code: "USDC",
+              asset_issuer: USDC.issuer,
+              balance: "50.0000000",
+              selling_liabilities: "20.0000000",
+              is_authorized: true,
+            },
+            {
+              asset_type: "credit_alphanum4",
+              asset_code: "WRAP",
+              asset_issuer: issuer,
+              balance: "10.0000000",
+              selling_liabilities: "10.0000000",
+              is_authorized: true,
+            },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", request);
+    const assets = await accountAssets(TESTNET.reader);
+    const usdc = assets.find((a) => a.id === USDC.id);
+    const wrap = assets.find((a) => a.code === "WRAP");
+    if (!usdc || !wrap) throw new Error("Missing wallet assets.");
+
+    expect(usdc.balance).toBe("50.0000000");
+    expect(usdc.sellingLiabilities).toBe("20.0000000");
+    expect(usdc.available).toBe("30.0000000");
+    expect(suggestSourceSpend(usdc)).toBe("30.0000000");
+
+    expect(wrap.balance).toBe("10.0000000");
+    expect(wrap.sellingLiabilities).toBe("10.0000000");
+    expect(wrap.available).toBe("0.0000000");
+    expect(suggestSourceSpend(wrap)).toBe("0.0000000");
+  });
+  it("frozen or unauthorized trustlines block conversion with a clear reason", async () => {
+    const issuer = Keypair.random().publicKey();
+    const response = new Response(
+      JSON.stringify({
+        balances: [
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "FROZ",
+            asset_issuer: issuer,
+            balance: "100.0000000",
+            is_authorized: false,
+            is_authorized_to_maintain_liabilities: true,
+          },
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "UNAT",
+            asset_issuer: issuer,
+            balance: "50.0000000",
+            is_authorized: false,
+            is_authorized_to_maintain_liabilities: false,
+          },
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "LIAB",
+            asset_issuer: issuer,
+            balance: "20.0000000",
+            selling_liabilities: "15.0000000",
+            is_authorized: true,
+          },
+        ],
+      }),
+    );
+    const request = vi.fn().mockImplementation(() => Promise.resolve(response.clone()));
+    vi.stubGlobal("fetch", request);
+    const assets = await accountAssets(TESTNET.reader);
+    const froz = assets.find((a) => a.code === "FROZ");
+    const unat = assets.find((a) => a.code === "UNAT");
+    const liab = assets.find((a) => a.code === "LIAB");
+    if (!froz || !unat || !liab) throw new Error("Missing wallet assets.");
+
+    expect(froz.trustline).toBe("frozen");
+    expect(froz.available).toBe("0.0000000");
+    expect(trustlineLabel(froz)).toBe("Trustline frozen by issuer");
+    expect(suggestSourceSpend(froz)).toBe("0.0000000");
+
+    expect(unat.trustline).toBe("unauthorized");
+    expect(unat.available).toBe("0.0000000");
+    expect(trustlineLabel(unat)).toBe("Trustline not authorized by issuer");
+    expect(suggestSourceSpend(unat)).toBe("0.0000000");
+
+    expect(liab.trustline).toBe("present");
+    expect(liab.available).toBe("5.0000000");
+    expect(liab.sellingLiabilities).toBe("15.0000000");
+    expect(suggestSourceSpend(liab)).toBe("5.0000000");
+
+    await expect(quoteConversion(froz, 10000000n)).rejects.toThrow(
+      "Trustline for FROZ is frozen by the issuer.",
+    );
+    await expect(quoteConversion(unat, 10000000n)).rejects.toThrow(
+      "Trustline for UNAT is not authorized by the issuer.",
+    );
+
+    await expect(quoteTrade("sepolia", froz, "1.0", 1)).rejects.toThrow(
+      "Trustline for FROZ is frozen by the issuer.",
+    );
+    await expect(quoteTrade("sepolia", unat, "1.0", 1)).rejects.toThrow(
+      "Trustline for UNAT is not authorized by the issuer.",
+    );
+
+    const dummySigner = vi.fn();
+    const frozConversion = {
+      source: froz,
+      sourceMax: 10000000n,
+      usdcAmount: 9000000n,
+      path: [],
+    };
+    await expect(submitConversion(TESTNET.reader, frozConversion, dummySigner)).rejects.toThrow(
+      "Trustline for FROZ is frozen by the issuer.",
+    );
+
+    const unatConversion = {
+      source: unat,
+      sourceMax: 10000000n,
+      usdcAmount: 9000000n,
+      path: [],
+    };
+    await expect(submitConversion(TESTNET.reader, unatConversion, dummySigner)).rejects.toThrow(
+      "Trustline for UNAT is not authorized by the issuer.",
+    );
+
+    const liabConversion = {
+      source: liab,
+      sourceMax: 60000000n,
+      usdcAmount: 50000000n,
+      path: [],
+    };
+    await expect(submitConversion(TESTNET.reader, liabConversion, dummySigner)).rejects.toThrow(
+      "Insufficient available LIAB balance. Selling liabilities reduce your spendable balance to 5.0000000 LIAB.",
+    );
+  });
+  it("decimal strings remain exact through calculation and rendering", () => {
+    const issuer = Keypair.random().publicKey();
+    const asset = {
+      id: `EXACT:${issuer}`,
+      code: "EXACT",
+      issuer,
+      verification: "wallet-trustline" as const,
+      trustline: "present" as const,
+      balance: "9999999.1234567",
+      sellingLiabilities: "0.0000001",
+    };
+    expect(spendableBalance(asset)).toBe("9999999.1234566");
+    expect(suggestSourceSpend(asset)).toBe("9999999.1234566");
+
+    const precisionAsset = {
+      ...asset,
+      balance: "0.0000002",
+      sellingLiabilities: "0.0000001",
+    };
+    expect(spendableBalance(precisionAsset)).toBe("0.0000001");
+    expect(suggestSourceSpend(precisionAsset)).toBe("0.0000001");
+  });
 });
 describe("Independently verified testnet bridge lanes", () => {
   it("exposes only the routes backed by checked-in delivery evidence", () => {
-    expect(
-      Object.fromEntries(DESTINATIONS.map(({ key, routes }) => [key, routes])),
-    ).toEqual({
+    expect(Object.fromEntries(DESTINATIONS.map(({ key, routes }) => [key, routes]))).toEqual({
       sepolia: [0, 1],
       "base-sepolia": [0],
       "arc-testnet": [0],

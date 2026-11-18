@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Account, Contract, TransactionBuilder, scValToNative } from "@stellar/stellar-sdk";
+import { Account, Contract, TransactionBuilder, rpc, scValToNative } from "@stellar/stellar-sdk";
 import {
   bridgeOperation,
+  claimMatchesDeployment,
   parseSendAmount,
   readTransaction,
   validateRecipient,
+  verifyRouterDeployment,
   type LiveQuote,
 } from "../src/contracts/stellar";
-import { TESTNET } from "../src/config/testnet";
+import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 const quote: LiveQuote = {
   route: 1,
   adapter: TESTNET.router,
@@ -23,6 +25,81 @@ const quote: LiveQuote = {
 };
 afterEach(() => vi.unstubAllGlobals());
 describe("Real Stellar transaction encoding", () => {
+  it("only offers recovery for a claim carrying the verified deployment identity", () => {
+    const deployment = {
+      chain: STELLAR_DEPLOYMENT.chain,
+      router: STELLAR_DEPLOYMENT.router,
+      wasmHash: STELLAR_DEPLOYMENT.wasmHash,
+    };
+    expect(claimMatchesDeployment({ deployment }, deployment)).toBe(true);
+    expect(
+      claimMatchesDeployment({ deployment: { ...deployment, router: "COTHER" } }, deployment),
+    ).toBe(false);
+    expect(claimMatchesDeployment({ deployment: null }, deployment)).toBe(false);
+  });
+  it("matches claims only to the exact chain, router and WASM revision", () => {
+    const claim = {
+      deployment: {
+        chain: STELLAR_DEPLOYMENT.chain,
+        router: STELLAR_DEPLOYMENT.router,
+        wasmHash: STELLAR_DEPLOYMENT.wasmHash,
+      },
+    };
+    expect(claimMatchesDeployment(claim, claim.deployment)).toBe(true);
+    for (const change of [
+      { chain: "ethereum-sepolia" },
+      { router: "COTHER" },
+      { wasmHash: "0".repeat(64) },
+    ]) {
+      expect(
+        claimMatchesDeployment(
+          { deployment: { ...claim.deployment, ...change } },
+          claim.deployment,
+        ),
+      ).toBe(false);
+    }
+    expect(claimMatchesDeployment({ deployment: null }, claim.deployment)).toBe(false);
+  });
+  it("accepts only the configured router's verified on-chain WASM revision", async () => {
+    vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
+      passphrase: STELLAR_DEPLOYMENT.networkPassphrase,
+      protocolVersion: "27",
+    });
+    vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
+      executable: {
+        type: "contractExecutableWasm",
+        wasmHash: Uint8Array.from({ length: 32 }, (_, index) =>
+          parseInt(STELLAR_DEPLOYMENT.wasmHash.slice(index * 2, index * 2 + 2), 16),
+        ),
+      },
+      storage: null,
+    } as never);
+    await expect(verifyRouterDeployment()).resolves.toMatchObject({
+      router: STELLAR_DEPLOYMENT.router,
+      wasmHash: STELLAR_DEPLOYMENT.wasmHash,
+      commit: STELLAR_DEPLOYMENT.commit,
+    });
+  });
+  it("rejects an on-chain router revision that is not in the deployment manifest", async () => {
+    vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
+      passphrase: STELLAR_DEPLOYMENT.networkPassphrase,
+      protocolVersion: "27",
+    });
+    vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
+      executable: { type: "contractExecutableWasm", wasmHash: new Uint8Array(32) },
+      storage: null,
+    } as never);
+    await expect(verifyRouterDeployment()).rejects.toThrow("revision is not verified");
+  });
+  it("keeps claim recovery read-only when the RPC network is unsupported", async () => {
+    vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
+      passphrase: "Public Global Stellar Network ; September 2015",
+      protocolVersion: "27",
+    });
+    const contract = vi.spyOn(rpc.Server.prototype, "getContractInstance");
+    await expect(verifyRouterDeployment()).rejects.toThrow("not Stellar Testnet");
+    expect(contract).not.toHaveBeenCalled();
+  });
   it("keeps values beyond Number precision exact and rejects invalid amounts", () => {
     expect(parseSendAmount("900719925.4740993")).toBe(9007199254740993n);
     for (const value of ["", "0", "-1", "1.12345678", "1e3", "NaN", "1,000"])
