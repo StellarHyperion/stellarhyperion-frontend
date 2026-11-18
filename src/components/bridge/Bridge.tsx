@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import { fetchClaims } from "../../api";
 import {
@@ -36,6 +36,7 @@ import {
   type LaneState,
   type LiveQuote,
   type PendingClaim,
+  type SubmissionReconciliation,
   type TransactionPhase,
   type TransactionResult,
 } from "../../contracts";
@@ -55,6 +56,9 @@ import {
   type TradeQuote,
 } from "../../contracts/assets";
 import {
+  claimOperationOwnership,
+  getOperationOwnership,
+  releaseOperationOwnership,
   saveCheckpoint,
   useTransferCheckpoint,
   type TransferCheckpoint,
@@ -378,11 +382,30 @@ export function Bridge() {
     accounts?.account === wallet.address && !accounts.error
       ? (walletAsset?.balance ?? "0")
       : undefined;
+  const liveReview = useRef({
+    account: wallet.address,
+    recipient,
+    amount,
+    sourceId: source.id,
+    destination,
+    route,
+  });
+  useLayoutEffect(() => {
+    liveReview.current = {
+      account: wallet.address,
+      recipient,
+      amount,
+      sourceId: source.id,
+      destination,
+      route,
+    };
+  }, [wallet.address, recipient, amount, source.id, destination, route]);
   const spendableStr =
     accounts?.account === wallet.address && !accounts.error && walletAsset
       ? spendableBalance(walletAsset)
       : sourceBalance;
   const spendableUnits = spendableStr !== undefined ? parseUnits(spendableStr, 7) : undefined;
+
   const locked = busy || checkpoint !== null;
   let inputError: string | null = null;
   let valid = false;
@@ -474,6 +497,41 @@ export function Bridge() {
     setResult(null);
     setPhase("preparing");
     const sender = wallet.address;
+    const initialRecipient = recipient;
+    const initialAmount = amount;
+    const initialSourceId = source.id;
+    const initialDestination = destination;
+    const initialRoute = route;
+    let ownership: ReturnType<typeof claimOperationOwnership>;
+    try {
+      ownership = claimOperationOwnership({
+        account: sender,
+        recipient: validateRecipient(recipient),
+        destination,
+        route,
+        bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
+        stage: reviewedQuote.conversion ? "conversion" : "bridge",
+      });
+    } catch (cause) {
+      setError(errorMessage(cause));
+      setBusy(false);
+      setPhase(null);
+      return;
+    }
+    const isSuperseded = () => {
+      const currentOwner = getOperationOwnership();
+      if (currentOwner?.id !== ownership.id) return true;
+      const current = liveReview.current;
+      if (
+        current.recipient !== initialRecipient ||
+        current.amount !== initialAmount ||
+        current.sourceId !== initialSourceId ||
+        current.destination !== initialDestination ||
+        current.route !== initialRoute
+      )
+        return true;
+      return false;
+    };
     let converted: TransferCheckpoint | null = null;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
       router: TESTNET.router,
@@ -485,6 +543,22 @@ export function Bridge() {
       stage,
       txHash: hash,
     });
+    const conversionReconcile: SubmissionReconciliation = {
+      expectedAccount: sender,
+      getCurrentAccount: () => liveReview.current.account ?? null,
+      isSuperseded,
+      onAccountSwitch: (hash) => {
+        saveCheckpoint(pending("conversion", hash));
+      },
+    };
+    const bridgeReconcile: SubmissionReconciliation = {
+      expectedAccount: sender,
+      getCurrentAccount: () => liveReview.current.account ?? null,
+      isSuperseded,
+      onAccountSwitch: (hash) => {
+        saveCheckpoint(pending("bridge", hash));
+      },
+    };
     try {
       if (reviewedQuote.conversion) {
         setStep("conversion");
@@ -497,6 +571,7 @@ export function Bridge() {
             if (hash) saveCheckpoint(pending("conversion", hash));
           },
           { ...reviewApproval, operation: "conversion" },
+          conversionReconcile,
         );
         if (swap.status !== "confirmed") {
           setResult(swap);
@@ -522,6 +597,7 @@ export function Bridge() {
           }
         },
         { ...reviewApproval, operation: "bridge" },
+        bridgeReconcile,
       );
       setResult(submitted);
     } catch (cause) {
@@ -529,6 +605,7 @@ export function Bridge() {
       if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(converted);
       setError(message);
     } finally {
+      releaseOperationOwnership(ownership.id);
       setBusy(false);
       setPhase(null);
     }
