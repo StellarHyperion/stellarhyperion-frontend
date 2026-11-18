@@ -27,13 +27,14 @@ import {
   type BridgeRoute,
   type DestinationKey,
 } from "../config/testnet";
+import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
 
 export type WalletSigner = (
   xdr: string,
-  opts: { networkPassphrase: string },
+  opts: { networkPassphrase: string; approval?: WalletApprovalProvenance },
 ) => Promise<{ signedTxXdr: string }>;
 export type TransactionPhase = "preparing" | "signing" | "submitting" | "pending" | "confirmed";
 export interface TransactionResult {
@@ -480,6 +481,7 @@ async function submitOperation(
   operation: xdr.Operation,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("preparing");
@@ -504,7 +506,7 @@ async function submitOperation(
   }
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
   progress?.("signing");
-  return signAndSubmit(prepared, sign, progress);
+  return signAndSubmit(prepared, sign, progress, approval);
 }
 
 export async function submitClassicOperations(
@@ -512,6 +514,7 @@ export async function submitClassicOperations(
   operations: readonly xdr.Operation[],
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   const client = server();
   if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
@@ -521,19 +524,22 @@ export async function submitClassicOperations(
     networkPassphrase: TESTNET.networkPassphrase,
   });
   for (const operation of operations) builder.addOperation(operation);
-  return signAndSubmit(builder.setTimeout(180).build(), sign, progress);
+  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval);
 }
 
 async function signAndSubmit(
   prepared: Transaction,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("signing");
-  const signed = await sign(prepared.toXdr(), {
-    networkPassphrase: TESTNET.networkPassphrase,
-  });
+  const signOptions = { networkPassphrase: TESTNET.networkPassphrase };
+  const signed = await sign(
+    prepared.toXdr(),
+    approval ? { ...signOptions, approval } : signOptions,
+  );
   const signedTransaction = TransactionBuilder.fromXdr(
     signed.signedTxXdr,
     TESTNET.networkPassphrase,
@@ -580,6 +586,7 @@ export async function submitBridgeOut(
   recipient: string,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
   const refreshed = await quoteTransfer(
@@ -598,7 +605,13 @@ export async function submitBridgeOut(
   const balance = await readBalance(sender);
   if (balance < refreshed.grossAmount)
     throw new Error(`Insufficient testnet USDC. Your balance is ${formatUnits(balance, 7)} USDC.`);
-  return submitOperation(sender, bridgeOperation(sender, quoted, recipient), sign, progress);
+  return submitOperation(
+    sender,
+    bridgeOperation(sender, quoted, recipient),
+    sign,
+    progress,
+    approval,
+  );
 }
 
 export async function getClaim(id: bigint): Promise<PendingClaim> {
@@ -619,6 +632,7 @@ export async function submitSettleClaim(
   sender: string,
   id: bigint,
   sign: WalletSigner,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
@@ -630,5 +644,7 @@ export async function submitSettleClaim(
       nativeToScVal(id, { type: "u64" }),
     ),
     sign,
+    undefined,
+    approval,
   );
 }

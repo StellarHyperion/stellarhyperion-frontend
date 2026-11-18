@@ -9,6 +9,7 @@ import {
   type TransactionResult,
   type WalletSigner,
 } from "./stellar";
+import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 
 export interface SourceAsset {
   id: string;
@@ -209,6 +210,7 @@ export async function submitConversion(
   conversion: Conversion,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  approval?: WalletApprovalProvenance,
 ): Promise<TransactionResult> {
   const assets = await accountAssets(sender);
   const balance = assets.find((asset) => asset.id === conversion.source.id)?.balance ?? "0";
@@ -219,5 +221,6 @@ export async function submitConversion(
     conversionOperations(sender, conversion, !assets.some((asset) => asset.id === USDC.id)),
     sign,
     progress,
+    approval,
   );
 }

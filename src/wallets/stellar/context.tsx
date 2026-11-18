@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { StellarWalletContextValue } from "./types";
+import type { StellarWalletContextValue, WalletApprovalProvenance } from "./types";
 import { TESTNET } from "../../config/testnet";
 
 import { Dialog } from "../../components/common/Dialog";
@@ -133,14 +133,23 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const signTransaction = useCallback(
     async (
       transaction: string,
-      opts?: { networkPassphrase?: string; operation?: PendingSigningRequest["operation"] },
+      opts?: {
+        networkPassphrase?: string;
+        operation?: PendingSigningRequest["operation"];
+        approval?: WalletApprovalProvenance;
+      },
     ) => {
       if (!address || !walletId) throw new Error("Connect your Stellar wallet first.");
       if (opts?.networkPassphrase && opts.networkPassphrase !== TESTNET.networkPassphrase)
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
+      if (opts?.approval && opts.approval.account !== address)
+        throw new Error("The wallet account changed. Review the transaction again.");
       return coordinator.current.run(
-        { operation: opts?.operation ?? "transaction", account: address },
-        () => walletSign(walletId, transaction, address),
+        {
+          operation: opts?.approval?.operation ?? opts?.operation ?? "transaction",
+          account: address,
+        },
+        () => walletSign(walletId, transaction, address, opts?.approval),
       );
     },
     [address, walletId],
@@ -150,6 +159,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     () => ({
       address,
       shortAddress: address ? `${address.slice(0, 6)}...${address.slice(-6)}` : null,
+      walletId,
       isConnected: address !== null,
       isConnecting,
       error,
@@ -158,7 +168,16 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       disconnect,
       signTransaction,
     }),
-    [address, isConnecting, error, pendingSigningRequest, connect, disconnect, signTransaction],
+    [
+      address,
+      walletId,
+      isConnecting,
+      error,
+      pendingSigningRequest,
+      connect,
+      disconnect,
+      signTransaction,
+    ],
   );
   return (
     <Context.Provider value={value}>
