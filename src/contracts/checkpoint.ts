@@ -14,11 +14,14 @@ export interface TransferCheckpoint {
 }
 const key = "hyperion.testnet.pending-transfer";
 const event = "hyperion:pending-transfer";
+let memoryCheckpoint: string | null = null;
+let checkpointPersistenceFailed = false;
 function snapshot(): string | null {
+  if (checkpointPersistenceFailed) return memoryCheckpoint;
   try {
-    return localStorage.getItem(key);
+    return typeof localStorage === "undefined" ? memoryCheckpoint : localStorage.getItem(key);
   } catch {
-    return null;
+    return memoryCheckpoint;
   }
 }
 function subscribe(listener: () => void) {
@@ -66,14 +69,36 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
   }
 }
 export function saveCheckpoint(value: TransferCheckpoint | null) {
+  const existing = parseCheckpoint(snapshot());
+  if (
+    value &&
+    existing &&
+    value.txHash !== existing.txHash &&
+    !(
+      existing.stage === "conversion" &&
+      value.stage === "bridge" &&
+      existing.account === value.account &&
+      existing.recipient === value.recipient &&
+      existing.destination === value.destination &&
+      existing.route === value.route &&
+      existing.bridgeAmount === value.bridgeAmount
+    )
+  )
+    throw new Error(
+      "A previous transaction remains pending. Check its outcome before submitting another.",
+    );
+  if (value) memoryCheckpoint = JSON.stringify(value);
   try {
     if (typeof localStorage !== "undefined") {
       if (value) localStorage.setItem(key, JSON.stringify(value));
       else localStorage.removeItem(key);
     }
+    checkpointPersistenceFailed = false;
   } catch {
+    checkpointPersistenceFailed = true;
     throw new Error("Browser storage is unavailable. The next transaction was not submitted.");
   }
+  if (!value) memoryCheckpoint = null;
   if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
     try {
       window.dispatchEvent(new Event(event));
@@ -125,7 +150,8 @@ export function parseOwnership(raw: string | null): OperationOwnership | null {
       BigInt(value.bridgeAmount) <= 0n ||
       (value.route !== 0 && value.route !== 1) ||
       (value.stage !== "conversion" && value.stage !== "bridge") ||
-      typeof value.timestamp !== "number"
+      !Number.isSafeInteger(value.timestamp) ||
+      value.timestamp < 0
     ) {
       return null;
     }
@@ -158,6 +184,8 @@ export function claimOperationOwnership(
     timestamp?: number;
   },
 ): OperationOwnership {
+  if (typeof window !== "undefined" && typeof localStorage === "undefined")
+    throw new Error("Browser storage is unavailable. Review the transfer again before signing.");
   const id =
     ownership.id ??
     (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -174,7 +202,7 @@ export function claimOperationOwnership(
       localStorage.setItem(ownershipKey, serialized);
     }
   } catch {
-    /* browser storage unavailable */
+    throw new Error("Browser storage is unavailable. Review the transfer again before signing.");
   }
   memoryOwnership = serialized;
   if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {

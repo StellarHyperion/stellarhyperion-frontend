@@ -156,4 +156,19 @@ describe("Signed Stellar submission failure boundaries", () => {
     expect(send).not.toHaveBeenCalled();
     expect(recoveredHash).toMatch(/^[0-9a-f]{64}$/);
   });
+  it("does not broadcast after the wallet disconnects while signing", async () => {
+    const { send } = setup();
+    let account: string | null = key.publicKey();
+    const wallet = (value: string) => {
+      account = null;
+      return sign(value);
+    };
+    await expect(
+      submitSettleClaim(key.publicKey(), 1n, wallet, undefined, {
+        expectedAccount: key.publicKey(),
+        getCurrentAccount: () => account,
+      }),
+    ).rejects.toThrow("switched");
+    expect(send).not.toHaveBeenCalled();
+  });
 });
