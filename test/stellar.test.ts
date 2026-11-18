@@ -3,11 +3,13 @@ import {
   getOperationOwnership,
   releaseOperationOwnership,
   saveCheckpoint,
+  type TransferCheckpoint,
 } from "../src/contracts/checkpoint";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Account, Contract, TransactionBuilder, rpc, scValToNative } from "@stellar/stellar-sdk";
 import {
   bridgeOperation,
+  diagnoseSequence,
   claimMatchesDeployment,
   parseSendAmount,
   readTransaction,

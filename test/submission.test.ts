@@ -28,7 +28,9 @@ function setup() {
     passphrase: TESTNET.networkPassphrase,
     protocolVersion: "27",
   });
-  vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(key.publicKey(), "0"));
+  vi.spyOn(rpc.Server.prototype, "getAccount").mockImplementation(() =>
+    Promise.resolve(new Account(key.publicKey(), "0")),
+  );
   vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
     executable: {
       type: "contractExecutableWasm",
