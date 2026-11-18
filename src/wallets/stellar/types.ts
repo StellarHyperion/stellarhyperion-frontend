@@ -25,4 +25,7 @@ export interface StellarWalletContextValue {
       approval?: WalletApprovalProvenance;
     },
   ) => Promise<{ signedTxXdr: string }>;
+  // Explicitly abandons any outstanding signature request(s), resolving them to a clear failure
+  // instead of leaving the signing controls locked. Never resubmits and never assumes success.
+  cancelSignature: () => void;
 }
