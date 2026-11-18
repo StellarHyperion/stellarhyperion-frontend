@@ -1050,6 +1050,10 @@ export function Bridge() {
 
 export function ClaimRecovery() {
   const wallet = useStellarWallet();
+  const currentAccount = useRef(wallet.address);
+  useLayoutEffect(() => {
+    currentAccount.current = wallet.address;
+  }, [wallet.address]);
   const [id, setId] = useState("");
   const [claims, setClaims] = useState<PendingClaim[]>([]);
   const [batchSupported, setBatchSupported] = useState<boolean | null>(null);

@@ -24,6 +24,7 @@ const success = (retval: xdr.ScVal): rpc.Api.SimulateTransactionSuccessResponse 
   result: { auth: [], retval },
 });
 function setup() {
+  vi.spyOn(rpc.Server.prototype, "getContractMethods").mockResolvedValue([]);
   vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
     passphrase: TESTNET.networkPassphrase,
     protocolVersion: "27",

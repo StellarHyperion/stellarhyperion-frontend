@@ -1,3 +1,4 @@
+import { parseClaimPreview } from "../src/contracts/stellar";
 import {
   claimOperationOwnership,
   getOperationOwnership,
@@ -93,6 +94,22 @@ describe("Real Stellar transaction encoding", () => {
     const ids = op.func.invokeContract.args[1];
     if (!ids) throw new Error("Missing claim ids.");
     expect(scValToNative(ids)).toEqual([1n, 9007199254740993n]);
+  });
+
+  it("keeps unsupported claim previews explicitly unknown", () => {
+    expect(parseClaimPreview({ eligible: true }, "preview_settle_claim")).toMatchObject({
+      status: "eligible",
+      previewMethod: "preview_settle_claim",
+    });
+    expect(
+      parseClaimPreview({ can_settle: false, reason: "Missing trustline" }, "can_settle_claim"),
+    ).toMatchObject({ status: "ineligible", reason: "Missing trustline" });
+    expect(
+      parseClaimPreview({ reason: "No preview result" }, "preview_settle_claim"),
+    ).toMatchObject({
+      status: "unknown",
+      previewMethod: "preview_settle_claim",
+    });
   });
 
   it("only offers recovery for a claim carrying the verified deployment identity", () => {
