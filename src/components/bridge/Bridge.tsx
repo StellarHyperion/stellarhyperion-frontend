@@ -1116,6 +1116,7 @@ export function ClaimRecovery() {
         claim.id,
         (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "claim" }),
         claimApproval ?? undefined,
+        { expectedAccount: wallet.address, getCurrentAccount: () => currentAccount.current },
       );
       setResult(transaction);
       if (transaction.status === "confirmed") setClaims(await getClaims([claim.id]));
@@ -1135,6 +1136,7 @@ export function ClaimRecovery() {
         claims,
         wallet.signTransaction,
         claimApproval ?? undefined,
+        { expectedAccount: wallet.address, getCurrentAccount: () => currentAccount.current },
       );
       setResult(transaction);
       if (transaction.status === "confirmed")

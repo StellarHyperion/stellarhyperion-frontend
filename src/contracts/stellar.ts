@@ -977,6 +977,7 @@ export async function submitSettleClaims(
     current.some((claim, index) => {
       const reviewed = claims[index];
       return (
+        claim.eligibility.status === "ineligible" ||
         !reviewed ||
         claim.settled ||
         claim.recipient !== reviewed.recipient ||
