@@ -536,6 +536,46 @@ export function reconcileSignatureReturn(
   return { valid: true };
 }
 
+export interface SequenceDiagnostic {
+  valid: boolean;
+  expectedSequence: string;
+  ledgerSequence: string;
+  reason: string | null;
+}
+
+export function diagnoseSequence(
+  constructedSequence: string,
+  ledgerSequence: string,
+): SequenceDiagnostic {
+  const expectedLedgerSequence = (BigInt(constructedSequence) - 1n).toString();
+  if (ledgerSequence !== expectedLedgerSequence) {
+    return {
+      valid: false,
+      expectedSequence: expectedLedgerSequence,
+      ledgerSequence,
+      reason: `The account sequence changed from ${expectedLedgerSequence} to ${ledgerSequence} after construction. Review a fresh simulation before signing.`,
+    };
+  }
+  return {
+    valid: true,
+    expectedSequence: expectedLedgerSequence,
+    ledgerSequence,
+    reason: null,
+  };
+}
+
+export async function verifyAccountSequence(
+  client: rpc.Server,
+  accountAddress: string,
+  constructedSequence: string,
+): Promise<void> {
+  const latest = await client.getAccount(accountAddress);
+  const diagnostic = diagnoseSequence(constructedSequence, latest.sequenceNumber());
+  if (!diagnostic.valid) {
+    throw new Error(diagnostic.reason ?? "The account sequence changed after construction.");
+  }
+}
+
 export async function submitOperation(
   sender: string,
   operation: xdr.Operation,
@@ -565,6 +605,7 @@ export async function submitOperation(
     );
   }
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
+  await verifyAccountSequence(client, sender, prepared.sequence);
   progress?.("signing");
   return signAndSubmit(prepared, sign, progress, reconcile);
 }
@@ -579,12 +620,15 @@ export async function submitClassicOperations(
   const client = server();
   if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
     throw new Error("The RPC endpoint is not Stellar Testnet.");
-  const builder = new TransactionBuilder(await client.getAccount(sender), {
+  const account = await client.getAccount(sender);
+  const builder = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: TESTNET.networkPassphrase,
   });
   for (const operation of operations) builder.addOperation(operation);
-  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, reconcile);
+  const prepared = builder.setTimeout(180).build();
+  await verifyAccountSequence(client, sender, prepared.sequence);
+  return signAndSubmit(prepared, sign, progress, reconcile);
 }
 
 async function signAndSubmit(
@@ -604,6 +648,11 @@ async function signAndSubmit(
   );
   if (toHex(signedTransaction.hash()) !== toHex(prepared.hash())) {
     throw new Error("The wallet returned a different transaction. Nothing was submitted.");
+  }
+  if ("innerTransaction" in signedTransaction || signedTransaction.sequence !== prepared.sequence) {
+    throw new Error(
+      "The transaction sequence was modified. Stale sequence cannot be silently changed inside a reviewed signed envelope.",
+    );
   }
   const hash = toHex(prepared.hash()).slice(2);
   if (reconcile) {
@@ -637,7 +686,7 @@ async function signAndSubmit(
   } catch (error) {
     if (
       error instanceof Error &&
-      /network rejected|Nothing was accepted|superseded|switched/.test(error.message)
+      /network rejected|Nothing was accepted|superseded|switched|sequence/i.test(error.message)
     )
       throw error;
     // A network timeout after submission has an unknown outcome. Preserve the real hash for checking.

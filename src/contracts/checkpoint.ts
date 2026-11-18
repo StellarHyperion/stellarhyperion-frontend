@@ -14,11 +14,15 @@ export interface TransferCheckpoint {
 }
 const key = "hyperion.testnet.pending-transfer";
 const event = "hyperion:pending-transfer";
+let memoryCheckpoint: string | null = null;
 function snapshot(): string | null {
   try {
-    return localStorage.getItem(key);
+    if (typeof localStorage !== "undefined") {
+      return localStorage.getItem(key);
+    }
+    return memoryCheckpoint;
   } catch {
-    return null;
+    return memoryCheckpoint;
   }
 }
 function subscribe(listener: () => void) {
@@ -65,15 +69,34 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     return null;
   }
 }
-export function saveCheckpoint(value: TransferCheckpoint | null) {
+export function saveCheckpoint(value: TransferCheckpoint | null, force = false) {
+  if (value && !force) {
+    const existing = parseCheckpoint(snapshot());
+    if (
+      existing &&
+      existing.txHash !== value.txHash &&
+      !(
+        existing.stage === "conversion" &&
+        value.stage === "bridge" &&
+        existing.account === value.account
+      )
+    ) {
+      throw new Error(
+        "An unknown previous transaction is pending. Previous submissions remain pending rather than replaced.",
+      );
+    }
+  }
+  const serialized = value ? JSON.stringify(value) : null;
   try {
     if (typeof localStorage !== "undefined") {
-      if (value) localStorage.setItem(key, JSON.stringify(value));
+      if (serialized) localStorage.setItem(key, serialized);
       else localStorage.removeItem(key);
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("remain pending")) throw error;
     throw new Error("Browser storage is unavailable. The next transaction was not submitted.");
   }
+  memoryCheckpoint = serialized;
   if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
     try {
       window.dispatchEvent(new Event(event));
