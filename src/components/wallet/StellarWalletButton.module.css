@@ -54,7 +54,7 @@
   position: absolute;
   top: calc(100% + 12px);
   right: 0;
-  min-width: 17rem;
+  width: min(19rem, calc(100vw - 2rem));
   background-color: var(--ink-2);
   border: 1px solid var(--rule-2);
   border-radius: var(--radius-control);
@@ -94,7 +94,7 @@
 }
 
 .diagTitle {
-  font-family: var(--font-mono);
+  font-family: var(--face-mono);
   font-size: 0.6875rem;
   color: var(--fg-3);
   text-transform: lowercase;
@@ -104,7 +104,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-family: var(--font-mono);
+  font-family: var(--face-mono);
   font-size: 0.6875rem;
 }
 
@@ -131,13 +131,13 @@
   border: 1px solid var(--rule);
   border-radius: 2px;
   color: var(--fg);
-  font-family: var(--font-mono);
+  font-family: var(--face-mono);
   font-size: 0.75rem;
   cursor: pointer;
   text-align: left;
   transition:
-    background-color var(--duration-fast) var(--ease-standard),
-    border-color var(--duration-fast) var(--ease-standard);
+    background-color var(--motion-state) var(--ease-enter),
+    border-color var(--motion-state) var(--ease-enter);
 }
 
 .walletOption:hover:not(:disabled) {
@@ -188,7 +188,7 @@
   border: 1px solid var(--bad);
   border-radius: 2px;
   color: var(--bad);
-  font-family: var(--font-mono);
+  font-family: var(--face-mono);
   font-size: 0.6875rem;
 }
 

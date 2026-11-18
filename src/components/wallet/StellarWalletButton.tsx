@@ -1,40 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useStellarWallet, type WalletAvailabilityStatus } from "../../wallets/stellar";
+import { useEffect, useId, useRef, useState } from "react";
+import {
+  useStellarWallet,
+  isWalletId,
+  walletCapabilities,
+  walletAvailabilityLabel,
+} from "../../wallets/stellar";
 import styles from "./StellarWalletButton.module.css";
-
-function getStatusClass(status: WalletAvailabilityStatus): string {
-  switch (status) {
-    case "installed":
-      return styles.statusInstalled;
-    case "missing_extension":
-      return styles.statusMissing;
-    case "popup_required":
-      return styles.statusPopup;
-    case "available":
-      return styles.statusAvailable;
-    case "unsupported":
-    default:
-      return styles.statusUnsupported;
-  }
-}
-
-function formatStatusLabel(status: WalletAvailabilityStatus): string {
-  switch (status) {
-    case "installed":
-      return "installed";
-    case "missing_extension":
-      return "missing extension";
-    case "popup_required":
-      return "popup required";
-    case "available":
-      return "available";
-    case "unsupported":
-    default:
-      return "unsupported";
-  }
-}
 
 export function StellarWalletButton() {
   const {
@@ -42,16 +15,26 @@ export function StellarWalletButton() {
     isConnecting,
     shortAddress,
     address,
+    walletId,
     error,
     pendingSigningRequest,
     connect,
     disconnect,
   } = useStellarWallet();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [localNotice, setLocalNotice] = useState<string | null>(null);
+  const menuId = useId();
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const activeCapabilities = isWalletId(walletId) ? walletCapabilities(walletId) : null;
+  const walletDisplayName = activeCapabilities?.name ?? "Unknown wallet";
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        buttonRef.current?.focus();
+      }
+    }
     function handleClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setMenuOpen(false);
@@ -59,25 +42,13 @@ export function StellarWalletButton() {
     }
     if (menuOpen) {
       document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener("keydown", handleKey);
       return () => {
         document.removeEventListener("mousedown", handleClickOutside);
+        document.removeEventListener("keydown", handleKey);
       };
     }
   }, [menuOpen]);
-
-  const handleWalletSelect = async (selectedId: string, status: WalletAvailabilityStatus) => {
-    setLocalNotice(null);
-    if (status === "missing_extension") {
-      setLocalNotice(
-        `Wallet "${selectedId}" extension not detected. Install the extension to connect.`,
-      );
-      return;
-    }
-    const res = await connect(selectedId);
-    if (res) {
-      setMenuOpen(false);
-    }
-  };
 
   if (!isConnected) {
     return (
@@ -108,7 +79,8 @@ export function StellarWalletButton() {
         onClick={() => {
           setMenuOpen((prev) => !prev);
         }}
-        aria-haspopup="menu"
+        ref={buttonRef}
+        aria-controls={menuId}
         aria-expanded={menuOpen}
       >
         <span className={styles.dot} />
@@ -117,7 +89,7 @@ export function StellarWalletButton() {
       </button>
 
       {menuOpen && (
-        <div className={styles.menu} role="menu">
+        <div id={menuId} className={styles.menu} role="region" aria-label="Wallet details">
           <div className={styles.addressRow}>
             <span className={styles.addressLabel}>stellar account</span>
             <span className={styles.fullAddress}>{address}</span>
@@ -133,9 +105,7 @@ export function StellarWalletButton() {
 
             <div className={styles.diagRow}>
               <span className={styles.diagKey}>availability</span>
-              <span className={styles.diagVal}>
-                {formatStatusLabel(activeCapabilities?.availability ?? "available")}
-              </span>
+              <span className={styles.diagVal}>{walletAvailabilityLabel("available")}</span>
             </div>
 
             <div className={styles.diagRow}>
@@ -149,25 +119,17 @@ export function StellarWalletButton() {
 
             <div className={styles.diagRow}>
               <span className={styles.diagKey}>auth entry</span>
-              <span className={styles.diagVal}>
-                {activeCapabilities?.signingLimitations.canSignAuthEntry
-                  ? "supported"
-                  : "unsupported"}
-              </span>
+              <span className={styles.diagVal}>Unsupported by this app</span>
             </div>
 
             <div className={styles.diagRow}>
               <span className={styles.diagKey}>account events</span>
-              <span className={styles.diagVal}>
-                {activeCapabilities?.supportedAccountQueries.canListenAccountChange
-                  ? "live sync"
-                  : "static"}
-              </span>
+              <span className={styles.diagVal}>Checked before signing</span>
             </div>
 
             <div className={styles.diagRow}>
               <span className={styles.diagKey}>active lane</span>
-              <span className={styles.diagVal}>{network.toLowerCase()}</span>
+              <span className={styles.diagVal}>Stellar Testnet</span>
             </div>
           </div>
 
