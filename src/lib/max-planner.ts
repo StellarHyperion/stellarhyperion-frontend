@@ -1,12 +1,6 @@
 import { relayBudget } from "./relay-budget";
 
-/**
- * Conservative XLM minimum reserve to leave in the account after paying relay gas.
- * Stellar base reserve is 0.5 XLM per account plus 0.5 XLM per subentry.
- * A funded account with one USDC trustline has at least 2 subentries (account + trustline),
- * so the protocol minimum is 1.0 XLM. We hold 2.0 XLM as a conservative margin.
- * Value is in Stellar's 7-decimal stroop representation (10_000_000 = 1 XLM).
- */
+/** Extra XLM buffer for network/resource fees, after the live protocol reserve is excluded. */
 export const XLM_MINIMUM_RESERVE = 20_000_000n; // 2 XLM in 7-decimal stroops
 
 /**
@@ -34,7 +28,13 @@ export function planMaxUsdcAmount(params: {
 }): bigint | null {
   const { route, usdcSpendable, xlmSpendable, flowAvailable, estimatedRelayGas } = params;
 
-  if (estimatedRelayGas <= 0n || flowAvailable <= 0n) return null;
+  if (
+    (route !== 0 && route !== 1) ||
+    estimatedRelayGas <= 0n ||
+    flowAvailable <= 0n ||
+    usdcSpendable <= 0n
+  )
+    return null;
 
   if (route === 1) {
     // ITS: relay gas paid from XLM balance.
@@ -45,7 +45,9 @@ export function planMaxUsdcAmount(params: {
     return cap > 0n ? cap : null;
   }
 
-  // CCTP (route 0): relay gas budget subtracted from USDC balance.
+  // CCTP still needs XLM to pay transaction fees.
+  if (xlmSpendable < XLM_MINIMUM_RESERVE) return null;
+  // Leave a conservative USDC buffer for the forwarding budget.
   const gasBudget = relayBudget(estimatedRelayGas);
   const usdcAfterRelay = usdcSpendable - gasBudget;
   if (usdcAfterRelay <= 0n) return null;

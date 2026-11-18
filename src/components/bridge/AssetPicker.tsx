@@ -88,8 +88,7 @@ export function SourceAssetPicker({
           const walletAsset = balances.find((balance) => balance.id === asset.id);
           const currentAsset = walletAsset ?? asset;
           const hasLiabilities =
-            walletAsset?.sellingLiabilities &&
-            parseUnits(walletAsset.sellingLiabilities, 7) > 0n;
+            walletAsset?.sellingLiabilities && parseUnits(walletAsset.sellingLiabilities, 7) > 0n;
           return (
             <div className={styles.assetChoice} key={asset.id}>
               <button
@@ -115,7 +114,7 @@ export function SourceAssetPicker({
                 <span className={styles.balance}>
                   {walletAsset
                     ? hasLiabilities
-                      ? walletAsset.available ?? walletAsset.balance
+                      ? (walletAsset.available ?? walletAsset.balance)
                       : walletAsset.balance
                     : undefined}
                   {selected.id === asset.id && <Check size={16} aria-hidden="true" />}
@@ -144,13 +143,13 @@ export function SourceAssetPicker({
                       <dd>{walletAsset.balance}</dd>
                     </div>
                   )}
-                  {hasLiabilities && walletAsset?.sellingLiabilities && (
+                  {hasLiabilities && walletAsset.sellingLiabilities && (
                     <div>
                       <dt>Selling liabilities</dt>
                       <dd>{walletAsset.sellingLiabilities}</dd>
                     </div>
                   )}
-                  {hasLiabilities && walletAsset?.available && (
+                  {hasLiabilities && walletAsset.available && (
                     <div>
                       <dt>Spendable balance</dt>
                       <dd>{walletAsset.available}</dd>

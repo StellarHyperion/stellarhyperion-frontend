@@ -5,6 +5,7 @@ import {
   quoteTransfer,
   submitClassicOperations,
   type LiveQuote,
+  type SubmissionReconciliation,
   type TransactionPhase,
   type TransactionResult,
   type WalletSigner,
@@ -20,15 +21,11 @@ export interface SourceAsset {
   balance?: string;
   sellingLiabilities?: string;
   available?: string;
+  nativeMinimumReserve?: string;
 }
 export type AssetVerification =
   "configured" | "wallet-trustline" | "horizon-search" | "horizon-path";
-export type TrustlineState =
-  | "native"
-  | "present"
-  | "not-checked"
-  | "frozen"
-  | "unauthorized";
+export type TrustlineState = "native" | "present" | "not-checked" | "frozen" | "unauthorized";
 
 export const XLM: SourceAsset = {
   id: "native",
@@ -67,6 +64,11 @@ export function trustlineLabel(asset: SourceAsset): string {
   }
 }
 
+function formatSpendableUnits(units: bigint): string {
+  const scale = 10_000_000n;
+  return `${units / scale}.${(units % scale).toString().padStart(7, "0")}`;
+}
+
 export function spendableBalance(asset: SourceAsset): string {
   if (asset.trustline === "frozen" || asset.trustline === "unauthorized") {
     return "0.0000000";
@@ -75,7 +77,7 @@ export function spendableBalance(asset: SourceAsset): string {
   const balanceUnits = parseUnits(asset.balance, 7);
   const liabilitiesUnits = asset.sellingLiabilities ? parseUnits(asset.sellingLiabilities, 7) : 0n;
   const availableUnits = balanceUnits > liabilitiesUnits ? balanceUnits - liabilitiesUnits : 0n;
-  return formatUnits(availableUnits, 7);
+  return formatSpendableUnits(availableUnits);
 }
 
 export function suggestSourceSpend(asset: SourceAsset): string {
@@ -123,6 +125,23 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
   if (!StrKey.isValidEd25519PublicKey(account)) throw new Error("Invalid Stellar account.");
   const body = await horizon(`/accounts/${account}`, signal);
   if (!Array.isArray(body.balances)) throw new Error("Invalid Stellar account balances.");
+  let nativeMinimumReserve: bigint | null = null;
+  const counts = [body.subentry_count, body.num_sponsoring, body.num_sponsored];
+  if (
+    counts.every((value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  ) {
+    const ledger = records(await horizon("/ledgers?order=desc&limit=1", signal))[0];
+    const base = ledger?.base_reserve_in_stroops;
+    const entries =
+      2 + Number(body.subentry_count) + Number(body.num_sponsoring) - Number(body.num_sponsored);
+    if (
+      Number.isSafeInteger(entries) &&
+      entries >= 0 &&
+      ((typeof base === "number" && Number.isSafeInteger(base) && base > 0) ||
+        (typeof base === "string" && /^[1-9]\d*$/.test(base)))
+    )
+      nativeMinimumReserve = BigInt(entries) * BigInt(base);
+  }
   return body.balances.flatMap((entry: Record<string, unknown>) => {
     if (typeof entry.balance !== "string") return [];
     if (entry.asset_type === "native") {
@@ -130,18 +149,22 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
         typeof entry.selling_liabilities === "string" ? entry.selling_liabilities : "0.0000000";
       const total = parseUnits(entry.balance, 7);
       const liabilities = parseUnits(sellingLiabilities, 7);
-      const availableUnits = total > liabilities ? total - liabilities : 0n;
+      const afterReserve =
+        nativeMinimumReserve === null ? 0n : total - liabilities - nativeMinimumReserve;
+      const availableUnits = afterReserve > 0n ? afterReserve : 0n;
       return [
         {
           ...XLM,
+          ...(nativeMinimumReserve === null
+            ? {}
+            : { nativeMinimumReserve: formatSpendableUnits(nativeMinimumReserve) }),
           balance: entry.balance,
           sellingLiabilities,
-          available: formatUnits(availableUnits, 7),
+          available: formatSpendableUnits(availableUnits),
         },
       ];
     }
-    if (typeof entry.asset_code !== "string" || typeof entry.asset_issuer !== "string")
-      return [];
+    if (typeof entry.asset_code !== "string" || typeof entry.asset_issuer !== "string") return [];
     const sellingLiabilities =
       typeof entry.selling_liabilities === "string" ? entry.selling_liabilities : "0.0000000";
     const isFrozen =
@@ -170,7 +193,7 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
       trustline,
       balance: entry.balance,
       sellingLiabilities,
-      available: formatUnits(availableUnits, 7),
+      available: formatSpendableUnits(availableUnits),
     };
     stellarAsset(asset);
     return [asset];
@@ -346,6 +369,7 @@ export async function submitConversion(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
 ): Promise<TransactionResult> {
   const assets = await accountAssets(sender);
   const sourceAsset = assets.find((asset) => asset.id === conversion.source.id);
@@ -368,5 +392,6 @@ export async function submitConversion(
     sign,
     progress,
     approval,
+    reconcile,
   );
 }

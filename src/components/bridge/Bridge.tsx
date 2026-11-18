@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import {
   TESTNET,
@@ -33,6 +33,7 @@ import {
   type LaneState,
   type LiveQuote,
   type PendingClaim,
+  type SubmissionReconciliation,
   type TransactionPhase,
   type TransactionResult,
 } from "../../contracts";
@@ -53,6 +54,9 @@ import {
 } from "../../contracts/assets";
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import {
+  claimOperationOwnership,
+  getOperationOwnership,
+  releaseOperationOwnership,
   saveCheckpoint,
   useTransferCheckpoint,
   type TransferCheckpoint,
@@ -368,25 +372,43 @@ export function Bridge() {
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
   const balances = accounts?.account === wallet.address ? accounts.assets : [];
   const walletAsset = balances.find((asset) => asset.id === source.id);
-  const activeSource: SourceAsset = walletAsset ? { ...source, ...walletAsset } : source;
+  const activeSource: SourceAsset = useMemo(
+    () => (walletAsset ? { ...source, ...walletAsset } : source),
+    [source, walletAsset],
+  );
   const sourceBalance =
     accounts?.account === wallet.address && !accounts.error
       ? (walletAsset?.balance ?? "0")
       : undefined;
+  const liveReview = useRef({
+    account: wallet.address,
+    recipient,
+    amount,
+    sourceId: source.id,
+    destination,
+    route,
+  });
+  useLayoutEffect(() => {
+    liveReview.current = {
+      account: wallet.address,
+      recipient,
+      amount,
+      sourceId: source.id,
+      destination,
+      route,
+    };
+  }, [wallet.address, recipient, amount, source.id, destination, route]);
   const spendableStr =
     accounts?.account === wallet.address && !accounts.error && walletAsset
       ? spendableBalance(walletAsset)
       : sourceBalance;
-  const spendableUnits =
-    spendableStr !== undefined ? parseUnits(spendableStr, 7) : undefined;
+  const spendableUnits = spendableStr !== undefined ? parseUnits(spendableStr, 7) : undefined;
   const xlmAsset = balances.find((asset) => asset.id === "native");
-  const xlmSpendable =
-    xlmAsset?.available !== undefined ? parseUnits(xlmAsset.available, 7) : 0n;
+  const xlmSpendable = xlmAsset?.available !== undefined ? parseUnits(xlmAsset.available, 7) : 0n;
   // Conservative maximum: for USDC source requires a live quote with relay pricing;
   // for non-USDC source the spendable asset balance is the binding spending cap.
   const isUsdcSource = source.id === USDC.id;
-  const trustlineOk =
-    activeSource.trustline === "present" || activeSource.trustline === "native";
+  const trustlineOk = activeSource.trustline === "present" || activeSource.trustline === "native";
   const conservativeMax: bigint | null = isUsdcSource
     ? quote !== null && lane !== null
       ? planMaxUsdcAmount({
@@ -397,10 +419,13 @@ export function Bridge() {
           estimatedRelayGas: quote.bridge.estimatedRelayGas ?? quote.bridge.relayGas,
         })
       : null
-    : planMaxSourceAmount({
-        spendableSourceUnits: spendableUnits ?? 0n,
-        trustlineOk,
-      });
+    : source.id === "native"
+      ? null
+      : planMaxSourceAmount({
+          spendableSourceUnits: spendableUnits ?? 0n,
+          trustlineOk,
+        });
+
   const locked = busy || checkpoint !== null;
   let inputError: string | null = null;
   let valid = false;
@@ -492,6 +517,41 @@ export function Bridge() {
     setResult(null);
     setPhase("preparing");
     const sender = wallet.address;
+    const initialRecipient = recipient;
+    const initialAmount = amount;
+    const initialSourceId = source.id;
+    const initialDestination = destination;
+    const initialRoute = route;
+    let ownership: ReturnType<typeof claimOperationOwnership>;
+    try {
+      ownership = claimOperationOwnership({
+        account: sender,
+        recipient: validateRecipient(recipient),
+        destination,
+        route,
+        bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
+        stage: reviewedQuote.conversion ? "conversion" : "bridge",
+      });
+    } catch (cause) {
+      setError(errorMessage(cause));
+      setBusy(false);
+      setPhase(null);
+      return;
+    }
+    const isSuperseded = () => {
+      const currentOwner = getOperationOwnership();
+      if (currentOwner?.id !== ownership.id) return true;
+      const current = liveReview.current;
+      if (
+        current.recipient !== initialRecipient ||
+        current.amount !== initialAmount ||
+        current.sourceId !== initialSourceId ||
+        current.destination !== initialDestination ||
+        current.route !== initialRoute
+      )
+        return true;
+      return false;
+    };
     let converted: TransferCheckpoint | null = null;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
       router: TESTNET.router,
@@ -503,6 +563,22 @@ export function Bridge() {
       stage,
       txHash: hash,
     });
+    const conversionReconcile: SubmissionReconciliation = {
+      expectedAccount: sender,
+      getCurrentAccount: () => liveReview.current.account ?? null,
+      isSuperseded,
+      onAccountSwitch: (hash) => {
+        saveCheckpoint(pending("conversion", hash));
+      },
+    };
+    const bridgeReconcile: SubmissionReconciliation = {
+      expectedAccount: sender,
+      getCurrentAccount: () => liveReview.current.account ?? null,
+      isSuperseded,
+      onAccountSwitch: (hash) => {
+        saveCheckpoint(pending("bridge", hash));
+      },
+    };
     try {
       if (reviewedQuote.conversion) {
         setStep("conversion");
@@ -515,6 +591,7 @@ export function Bridge() {
             if (hash) saveCheckpoint(pending("conversion", hash));
           },
           { ...reviewApproval, operation: "conversion" },
+          conversionReconcile,
         );
         if (swap.status !== "confirmed") {
           setResult(swap);
@@ -540,6 +617,7 @@ export function Bridge() {
           }
         },
         { ...reviewApproval, operation: "bridge" },
+        bridgeReconcile,
       );
       setResult(submitted);
     } catch (cause) {
@@ -547,6 +625,7 @@ export function Bridge() {
       if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(converted);
       setError(message);
     } finally {
+      releaseOperationOwnership(ownership.id);
       setBusy(false);
       setPhase(null);
     }
@@ -559,8 +638,7 @@ export function Bridge() {
     setAmount("");
     setRefresh((value) => value + 1);
   };
-  const insufficient =
-    quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
+  const insufficient = quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
   // Exceeds route liquidity even when the wallet balance is sufficient.
   const exceedsFlow =
     !insufficient &&
@@ -568,6 +646,7 @@ export function Bridge() {
     conservativeMax !== null &&
     quote.sourceAmount > conservativeMax &&
     isUsdcSource;
+
   return (
     <>
       {checkpoint && (
@@ -613,7 +692,7 @@ export function Bridge() {
                 setError(null);
               }}
             />
-            {wallet.address && walletAsset && (
+            {wallet.address && walletAsset && source.id !== "native" && (
               <button
                 type="button"
                 className={styles.maxSpend}
@@ -649,21 +728,14 @@ export function Bridge() {
             </button>
           </div>
           <p className={styles.balance}>
-            {wallet.address ? (
-              sourceBalance !== undefined ? (
-                walletAsset &&
-                walletAsset.sellingLiabilities &&
-                parseUnits(walletAsset.sellingLiabilities, 7) > 0n ? (
-                  `Balance: ${sourceBalance} ${source.code} (Spendable: ${spendableBalance(walletAsset)} ${source.code})`
-                ) : (
-                  `Balance: ${sourceBalance} ${source.code}`
-                )
-              ) : (
-                accounts?.error ?? "Reading your balance..."
-              )
-            ) : (
-              "Choose any liquid Stellar asset"
-            )}
+            {wallet.address
+              ? sourceBalance !== undefined
+                ? walletAsset?.sellingLiabilities &&
+                  parseUnits(walletAsset.sellingLiabilities, 7) > 0n
+                  ? `Balance: ${sourceBalance} ${source.code} (Spendable: ${spendableBalance(walletAsset)} ${source.code})`
+                  : `Balance: ${sourceBalance} ${source.code}`
+                : (accounts?.error ?? "Reading your balance...")
+              : "Choose any liquid Stellar asset"}
           </p>
           <p className={styles.balance}>
             {issuerVerificationLabel(activeSource)}. {trustlineLabel(activeSource)}.
@@ -817,9 +889,7 @@ export function Bridge() {
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>
-            {walletAsset &&
-            walletAsset.sellingLiabilities &&
-            parseUnits(walletAsset.sellingLiabilities, 7) > 0n
+            {walletAsset?.sellingLiabilities && parseUnits(walletAsset.sellingLiabilities, 7) > 0n
               ? `Your spendable ${source.code} balance (${spendableBalance(walletAsset)} ${source.code}) is lower than this amount due to selling liabilities.`
               : `Your ${source.code} balance is lower than this amount.`}
           </p>
