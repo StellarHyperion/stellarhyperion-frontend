@@ -60,8 +60,8 @@ jobs:
       - name: Run verification pipeline
         run: npm run check
 
-  # Vercel's installed Git integration deploys main and reports its own deployment status.
-  # Keep deployment credentials out of Actions and avoid duplicate production deployments.
+  # The paused Vercel project has automatic Git deployments disabled in vercel.json.
+  # Build, test, and contribution security remain required by this gate.
   gate:
     name: gate
     runs-on: ubuntu-latest
