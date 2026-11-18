@@ -665,10 +665,20 @@ export function validateEnvelopeOperation(
   preparedTransaction: Transaction,
 ): boolean {
   const envelope = preparedTransaction.toEnvelope();
+  if (envelope.type !== "envelopeTypeTx" || envelope.v1.tx.operations.length !== 1) return false;
+  const actual = envelope.v1.tx.operations[0];
+  if (
+    !actual ||
+    expectedOperation.body.type !== "invokeHostFunction" ||
+    actual.body.type !== "invokeHostFunction"
+  )
+    return false;
+  // Assembly adds the authorization entries returned by simulation. The reviewed call
+  // and operation source must stay identical; the full assembled envelope is frozen separately.
   return (
-    envelope.type === "envelopeTypeTx" &&
-    envelope.v1.tx.operations.length === 1 &&
-    envelope.v1.tx.operations[0]?.toXdr("base64") === expectedOperation.toXdr("base64")
+    actual.body.invokeHostFunctionOp.hostFunction.toXdr("base64") ===
+      expectedOperation.body.invokeHostFunctionOp.hostFunction.toXdr("base64") &&
+    actual.sourceAccount?.toXdr("base64") === expectedOperation.sourceAccount?.toXdr("base64")
   );
 }
 
