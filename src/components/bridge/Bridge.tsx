@@ -883,10 +883,26 @@ export function ClaimRecovery() {
                   : `${claim.amount} base units of ${claim.token}`}
               </p>
               <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
+              <p>
+                Payout eligibility:{" "}
+                {claim.eligibility.status === "eligible" ? "eligible" : claim.eligibility.status}
+              </p>
+              <p className={styles.address}>{claim.eligibility.reason}</p>
+              {claim.eligibility.trustline !== "unknown" && (
+                <p className={styles.address}>
+                  Trustline:{" "}
+                  {claim.eligibility.trustline === "required" ? "required" : "not required"}
+                </p>
+              )}
               {!claim.settled && (
                 <button
                   type="button"
-                  disabled={!wallet.address || busy || result?.status === "pending"}
+                  disabled={
+                    !wallet.address ||
+                    busy ||
+                    result?.status === "pending" ||
+                    claim.eligibility.status !== "eligible"
+                  }
                   onClick={() => void settle()}
                 >
                   Sign claim settlement

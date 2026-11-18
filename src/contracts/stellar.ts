@@ -69,6 +69,103 @@ export interface PendingClaim {
   token: string;
   amount: bigint;
   settled: boolean;
+  eligibility: ClaimPayoutEligibility;
+}
+export type ClaimPayoutStatus = "eligible" | "ineligible" | "unknown";
+export interface ClaimPayoutEligibility {
+  status: ClaimPayoutStatus;
+  reason: string;
+  previewMethod: string | null;
+  trustline: "required" | "not-required" | "unknown";
+}
+
+const CLAIM_PREVIEW_METHODS = ["preview_settle_claim", "can_settle_claim"] as const;
+
+export function parseClaimPreview(value: unknown, method: string): ClaimPayoutEligibility {
+  if (typeof value === "boolean")
+    return {
+      status: value ? "eligible" : "ineligible",
+      reason: value
+        ? "The router preview allows settlement."
+        : "The router preview rejected settlement.",
+      previewMethod: method,
+      trustline: "unknown",
+    };
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return {
+      status: "unknown",
+      reason: "The router preview returned an unsupported response.",
+      previewMethod: method,
+      trustline: "unknown",
+    };
+  const record = value as Record<string, unknown>;
+  const eligible =
+    typeof record.eligible === "boolean"
+      ? record.eligible
+      : typeof record.can_settle === "boolean"
+        ? record.can_settle
+        : null;
+  const trustline =
+    record.trustline === true || record.trustline_required === true
+      ? "required"
+      : record.trustline === false || record.has_trustline === true
+        ? "not-required"
+        : "unknown";
+  return {
+    status: eligible === null ? "unknown" : eligible ? "eligible" : "ineligible",
+    reason:
+      typeof record.reason === "string"
+        ? record.reason
+        : eligible === true
+          ? "The router preview allows settlement."
+          : eligible === false
+            ? "The router preview rejected settlement."
+            : "The router preview did not report payout eligibility.",
+    previewMethod: method,
+    trustline,
+  };
+}
+
+async function claimPayoutEligibility(id: bigint, token: string): Promise<ClaimPayoutEligibility> {
+  if (token !== TESTNET.token)
+    return {
+      status: "ineligible",
+      reason: "This claim uses a token that is not the configured Stellar USDC asset.",
+      previewMethod: null,
+      trustline: "unknown",
+    };
+  let methods: Awaited<ReturnType<typeof contractMethods>>;
+  try {
+    methods = await contractMethods(TESTNET.router);
+  } catch {
+    return {
+      status: "unknown",
+      reason: "The router preview methods could not be checked.",
+      previewMethod: null,
+      trustline: "unknown",
+    };
+  }
+  const method = CLAIM_PREVIEW_METHODS.find((candidate) =>
+    methods.some((entry) => entry.name === candidate),
+  );
+  if (!method)
+    return {
+      status: "unknown",
+      reason: "This router does not expose a payout eligibility preview.",
+      previewMethod: null,
+      trustline: "unknown",
+    };
+  try {
+    const result = await view(TESTNET.router, method, [nativeToScVal(id, { type: "u64" })]);
+    return parseClaimPreview(result.value, method);
+  } catch {
+    return {
+      status: "unknown",
+      reason: "The router payout eligibility preview could not be completed.",
+      previewMethod: method,
+      trustline: "unknown",
+    };
+  }
 }
 
 function server() {
@@ -612,6 +709,7 @@ export async function getClaim(id: bigint): Promise<PendingClaim> {
     token: address(result.token),
     amount: integer(result.amount),
     settled: result.settled === true,
+    eligibility: await claimPayoutEligibility(id, address(result.token)),
   };
 }
 
@@ -622,6 +720,8 @@ export async function submitSettleClaim(
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
+  if (claim.eligibility.status !== "eligible")
+    throw new Error(`Claim payout is ${claim.eligibility.status}: ${claim.eligibility.reason}`);
   return submitOperation(
     sender,
     new Contract(TESTNET.router).call(

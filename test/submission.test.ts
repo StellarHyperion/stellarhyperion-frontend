@@ -29,6 +29,9 @@ function setup() {
     protocolVersion: "27",
   });
   vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(key.publicKey(), "0"));
+  vi.spyOn(rpc.Server.prototype, "getContractMethods").mockResolvedValue([
+    { name: "preview_settle_claim", inputs: [], outputs: [] },
+  ]);
   const simulation = vi.spyOn(rpc.Server.prototype, "simulateTransaction");
   simulation.mockResolvedValueOnce(
     success(
@@ -41,6 +44,7 @@ function setup() {
       }),
     ),
   );
+  simulation.mockResolvedValueOnce(success(nativeToScVal(true)));
   simulation.mockResolvedValue(success(nativeToScVal(1n)));
   const send = vi.spyOn(rpc.Server.prototype, "sendTransaction");
   return { simulation, send };

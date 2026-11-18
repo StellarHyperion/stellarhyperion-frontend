@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Account, Contract, TransactionBuilder, scValToNative } from "@stellar/stellar-sdk";
 import {
   bridgeOperation,
+  parseClaimPreview,
   parseSendAmount,
   readTransaction,
   validateRecipient,
@@ -23,6 +24,21 @@ const quote: LiveQuote = {
 };
 afterEach(() => vi.unstubAllGlobals());
 describe("Real Stellar transaction encoding", () => {
+  it("keeps unsupported claim previews explicitly unknown", () => {
+    expect(parseClaimPreview({ eligible: true }, "preview_settle_claim")).toMatchObject({
+      status: "eligible",
+      previewMethod: "preview_settle_claim",
+    });
+    expect(
+      parseClaimPreview({ can_settle: false, reason: "Missing trustline" }, "can_settle_claim"),
+    ).toMatchObject({ status: "ineligible", reason: "Missing trustline" });
+    expect(
+      parseClaimPreview({ reason: "No preview result" }, "preview_settle_claim"),
+    ).toMatchObject({
+      status: "unknown",
+      previewMethod: "preview_settle_claim",
+    });
+  });
   it("keeps values beyond Number precision exact and rejects invalid amounts", () => {
     expect(parseSendAmount("900719925.4740993")).toBe(9007199254740993n);
     for (const value of ["", "0", "-1", "1.12345678", "1e3", "NaN", "1,000"])
