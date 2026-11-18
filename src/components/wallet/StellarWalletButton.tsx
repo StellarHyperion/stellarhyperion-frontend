@@ -37,20 +37,8 @@ function formatStatusLabel(status: WalletAvailabilityStatus): string {
 }
 
 export function StellarWalletButton() {
-  const {
-    isConnected,
-    isConnecting,
-    shortAddress,
-    address,
-    network,
-    walletId,
-    activeCapabilities,
-    wallets,
-    error,
-    connect,
-    disconnect,
-  } = useStellarWallet();
-
+  const { isConnected, isConnecting, shortAddress, address, error, connect, disconnect } =
+    useStellarWallet();
   const [menuOpen, setMenuOpen] = useState(false);
   const [localNotice, setLocalNotice] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -85,63 +73,18 @@ export function StellarWalletButton() {
 
   if (!isConnected) {
     return (
-      <div className={styles.container} ref={containerRef}>
-        <button
-          type="button"
-          className={styles.button}
-          onClick={() => {
-            setMenuOpen((prev) => !prev);
-          }}
-          disabled={isConnecting}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-        >
-          <span className={styles.dot} />
-          <span>{isConnecting ? "connecting..." : "connect stellar"}</span>
-        </button>
-
-        {menuOpen && (
-          <div className={styles.menu} role="menu">
-            <div className={styles.addressLabel}>select stellar wallet</div>
-
-            <div className={styles.walletList}>
-              {wallets.map((w) => (
-                <button
-                  key={w.walletId}
-                  type="button"
-                  className={styles.walletOption}
-                  onClick={() => {
-                    void handleWalletSelect(w.walletId, w.availability);
-                  }}
-                  disabled={isConnecting}
-                >
-                  <span>{w.name}</span>
-                  <span className={`${styles.statusPill} ${getStatusClass(w.availability)}`}>
-                    {formatStatusLabel(w.availability)}
-                  </span>
-                </button>
-              ))}
-
-              <button
-                type="button"
-                className={styles.walletOption}
-                onClick={() => {
-                  void connect();
-                  setMenuOpen(false);
-                }}
-                disabled={isConnecting}
-              >
-                <span>kit modal</span>
-                <span className={`${styles.statusPill} ${styles.statusAvailable}`}>any</span>
-              </button>
-            </div>
-
-            {(localNotice || error) && (
-              <div className={styles.errorBox}>{localNotice ?? error}</div>
-            )}
-          </div>
-        )}
-      </div>
+      <button
+        type="button"
+        className={styles.button}
+        onClick={() => {
+          void connect();
+        }}
+        disabled={isConnecting}
+      >
+        <span className={styles.dot} />
+        <span>{isConnecting ? "connecting..." : "connect stellar"}</span>
+        {error && <span role="alert">{error}</span>}
+      </button>
     );
   }
 
@@ -160,8 +103,7 @@ export function StellarWalletButton() {
       >
         <span className={styles.dot} />
         <span>{shortAddress}</span>
-        <span className={styles.walletBadge}>[{walletDisplayName}]</span>
-        <span className={styles.network}>({network.toLowerCase()})</span>
+        <span className={styles.network}>(testnet)</span>
       </button>
 
       {menuOpen && (

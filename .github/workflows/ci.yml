@@ -14,64 +14,63 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  NPM_CONFIG_IGNORE_SCRIPTS: "true"
+  HYPERION_LIVE_ROUTES: "0"
+  HYPERION_LIVE_TESTNET: "0"
+
 jobs:
+  supply-chain:
+    uses: ./.github/workflows/supply-chain.yml
+
   frontend:
     name: check, test, build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
+      - name: Restrict build network access
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # verified upstream v2 snapshot
+        with:
+          egress-policy: block
+          disable-sudo-and-containers: true
+          disable-telemetry: true
+          allowed-endpoints: >-
+            github.com:443
+            api.github.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            registry.npmjs.org:443
+            nodejs.org:443
+
       - name: Check out frontend repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: frontend
+          persist-credentials: false
 
-      - name: Check out contracts repository for protocol dependency
-        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          repository: StellarHyperion/stellarhyperion-contracts
-          path: contracts
-
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: |
-            contracts/packages/protocol/package-lock.json
-            frontend/package-lock.json
-
-      - name: Build protocol package
-        working-directory: contracts/packages/protocol
-        run: |
-          npm ci
-          npm run build
+          node-version: 22.22.1
 
       - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Run verification pipeline
-        working-directory: frontend
         run: npm run check
 
+  # Vercel's installed Git integration deploys main and reports its own deployment status.
+  # Keep deployment credentials out of Actions and avoid duplicate production deployments.
   gate:
     name: gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: read
-    needs:
-      - frontend
     if: always()
-
+    needs: [frontend, supply-chain]
     steps:
-      - name: Verify all required checks passed
+      - name: Require successful checks
         env:
-          FRONTEND_RESULT: ${{ needs.frontend.result }}
-        run: |
-          if [ "$FRONTEND_RESULT" != "success" ]; then
-            echo "Frontend CI failed with status: $FRONTEND_RESULT"
-            exit 1
-          fi
-          echo "All frontend CI checks passed."
+          CHECK_RESULT: ${{ needs.frontend.result }}
+          SECURITY_RESULT: ${{ needs.supply-chain.result }}
+        run: test "$CHECK_RESULT" = success && test "$SECURITY_RESULT" = success

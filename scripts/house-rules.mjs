@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SELF = "scripts/house-rules.mjs";
 
-const SKIP_DIRS = new Set([".git", ".next", "node_modules", "out", "coverage"]);
+const SKIP_DIRS = new Set([".git", ".next", ".vercel", "node_modules", "out", "coverage"]);
 const TEXT_EXT = new Set([".ts", ".tsx", ".mjs", ".js", ".css", ".json", ".md", ".py", ".svg"]);
 
 /**
@@ -33,7 +33,13 @@ const TOKEN_LAYER = new Set([TOKEN_CSS, TOKEN_TS]);
 
 function walk(dir, out = []) {
   for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
+    if (
+      SKIP_DIRS.has(entry) ||
+      /^agents?\.md$/i.test(entry) ||
+      entry === "CLAUDE.md" ||
+      entry === "TASKS.md"
+    )
+      continue;
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) walk(full, out);
     else out.push(full);

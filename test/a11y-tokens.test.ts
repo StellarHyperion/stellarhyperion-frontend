@@ -26,9 +26,17 @@ describe("Accessibility and Design Token Audits", () => {
     expect(globalsCss).toContain(".skipLink:focus-visible {");
   });
 
-  it("enforces role-based radii according to locked design tokens", () => {
-    expect(globalsCss).toContain("--radius-panel: 4px;");
-    expect(globalsCss).toContain("--radius-control: 2px;");
-    expect(globalsCss).toContain("--radius-yard: 0;");
+  it("defines daylight instrument theme and high contrast modes in globals.css", () => {
+    expect(globalsCss).toContain(':root[data-theme="light"]');
+    expect(globalsCss).toContain(':root[data-theme="high-contrast"]');
+    expect(globalsCss).toContain("@media (prefers-color-scheme: light)");
+    expect(globalsCss).toContain("@media (forced-colors: active)");
+    expect(globalsCss).toContain("color-scheme: light;");
+  });
+
+  it("exports Header and ThemeSelector with System, Dark, and Light options", async () => {
+    const { Header, ThemeSelector } = await import("../src/components/nav");
+    expect(Header).toBeDefined();
+    expect(ThemeSelector).toBeDefined();
   });
 });

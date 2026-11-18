@@ -1,7 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { archivo, plexMono } from "./fonts";
 import { PAGE_INK } from "./tokens";
-import { WalletProvider } from "../wallets";
+import { Providers } from "./providers";
+import { Footer, Header, Main, Shell } from "../components/chrome";
 import "./globals.css";
 
 /**
@@ -14,7 +15,7 @@ export const metadata: Metadata = {
     template: "%s / Hyperion",
   },
   description:
-    "Hyperion prices four audited cross-chain rails locally and takes the one that lands the most money. It does not run a validator set of its own.",
+    "Stellar testnet transfers through configured Axelar ITS lanes, with wallet signing and on-chain transaction tracking.",
   applicationName: "Hyperion",
   authors: [{ name: "dotmantissa" }],
   // Generated from the mark component by `npm run icons`, so the tab and the header cannot drift.
@@ -28,15 +29,37 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  colorScheme: "dark",
+  colorScheme: "dark light",
   themeColor: PAGE_INK,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${archivo.variable} ${plexMono.variable}`}>
+    <html
+      lang="en"
+      data-scroll-behavior="smooth"
+      suppressHydrationWarning
+      className={`${archivo.variable} ${plexMono.variable}`}
+    >
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              '(function(){try{var t=localStorage.getItem("hyperion.theme");if(t==="light"||t==="dark"){document.documentElement.setAttribute("data-theme",t);}}catch(e){}})();',
+          }}
+        />
+      </head>
       <body>
-        <WalletProvider>{children}</WalletProvider>
+        <Providers>
+          <a className="skipLink" href="#main-content">
+            Skip to main content
+          </a>
+          <Shell>
+            <Header network="Stellar Testnet" />
+            <Main>{children}</Main>
+            <Footer />
+          </Shell>
+        </Providers>
       </body>
     </html>
   );

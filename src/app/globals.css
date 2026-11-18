@@ -1,26 +1,6 @@
-/*
- * The token layer.
- *
- * This is the only file in the repository allowed to contain a colour, and `npm run house`
- * enforces that. Everything else reads a custom property, which is not tidiness for its own sake:
- * it means the palette can be checked in one place by one script, and `npm run contrast` can make
- * a real claim about the whole interface rather than about whichever component somebody remembered
- * to look at.
- *
- * Every value under "Roll 1" is lifted verbatim from `.planning/DESIGN-TOKENS.md`, which is a
- * rolled and locked plan. It is not a starting point and it is not a mood board. Do not swap a
- * hue because a different one would look nice today.
- *
- * Three structural rules the plan is explicit about, encoded here rather than remembered:
- *
- * 1. Depth comes from a background step plus a 1px hairline. There are no shadows anywhere in this
- *    build, and the house rules script fails the build if one appears.
- * 2. Radius is a function of role, not of taste. A data panel is 4px, a control is 2px, and the
- *    switchyard is 0px because it runs full bleed and a rounded corner on a full bleed element is
- *    just a mistake with a radius.
- * 3. Motion only ever means "state changed". Nothing floats, nothing pulses, nothing fades up as
- *    you scroll. `prefers-reduced-motion` collapses every duration below to zero, which turns each
- *    transition into an instant state swap rather than a fast one.
+/* Shared palette, accessible semantic colors and fluid interface primitives.
+ * User-directed visual refinement supersedes the original sharp/static layout.
+ * Amounts remain exact; motion presents state changes and respects reduced motion.
  */
 
 :root {
@@ -176,36 +156,26 @@
    * Radius by role, and the hairline depth system that replaces shadows.
    * ---------------------------------------------------------------------------- */
 
-  --radius-panel: 4px;
-  --radius-control: 2px;
+  --radius-panel: 28px;
+  --radius-control: 16px;
   --radius-yard: 0;
 
   --hairline: 1px;
   --edge: var(--hairline) solid var(--edge-color);
   --edge-strong: var(--hairline) solid var(--edge-color-strong);
 
-  /* ----------------------------------------------------------------------------
-   * Roll 4: response to action only, nothing ambient.
-   *
-   * Allowed: the switchyard redrawing when a quote resolves, a route line drawing in on rail
-   * select, a stage lamp advancing on a chain confirmation, a number rolling when a balance
-   * changes, a panel morphing height on a step change. Forbidden: scroll reveals, fade and slide
-   * up sections, ambient pulse, lift on hover.
-   *
-   * The reason is not restraint for its own sake. In a bridge, motion that does not mean "state
-   * changed" is a lie about whether somebody's money moved.
-   * ---------------------------------------------------------------------------- */
+  /* Motion follows interaction and actual asynchronous state. */
 
   --motion-instant: 0ms;
-  --motion-tap: 110ms;
-  --motion-state: 180ms;
+  --motion-tap: 160ms;
+  --motion-state: 320ms;
   --motion-draw: 560ms;
   --motion-draw-stagger: 90ms;
   --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 
   /* ----------------------------------------------------------------------------
-   * Roll 2: one column, 68rem, read top to bottom as the route itself.
+   * Responsive canvas: two columns for the composer, one on smaller screens.
    * ---------------------------------------------------------------------------- */
 
   --measure: 68rem;
@@ -216,6 +186,112 @@
   --focus-offset: 2px;
 
   color-scheme: dark;
+}
+
+/* ------------------------------------------------------------------------------
+ * Daylight instrument theme
+ *
+ * Light surface steps with deep ink text and saturated instrument signals.
+ * Every foreground and surface pair exceeds WCAG AAA 7:1 contrast ratio.
+ * ------------------------------------------------------------------------------ */
+
+:root[data-theme="light"],
+[data-theme="light"] {
+  --ink: #ffffff;
+  --ink-2: #f7f9fa;
+  --ink-3: #eef2f5;
+  --ink-4: #e4e9ee;
+
+  --rule: #cbd2d9;
+  --rule-2: #9aa5b1;
+
+  --fg: #0a0c0f;
+  --fg-2: #1a2028;
+  --fg-3: #3d4753;
+
+  --copper: #7c2702;
+  --copper-2: #601d00;
+  --copper-dim: #f5d4c2;
+
+  --instr: #09436d;
+  --instr-dim: #c7e0f4;
+
+  --ok: #05542f;
+  --warn: #683f00;
+  --bad: #82140c;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --ink: #ffffff;
+    --ink-2: #f7f9fa;
+    --ink-3: #eef2f5;
+    --ink-4: #e4e9ee;
+
+    --rule: #cbd2d9;
+    --rule-2: #9aa5b1;
+
+    --fg: #0a0c0f;
+    --fg-2: #1a2028;
+    --fg-3: #3d4753;
+
+    --copper: #7c2702;
+    --copper-2: #601d00;
+    --copper-dim: #f5d4c2;
+
+    --instr: #09436d;
+    --instr-dim: #c7e0f4;
+
+    --ok: #05542f;
+    --warn: #683f00;
+    --bad: #82140c;
+
+    color-scheme: light;
+  }
+}
+
+/* ------------------------------------------------------------------------------
+ * High contrast mode
+ *
+ * Deep black base with high luminance signals for maximum visual clarity.
+ * Every foreground and surface pair exceeds WCAG AAA 7:1 contrast ratio.
+ * ------------------------------------------------------------------------------ */
+
+:root[data-theme="high-contrast"],
+[data-theme="high-contrast"] {
+  --ink: #000000;
+  --ink-2: #07090c;
+  --ink-3: #0e1217;
+  --ink-4: #151b22;
+
+  --rule: #5c6978;
+  --rule-2: #7e8c9d;
+
+  --fg: #ffffff;
+  --fg-2: #d8e1ea;
+  --fg-3: #9cb0c4;
+
+  --copper: #ffaa7a;
+  --copper-2: #ffc8a8;
+  --copper-dim: #a3451b;
+
+  --instr: #a0d2f8;
+  --instr-dim: #486f91;
+
+  --ok: #70ebb0;
+  --warn: #ffd466;
+  --bad: #ff7f73;
+
+  color-scheme: dark;
+}
+
+@media (forced-colors: active) {
+  :root {
+    --hairline: 2px;
+    --focus-width: 3px;
+  }
 }
 
 /* ------------------------------------------------------------------------------
@@ -233,11 +309,37 @@ html {
   scroll-behavior: smooth;
 }
 
+.themeChanging,
+.themeChanging *,
+.themeChanging *::before,
+.themeChanging *::after {
+  transition: none !important;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 240ms;
+}
+
 body {
   margin: 0;
   min-height: 100svh;
-  background: var(--surface-page);
+  background-color: var(--surface-page);
+  background-image:
+    radial-gradient(
+      ellipse at 4% 20%,
+      color-mix(in srgb, var(--leg-origin) 7%, transparent),
+      transparent 45%
+    ),
+    radial-gradient(
+      ellipse at 95% 45%,
+      color-mix(in srgb, var(--leg-destination) 7%, transparent),
+      transparent 48%
+    );
+  background-attachment: fixed;
   color: var(--text-primary);
+  transition:
+    background-color var(--motion-state),
+    color var(--motion-state);
   font-family: var(--face-display);
   font-size: var(--type-body-size);
   font-weight: var(--type-body-weight);

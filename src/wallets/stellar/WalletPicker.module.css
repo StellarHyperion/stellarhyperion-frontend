@@ -1,0 +1,43 @@
+.note {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+.wallets {
+  display: grid;
+  gap: var(--space-2);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+}
+.row button {
+  flex: 1;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: var(--space-2);
+}
+.row button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.row a {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.row button:focus-visible,
+.row a:focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+}
+.error {
+  color: var(--state-failed);
+  overflow-wrap: anywhere;
+  font-size: 0.8125rem;
+}

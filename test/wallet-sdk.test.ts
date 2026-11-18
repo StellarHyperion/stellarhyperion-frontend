@@ -1,275 +1,149 @@
-import { describe, expect, it } from "vitest";
-import {
-  ConcurrencyGuard,
-  assertWalletMethodSupported,
-  checkWalletAvailability,
-  getAllWalletCapabilities,
-  getAllWalletDiagnostics,
-  getWalletCapabilities,
-  getWalletDiagnostics,
-  subscribeToAccountChange,
-} from "../src/wallets/stellar/sdk";
-import {
-  areTokenIdentitiesEqual,
-  assertNoAutomaticResubmission,
-  createTokenIdentifier,
-  evaluateStageTracking,
-  fromExactIntegerStroops,
-  getSupportedLanes,
-  isAmbiguousNetworkError,
-  toExactIntegerStroops,
-  validateSignatureResult,
-} from "../src/wallets/stellar/signature";
-import {
-  AmbiguousTransactionError,
-  UnsupportedWalletMethodError,
-  WalletConcurrencyError,
-} from "../src/wallets/stellar/types";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Account, Asset, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import { TESTNET } from "../src/config/testnet";
+import { walletAddress, walletSign } from "../src/wallets/stellar/sdk";
 
-describe("Stellar Wallet Adapter Capabilities & Diagnostics", () => {
-  it("models distinct states for missing extensions and popup requirements", () => {
-    // Albedo requires a web popup window; it does not use an extension
-    const albedoStatus = checkWalletAvailability("albedo");
-    expect(albedoStatus).toBe("popup_required");
+const api = vi.hoisted(() => ({
+  freighter: {
+    isConnected: vi.fn(),
+    getAddress: vi.fn(),
+    requestAccess: vi.fn(),
+    getNetworkDetails: vi.fn(),
+    signTransaction: vi.fn(),
+  },
+  albedo: { publicKey: vi.fn(), tx: vi.fn() },
+  xbull: { connect: vi.fn(), sign: vi.fn(), closeConnections: vi.fn() },
+  lobstr: { isConnected: vi.fn(), getPublicKey: vi.fn(), signTransaction: vi.fn() },
+}));
+vi.mock("@stellar/freighter-api", () => api.freighter);
+vi.mock("@albedo-link/intent", () => ({ default: api.albedo }));
+vi.mock("@creit.tech/xbull-wallet-connect", () => ({
+  xBullWalletConnect: class {
+    connect = api.xbull.connect;
+    sign = api.xbull.sign;
+    closeConnections = api.xbull.closeConnections;
+  },
+}));
+vi.mock("@lobstrco/signer-extension-api", () => api.lobstr);
 
-    // In a test environment without injected browser extensions:
-    // Freighter requires an extension and is missing
-    const freighterStatus = checkWalletAvailability("freighter");
-    expect(freighterStatus).toBe("missing_extension");
-
-    // xBull requires an extension and is missing
-    const xbullStatus = checkWalletAvailability("xbull");
-    expect(xbullStatus).toBe("missing_extension");
-
-    // Lobstr is a web / QR mobile connector
-    const lobstrStatus = checkWalletAvailability("lobstr");
-    expect(lobstrStatus).toBe("available");
-
-    // Unregistered wallet
-    const unknownStatus = checkWalletAvailability("phantom");
-    expect(unknownStatus).toBe("unsupported");
-
-    // Distinctness invariant
-    expect(albedoStatus).not.toBe(freighterStatus);
-    expect(albedoStatus).not.toBe(lobstrStatus);
-    expect(freighterStatus).not.toBe(lobstrStatus);
+const signer = Keypair.random();
+function envelope() {
+  const tx = new TransactionBuilder(new Account(signer.publicKey(), "0"), {
+    fee: "100",
+    networkPassphrase: TESTNET.networkPassphrase,
+  })
+    .addOperation(
+      Operation.payment({
+        destination: Keypair.random().publicKey(),
+        asset: Asset.native(),
+        amount: "1",
+      }),
+    )
+    .setTimeout(60)
+    .build();
+  const original = tx.toXdr();
+  tx.sign(signer);
+  return { original, signed: tx.toXdr() };
+}
+beforeEach(() => {
+  vi.clearAllMocks();
+  api.freighter.isConnected.mockResolvedValue({ isConnected: true });
+  api.freighter.getAddress.mockResolvedValue({ address: signer.publicKey() });
+  api.freighter.requestAccess.mockResolvedValue({ address: signer.publicKey() });
+  api.freighter.getNetworkDetails.mockResolvedValue({
+    networkPassphrase: TESTNET.networkPassphrase,
   });
-
-  it("diagnostics never request a signature merely to test availability", () => {
-    // Collect all diagnostics across adapters
-    const allDiagnostics = getAllWalletDiagnostics();
-    expect(allDiagnostics).toHaveLength(4);
-
-    for (const diag of allDiagnostics) {
-      expect(diag.walletId).toBeDefined();
-      expect(diag.name).toBeDefined();
-      expect(diag.status).toBeDefined();
-      expect(diag.capabilities).toBeDefined();
-      expect(typeof diag.isInstalled).toBe("boolean");
-      expect(typeof diag.requiresExtension).toBe("boolean");
-      expect(typeof diag.requiresPopup).toBe("boolean");
-      expect(diag.lastChecked).toBeGreaterThan(0);
-    }
-
-    // Individual diagnostic query
-    const freighterDiag = getWalletDiagnostics("freighter");
-    expect(freighterDiag.walletId).toBe("freighter");
-    expect(freighterDiag.requiresExtension).toBe(true);
-    expect(freighterDiag.requiresPopup).toBe(false);
-  });
-
-  it("unsupported methods do not silently fall back to a different wallet", () => {
-    // Freighter supports both transaction signing and Soroban auth entries
-    expect(() => {
-      assertWalletMethodSupported("freighter", "signTransaction");
-    }).not.toThrow();
-
-    expect(() => {
-      assertWalletMethodSupported("freighter", "signAuthEntry");
-    }).not.toThrow();
-
-    // xBull supports transaction signing, but not Soroban auth entry signing
-    expect(() => {
-      assertWalletMethodSupported("xbull", "signTransaction");
-    }).not.toThrow();
-
-    expect(() => {
-      assertWalletMethodSupported("xbull", "signAuthEntry");
-    }).toThrow(UnsupportedWalletMethodError);
-
-    // Albedo supports transaction signing, but not auth entry signing
-    expect(() => {
-      assertWalletMethodSupported("albedo", "signAuthEntry");
-    }).toThrow(UnsupportedWalletMethodError);
-
-    // Lobstr supports transaction signing, but not auth entry signing
-    expect(() => {
-      assertWalletMethodSupported("lobstr", "signAuthEntry");
-    }).toThrow(UnsupportedWalletMethodError);
-
-    // Assert the error identifies the exact wallet without falling back
-    try {
-      assertWalletMethodSupported("xbull", "signAuthEntry");
-    } catch (err) {
-      expect(err).toBeInstanceOf(UnsupportedWalletMethodError);
-      const unsupportedErr = err as UnsupportedWalletMethodError;
-      expect(unsupportedErr.walletId).toBe("xbull");
-      expect(unsupportedErr.method).toBe("signAuthEntry");
-    }
-  });
-
-  it("enforces explicit concurrency guard against overlapping operations", () => {
-    const guard = new ConcurrencyGuard();
-    expect(guard.isSigning).toBe(false);
-    expect(guard.isConnecting).toBe(false);
-
-    // Acquire sign lock
-    guard.acquireSign();
-    expect(guard.isSigning).toBe(true);
-
-    // Second sign attempt must be rejected
-    expect(() => {
-      guard.acquireSign();
-    }).toThrow(WalletConcurrencyError);
-
-    // Release sign lock
-    guard.releaseSign();
-    expect(guard.isSigning).toBe(false);
-
-    // Now re-acquiring succeeds
-    expect(() => {
-      guard.acquireSign();
-    }).not.toThrow();
-    guard.releaseSign();
-
-    // Acquire connect lock
-    guard.acquireConnect();
-    expect(guard.isConnecting).toBe(true);
-
-    expect(() => {
-      guard.acquireConnect();
-    }).toThrow(WalletConcurrencyError);
-
-    guard.releaseConnect();
-    expect(guard.isConnecting).toBe(false);
-  });
-
-  it("registers account change listeners only for capable adapters", () => {
-    // Albedo does not support account change events
-    const albedoUnsub = subscribeToAccountChange("albedo", () => {});
-    expect(typeof albedoUnsub).toBe("function");
-
-    // Freighter supports account change events
-    const freighterUnsub = subscribeToAccountChange("freighter", () => {});
-    expect(typeof freighterUnsub).toBe("function");
-    freighterUnsub();
-  });
+  api.lobstr.isConnected.mockResolvedValue(true);
+  api.lobstr.getPublicKey.mockResolvedValue(signer.publicKey());
 });
-
-describe("Stellar Signatures, Exact Arithmetic & Stage Tracking", () => {
-  it("preserves exact integer amounts without floating point roundoff", () => {
-    expect(toExactIntegerStroops("100")).toBe(100_0000000n);
-    expect(toExactIntegerStroops("1.5")).toBe(1_5000000n);
-    expect(toExactIntegerStroops("0.1234567")).toBe(1234567n);
-    expect(toExactIntegerStroops(500n)).toBe(500n);
-
-    expect(fromExactIntegerStroops(100_0000000n)).toBe("100.0000000");
-    expect(fromExactIntegerStroops(1_5000000n)).toBe("1.5000000");
-    expect(fromExactIntegerStroops(1234567n)).toBe("0.1234567");
-
-    // Rejects precision over 7 decimals
-    expect(() => {
-      toExactIntegerStroops("1.12345678");
-    }).toThrow();
-
-    // Rejects invalid strings
-    expect(() => {
-      toExactIntegerStroops("abc");
-    }).toThrow();
+describe("Direct Stellar wallet adapters", () => {
+  it("restores Freighter with silent lookup and requests access only for explicit connection", async () => {
+    expect(await walletAddress("freighter", false)).toBe(signer.publicKey());
+    expect(api.freighter.requestAccess).not.toHaveBeenCalled();
+    expect(await walletAddress("freighter")).toBe(signer.publicKey());
+    expect(api.freighter.requestAccess).toHaveBeenCalledOnce();
   });
-
-  it("preserves issuer-specific token identities", () => {
-    const usdcCircle = createTokenIdentifier(
-      "USDC",
-      "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+  it("preserves an explicit wallet rejection", async () => {
+    api.freighter.requestAccess.mockResolvedValue({
+      address: "",
+      error: { message: "Request declined" },
+    });
+    await expect(walletAddress("freighter")).rejects.toThrow("Request declined");
+  });
+  it("rejects a Freighter network switch before requesting a signature", async () => {
+    api.freighter.getNetworkDetails.mockResolvedValue({
+      networkPassphrase: "Public Global Stellar Network ; September 2015",
+    });
+    await expect(walletSign("freighter", envelope().original, signer.publicKey())).rejects.toThrow(
+      "Testnet",
     );
-    const usdcOther = createTokenIdentifier(
-      "USDC",
-      "CBK3TPRQR5A3H2AWESOUX4MVYOP63VNQ5EYHCX26EEJUC5B5FLB4DV5O",
+    expect(api.freighter.signTransaction).not.toHaveBeenCalled();
+  });
+  it("rejects a Freighter account switch before requesting a signature", async () => {
+    api.freighter.getAddress.mockResolvedValue({ address: Keypair.random().publicKey() });
+    await expect(walletSign("freighter", envelope().original, signer.publicKey())).rejects.toThrow(
+      "account changed",
     );
-    const usdcNative = createTokenIdentifier("USDC");
-    const xlm = createTokenIdentifier("XLM");
-
-    // Same asset code with different issuers must not be identical
-    expect(areTokenIdentitiesEqual(usdcCircle, usdcOther)).toBe(false);
-
-    // Same asset code with vs without issuer must not be identical
-    expect(areTokenIdentitiesEqual(usdcCircle, usdcNative)).toBe(false);
-
-    // Identical code and issuer match
-    const usdcCircleCopy = createTokenIdentifier(
-      "USDC",
-      "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+    expect(api.freighter.signTransaction).not.toHaveBeenCalled();
+  });
+  it("passes the account and Testnet network to Freighter and verifies its signed envelope", async () => {
+    const { original, signed } = envelope();
+    api.freighter.signTransaction.mockResolvedValue({ signedTxXdr: signed });
+    expect(await walletSign("freighter", original, signer.publicKey())).toEqual({
+      signedTxXdr: signed,
+    });
+    expect(api.freighter.signTransaction).toHaveBeenCalledWith(original, {
+      address: signer.publicKey(),
+      networkPassphrase: TESTNET.networkPassphrase,
+    });
+  });
+  it("asks Albedo to sign on Testnet without submitting", async () => {
+    const { original, signed } = envelope();
+    api.albedo.tx.mockResolvedValue({ signed_envelope_xdr: signed });
+    expect(await walletSign("albedo", original, signer.publicKey())).toEqual({
+      signedTxXdr: signed,
+    });
+    expect(api.albedo.tx).toHaveBeenCalledWith({
+      xdr: original,
+      pubkey: signer.publicKey(),
+      network: "testnet",
+      submit: false,
+    });
+  });
+  it("passes xBull the exact account/network and closes its connections", async () => {
+    const { original, signed } = envelope();
+    api.xbull.sign.mockResolvedValue(signed);
+    expect(await walletSign("xbull", original, signer.publicKey())).toEqual({
+      signedTxXdr: signed,
+    });
+    expect(api.xbull.sign).toHaveBeenCalledWith({
+      xdr: original,
+      publicKey: signer.publicKey(),
+      network: TESTNET.networkPassphrase,
+    });
+    expect(api.xbull.closeConnections).toHaveBeenCalledOnce();
+  });
+  it("closes xBull connections after cancellation", async () => {
+    api.xbull.connect.mockRejectedValue(new Error("Request declined"));
+    await expect(walletAddress("xbull")).rejects.toThrow("declined");
+    expect(api.xbull.closeConnections).toHaveBeenCalledOnce();
+  });
+  it("rejects a LOBSTR account switch before requesting a signature", async () => {
+    api.lobstr.getPublicKey.mockResolvedValue(Keypair.random().publicKey());
+    await expect(walletSign("lobstr", envelope().original, signer.publicKey())).rejects.toThrow(
+      "account changed",
     );
-    expect(areTokenIdentitiesEqual(usdcCircle, usdcCircleCopy)).toBe(true);
-
-    // Different asset codes match neither
-    expect(areTokenIdentitiesEqual(usdcCircle, xlm)).toBe(false);
+    expect(api.lobstr.signTransaction).not.toHaveBeenCalled();
   });
-
-  it("maintains strict distinction between source confirmation and destination delivery", () => {
-    // 1. Source confirmed but destination pending relay
-    const pendingRelay = evaluateStageTracking("source_confirmed", "in_transit");
-    expect(pendingRelay.isSourceConfirmed).toBe(true);
-    expect(pendingRelay.isDestinationDelivered).toBe(false);
-    expect(pendingRelay.summary).toContain("awaiting destination delivery");
-
-    // 2. Both source confirmed and destination delivered
-    const settled = evaluateStageTracking("source_confirmed", "delivered");
-    expect(settled.isSourceConfirmed).toBe(true);
-    expect(settled.isDestinationDelivered).toBe(true);
-    expect(settled.summary).toContain("transfer settled on destination");
-
-    // 3. Source still submitted waiting for ledger close
-    const submitting = evaluateStageTracking("submitted", "idle");
-    expect(submitting.isSourceConfirmed).toBe(false);
-    expect(submitting.isDestinationDelivered).toBe(false);
-    expect(submitting.summary).toContain("awaiting stellar ledger close");
-  });
-
-  it("ensures ambiguous signed transactions are never automatically resubmitted", () => {
-    // Ambiguous network failure detection
-    expect(isAmbiguousNetworkError(new Error("HTTP 504 Gateway Timeout"))).toBe(true);
-    expect(isAmbiguousNetworkError(new Error("Connection reset by peer (ECONNRESET)"))).toBe(true);
-    expect(isAmbiguousNetworkError(new Error("Transaction status undetermined on node"))).toBe(true);
-    expect(isAmbiguousNetworkError(new Error("User cancelled transaction approval"))).toBe(false);
-
-    // Resubmission assertion prevents auto-resubmission
-    expect(() => {
-      assertNoAutomaticResubmission("ambiguous", "0xsimulated_hash");
-    }).toThrow(AmbiguousTransactionError);
-
-    expect(() => {
-      assertNoAutomaticResubmission("signed", "0xsimulated_hash");
-    }).toThrow(AmbiguousTransactionError);
-
-    expect(() => {
-      assertNoAutomaticResubmission("source_confirmed", "0xsimulated_hash");
-    }).not.toThrow();
-  });
-
-  it("exposes only independently supported testnet lanes", () => {
-    const lanes = getSupportedLanes();
-    expect(lanes.length).toBeGreaterThan(0);
-    expect(lanes.every((l) => l.name === "TESTNET")).toBe(true);
-    expect(lanes.every((l) => l.isIndependent === true)).toBe(true);
-    expect(lanes.every((l) => l.networkPassphrase.includes("Test SDF Network"))).toBe(true);
-  });
-
-  it("validates signature result envelopes", () => {
-    expect(validateSignatureResult({ signedTxXdr: "AAAA..." }).valid).toBe(true);
-    expect(validateSignatureResult({ signedAuthEntry: "BBBB..." }).valid).toBe(true);
-    expect(validateSignatureResult({ signedTxXdr: "" }).valid).toBe(false);
-    expect(validateSignatureResult({} as unknown as { signedTxXdr: string }).valid).toBe(false);
+  it("cryptographically checks LOBSTR's signature even though its API has no network option", async () => {
+    const { original, signed } = envelope();
+    api.lobstr.signTransaction.mockResolvedValue(signed);
+    expect(await walletSign("lobstr", original, signer.publicKey())).toEqual({
+      signedTxXdr: signed,
+    });
+    api.lobstr.signTransaction.mockResolvedValue(original);
+    await expect(walletSign("lobstr", original, signer.publicKey())).rejects.toThrow(
+      "did not sign",
+    );
   });
 });

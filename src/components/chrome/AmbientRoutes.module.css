@@ -1,0 +1,75 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background-image: radial-gradient(var(--edge-color) 0.7px, transparent 0.7px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(transparent, var(--ink) 25%, var(--ink) 80%, transparent);
+}
+.glow {
+  position: absolute;
+  inset: -25%;
+  background:
+    radial-gradient(
+      ellipse at 25% 45%,
+      color-mix(in srgb, var(--leg-origin) 12%, transparent),
+      transparent 40%
+    ),
+    radial-gradient(
+      ellipse at 75% 60%,
+      color-mix(in srgb, var(--leg-destination) 14%, transparent),
+      transparent 40%
+    );
+  animation: drift 30s ease-in-out infinite alternate;
+}
+.orbits {
+  position: absolute;
+  width: max(100%, 1100px);
+  height: 100%;
+  min-height: 900px;
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+}
+.network {
+  stroke-width: 0.65;
+  opacity: 0.3;
+}
+.signals {
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-dasharray: 3 97;
+  opacity: 0.55;
+}
+.signals ellipse {
+  animation: orbit 28s linear infinite;
+}
+.signals ellipse:nth-child(2) {
+  animation-duration: 36s;
+  animation-direction: reverse;
+  animation-delay: -12s;
+}
+.signals ellipse:nth-child(3) {
+  animation-duration: 44s;
+  animation-delay: -24s;
+}
+.nodes {
+  opacity: 0.45;
+}
+@keyframes orbit {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+@keyframes drift {
+  to {
+    transform: translate(3%, -3%) rotate(8deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glow,
+  .signals ellipse {
+    animation: none;
+  }
+}

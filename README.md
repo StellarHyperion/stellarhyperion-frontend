@@ -1,152 +1,83 @@
-# Hyperion app
+# Hyperion frontend
 
-The front end for a router that moves money between Stellar and the EVM chains.
+[Open Hyperion](https://stellarhyperion.vercel.app/) | [Backend](https://github.com/StellarHyperion/stellarhyperion-backend) | [Contracts and deployment evidence](https://github.com/StellarHyperion/stellarhyperion-contracts)
 
-The product's claim is narrow and specific: Hyperion never decides for itself that a cross-chain
-message is real. It prices four rails that already made that decision and were audited for it,
-takes the one that lands the most money, and tells you what the other three would have cost. The
-whole design of this app exists to make that claim checkable rather than just stated, which is why
-the centrepiece is a diagram of four rails with the losers still drawn and their reasons attached.
+A focused bridge interface for Stellar wallets, real quotes and verified destination payments. The app uses a compact send/receive composer, native token and destination pickers, explicit quote loading, a review before signing and recoverable transaction progress.
 
-## The design is a set of decisions, not a theme
+## Changes since October 12, 2026
 
-Five axes were rolled once, before any code, and locked. The plan lives at
-`.planning/DESIGN-TOKENS.md` in the project directory, outside this repository, and it is not
-re-rolled. What follows is each roll and why it survived contact with the subject matter.
+- Replaced simulated transfer submission with real Soroban construction, simulation, wallet signing and broadcast. Live Axelar and Circle fee estimates are reviewed before signing.
+- Added liquid Stellar asset conversion, trustline creation and paid ITS/CCTP routes, with saved signed hashes and recovery that checks uncertain outcomes before another submission.
+- Replaced the wallet-kit bundle with direct Freighter, Albedo, xBull and LOBSTR SDKs, checked transaction signatures, and updated Next.js to 16.4.3. Activity now displays independently verified destination payouts and genuine claims.
 
-**Two hues, and they mean something.** Deep ink, copper, and a cold instrument blue. A bridge has
-exactly two halves. Copper is the leg you control: Stellar, where a ledger closes every five
-seconds and finality means finality. Instrument blue is the leg you wait on. The copper to blue
-gradient on the winning track in the switchyard is the transfer, and the crossing point is where
-custody stops being yours. The palette encodes the product rather than decorating it.
+## Assets and routes
 
-**One column, read top to bottom.** A transfer is a linear journey across a boundary, so the page's
-vertical axis is the journey: origin leg, switchyard, destination leg. The coloured rule down the
-left of each leg is that leg's own hue, and the yard in between is where one becomes the other, so
-scrolling the page is following the money. Nothing is in a sidebar, because nothing about a
-transfer happens beside it. This is also the roll that rejects the dashboard reflex, which is the
-default shape for anything with numbers in it and the wrong shape for this.
+Send canonical Stellar USDC directly, or choose another classic Stellar asset. The app discovers wallet balances and issued assets through Stellar Testnet Horizon, then finds a real liquid conversion path into USDC. Issuer addresses distinguish assets with the same symbol. A listed asset still needs liquidity before a usable quote can exist.
 
-**Monospace is the working face, not code decoration.** Archivo for display and prose, IBM Plex
-Mono for every amount, address, nonce, chain id, ledger sequence, status word and label. Almost
-every fact in a bridge interface is a number or an identifier, so making mono the label and data
-face gives the whole thing instrument panel character with no illustration budget at all.
+- Axelar ITS delivers the seven-decimal ITS representation of Stellar USDC to Ethereum Sepolia. This is not Circle's native Sepolia USDC.
+- Circle CCTP delivers six-decimal native USDC to supported Sepolia, Base Sepolia and Arc Testnet lanes. Circle's forwarding service mints on the destination; its live USDC fee budget is included in the receive minimum.
 
-**Motion only ever means a state changed.** The switchyard's winning track draws itself when a
-quote resolves. That is close to all of it. No scroll reveals, no fade and slide on every section,
-no ambient pulse, no lift on hover. In a product where money moves, motion that does not mean
-"something changed" is a lie about whether anything did. `prefers-reduced-motion` collapses every
-duration to zero, so a transition becomes an instant state swap rather than a fast one, which is
-the right collapse: a faster version of a thing somebody asked not to see is not a compromise.
+The interface reads the active router, adapter configuration, destination contracts, token precision and bridge capabilities. A configured destination does not guarantee an available lane. Pending activation, paused routes, missing liquidity and unavailable pricing prevent signing rather than producing placeholder quotes.
 
-**One structural device: the switchyard.** A live SVG interchange. Four tracks fan out of an origin
-node, run parallel, and converge on a destination node. When a quote resolves the winning track
-draws itself copper to blue; the losers stay one pixel and dotted, each carrying a mono annotation
-of why it lost. It is the only place in the build spending its budget on a picture and it earns it
-by turning the architecture's central claim into something somebody can inspect.
+Conversion and bridging are separate signed transactions. The conversion uses a strict-receive path payment with an exact source spending cap and 0.5% price tolerance. It can create the canonical USDC trustline in the same transaction. If the bridge cannot proceed, the converted USDC remains in the user's wallet. The app saves the actual signed hash before broadcast; after an interruption, it checks the recorded transaction before offering a fresh bridge review. Unknown outcomes never trigger an automatic resend.
 
-Deliberately absent, because they are the tells: all caps tracked eyebrow labels, em dash label
-fragments, arrows glued to the end of every link, decorative 01 / 02 / 03 markers, and the card kit
-of identical radii over identical soft grey shadows. There is **not one box shadow in this
-repository** and a check fails the build if one appears. Depth comes from one pixel hairlines and a
-background step, and the radius varies by role: four pixels on a data panel, two on a control, zero
-on the switchyard because it is not a card and should not look like the biggest one.
+## Run
 
-## Three checks that run before lint
-
-`npm run check` is format, house rules, contrast, lint, typecheck, build. The middle two are
-specific to this repository.
-
-**`npm run house`** reads every tracked file and fails on: an em or en dash anywhere, an emoji or a
-glyph arrow, a word from a banned vocabulary list, a box shadow, or a hex colour outside the token
-layer. The dash rule is the one that earns its keep. It is easy to agree not to use em dashes and
-very hard to actually not, and a checker that reads the whole tree is the only version of that
-agreement which holds. The script skips itself for the text rules, because a checker cannot contain
-the text it checks for, and it writes its own patterns as escapes so the repository holds zero
-literal em or en dash bytes.
-
-The hex rule has one declared exception and it is checked rather than waived. `src/app/tokens.ts`
-holds literals for the `theme-color` meta tag and the favicon generator, and every one of them has
-to also appear in `globals.css`. A generated SVG favicon has to carry literal colour, because it is
-loaded as an image outside the document and has no access to a custom property, so every hex in it
-has to appear in the token layer that produced it. A hand edit to the tab icon is caught.
-
-**`npm run contrast`** computes the real ratio for forty nine role and surface pairs and fails any
-that falls under its bar, 4.5 for text and 3.0 for a graphic or a focus ring. A dark palette with
-a copper accent is exactly the kind that looks fine and fails, and the check is cheaper than
-finding out from somebody who cannot read it.
-
-## The mark
-
-A monoline switch. A line comes in from the left, reaches a solid junction node and forks. One
-branch leaves to the right and keeps going; the other peels off at the same angle and stops short,
-because it was priced and it lost.
-
-That is the product in nineteen points of geometry. A mark showing a bridge would be claiming
-something the architecture explicitly does not do. Legibility at sixteen pixels comes from the
-difference in branch length rather than a difference in stroke weight, because a hairline at that
-size is a grey smudge and a shorter line is still a shorter line.
-
-`npm run icons` generates the favicon set by reading the path data and the node circle out of the
-component itself, and fails loudly if it cannot find them. So the tab icon cannot drift away from
-the mark in the header, which is the usual way those two end up disagreeing.
-
-## Accessibility
-
-The switchyard drawing is `aria-hidden` and the table underneath it is not. A four track
-interchange described through an alt string produces a sentence nobody wants to hear; the table
-carries the same facts in the same order and is the primary representation for a screen reader
-rather than a fallback. Below forty eight rem the drawing is removed rather than squeezed, because
-four tracks in a phone's width is four parallel lines nobody can tell apart, and the table was
-always the better artifact at that size.
-
-Everything interactive has a visible focus state in copper, verified against every surface it can
-sit on. Reduced motion is honoured by collapsing durations to zero rather than by shortening them.
-
-## Running it
+Node 22.13 or newer is required.
 
 ```bash
-# The shared SDK is a file dependency on the contracts repo and has to be built first.
-cd ../contracts/packages/protocol && npm install && npm run build && cd -
-
-npm install
+npm ci
 npm run dev
-npm run check      # format, house rules, contrast, lint, typecheck, production build
 ```
 
-One trap worth knowing, and it is written at length in `next.config.ts`. Turbopack will not follow
-a symlink out of its root. `@hyperion/protocol` is a `file:` dependency on a sibling repository, so
-npm installs it as a symlink resolving outside this directory, and pinning `turbopack.root` to this
-package makes the shared SDK unresolvable with a bare "module not found" that says nothing about
-symlinks. The root is the directory holding both repositories, which is what a workspace root
-means.
+Connect Freighter, Albedo, xBull or LOBSTR for Stellar Testnet through the native wallet picker. Direct wallet SDKs replace the multi-chain wallet-kit bundle. Only Freighter restores a saved connection silently; popup wallets require an explicit selection. Every returned signature is checked against the exact requested transaction, connected account and Testnet passphrase before submission. Users need testnet XLM for reserves and network fees, plus Axelar relay gas when using ITS. The setup disclosure links to the XLM and Circle testnet faucets. Testnet assets have no cash value.
 
-## Implemented capabilities
+## Configuration and tracking
 
-1. **Dual wallet connectivity**: Stellar Wallets Kit for Soroban accounts (Freighter, xBull, Albedo) and Wagmi/Viem for EVM accounts.
-2. **Interactive Route Planner**: Prices all four rails live locally based on deployed router parameters and quotes.
-3. **Switchyard visualization**: Live SVG interchange that draws the winning route copper to blue and annotates losing rails.
-4. **Transfer flow and stage lamps**: Unnumbered, named stages tracking the cross-chain journey from origin burn/dispatch to destination execution.
-5. **Parked claim settlement UI**: Surfaces uninitialized destination claims for permissionless recovery.
-6. **Transfer registry and inspector**: Searchable history at `/transfers` and single-transfer inspector at `/transfers/[txHash]`.
-7. **Automated verification pipeline**: 24 tests across arithmetic, geometry, API client, and accessibility audits.
-8. **CI/CD and governance**: GitHub Actions CI workflow, PR template, CODEOWNERS, SECURITY.md, and dependabot.
+The checked-in deployment supplies the default router and canonical USDC asset. Public overrides are documented in `.env.example`. The app is testnet only.
 
-### Live deployment
+`NEXT_PUBLIC_HYPERION_API_URL` supplies transfer activity and destination verification. The backend must run its indexer and rail pollers regularly. The public testnet uses a five-minute GitHub Actions schedule, subject to runner queueing; destination Activity can take several minutes to update. Unreachable history is shown explicitly. A confirmed Stellar transaction proves source execution; destination delivery requires matching confirmed bridge and token-payment events.
 
-The frontend application is deployed and live on Vercel:
+Next serves `/api/relay-fee` for Axelar's live ITS estimate and `/api/cctp-fee` for Circle's finalized forwarding estimate. Static export cannot serve these endpoints. There are no fixed relay prices, generated transaction hashes, sample claims or fabricated history.
 
-- Web application: https://stellarhyperion.vercel.app
-- Backend REST API: https://hyperion-backend.vercel.app
-- Connected router on Stellar testnet: `CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF`
+Relay budgets include 10% headroom over the live estimate. The Axelar XLM budget is paid in full; the Circle receive minimum accounts for the full USDC forwarding budget. A refreshed estimate must fit inside the displayed budget before signing. Transient read failures receive one bounded retry; signed transactions are never retried automatically.
 
-### Organization links
+Hyperion charges 30 basis points (0.3%) on the bridged USDC amount. The source transaction sends that protocol fee to the router's configured Stellar treasury. Bridge forwarding, relay and network fees are separate and shown before signing.
 
-This web client surfaces on-chain contracts and off-chain indexing services across the StellarHyperion organization:
+Claim recovery reads `get_claim` and signs `settle_claim` on the Stellar router. It pays the recorded recipient. A claim exists only when a destination router has parked funds for recovery; completed transfers have no claim number. Activity displays genuine claim numbers and settlement status, while transfer details explain when no claim exists. A delayed outbound transfer does not automatically become a Stellar claim.
 
-- Contracts: [stellarhyperion-contracts](https://github.com/StellarHyperion/stellarhyperion-contracts)
-- Backend: [stellarhyperion-backend](https://github.com/StellarHyperion/stellarhyperion-backend)
+## Deploy
 
-## License
+The production alias is [stellarhyperion.vercel.app](https://stellarhyperion.vercel.app/), attached to the Vercel project `hyperion`. Set `NEXT_PUBLIC_HYPERION_API_URL=https://stellarhyperion-backend.vercel.app` in its production environment, then deploy from this repository with `vercel deploy --prod`. The app requires a Next.js server for its live bridge-fee API routes.
+
+The backend uses a server-side PostgreSQL connection and a scheduled indexer. Database credentials and signing keys must never be included in `NEXT_PUBLIC_` variables. The checked-in deployment is testnet only. See the backend README for the scheduled indexer, optional continuous container and database configuration.
+
+Vercel's installed Git integration publishes `main` after pushes. GitHub Actions runs quality checks; the legacy token-based deployment jobs were removed to avoid duplicate deployments and expired deployment credentials.
+
+## Verification
+
+`npm run check` runs formatting, interface rules, contrast checks, unit tests, lint, types and the production build. Start the app and run `npm run test:browser` for the real wallet picker, theme persistence, native selectors and mobile layout. Chromium must be installed with `npx playwright install chromium`.
+
+Set `HYPERION_BROWSER=firefox` to check Firefox, or `HYPERION_BROWSER_EXECUTABLE` to use a specific installed browser executable.
+
+Live transaction tests require explicit opt-in and real named CLI wallets. `test/live-transfer.test.ts` retains the original ITS acceptance. `test/live-routes.test.ts` verifies conversion or CCTP through actual destination payment, preserving its proof file across interrupted runs. Normal tests skip both live suites.
+
+For the route suite, set `HYPERION_LIVE_ROUTES=1`, `HYPERION_ROUTE_MODE=convert` or `cctp`, `HYPERION_ROUTE_IDENTITY`, `HYPERION_ROUTE_PROOF`, `HYPERION_ROUTE_DESTINATION`, `HYPERION_TESTNET_APP_URL`, `HYPERION_TESTNET_RECIPIENT` and `NEXT_PUBLIC_HYPERION_API_URL`. Conversion spends at most 1 testnet XLM plus fees; CCTP spends 0.3 testnet USDC. Never delete a pending proof to retry a transfer.
+
+Verified testnet acceptance is published with actual signed transaction hashes and destination payment evidence:
+
+| Evidence                                                                                                                                              | Result                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [Paid ITS acceptance](https://github.com/StellarHyperion/stellarhyperion-contracts/blob/main/deployments/evidence/2026-10-28-paid-its.json)           | Stellar USDC delivered through ITS to Ethereum Sepolia                                   |
+| [Asset conversion acceptance](https://github.com/StellarHyperion/stellarhyperion-contracts/blob/main/deployments/evidence/2026-10-29-conversion.json) | An XLM-only wallet created its USDC trustline, converted XLM and completed an ITS payout |
+| [CCTP acceptance](https://github.com/StellarHyperion/stellarhyperion-contracts/blob/main/deployments/evidence/2026-10-29-cctp.json)                   | Native-USDC payouts verified on Ethereum Sepolia, Base Sepolia and Arc Testnet           |
+
+The [October 29 CI run](https://github.com/StellarHyperion/stellarhyperion-frontend/actions/runs/40881695541) passed formatting, interface/contrast checks, lint, types, the production build and 54 ordinary tests. The two live suites require explicit opt-in and are skipped in normal runs. Browser verification also covered wallet errors/cancellation, saved connections, mobile layout, themes, live quotes and recorded receipt links in Chromium and Firefox.
+
+As of October 29, 2026, `npm audit` reports zero known vulnerabilities after patching Next.js to 16.4.3 and replacing the wallet-kit bundle with direct SDKs. Adapter tests use mocked wallet responses and real locally generated signatures; browser checks cover the picker and read-only flows. These checks do not certify third-party wallets or replace signed live acceptance.
+
+## Interface
+
+The layout study used [Jumper](https://jumper.xyz/), [Relay](https://relay.link/bridge) and [Stargate](https://stargate.finance/) as reference points for focused asset selection and progressive route details. Hyperion adds explicit receive-token identity, quote request feedback, review and interruption recovery. Decorative orbital paths provide background motion without implying that funds are moving. One theme button switches between light and dark; all motion honors reduced-motion preferences.
 
 MIT.
