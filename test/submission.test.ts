@@ -11,7 +11,7 @@ import {
   type xdr,
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
-import { submitSettleClaim } from "../src/contracts/stellar";
+import { submitSettleClaim, submitOperation, simulateOperation } from "../src/contracts/stellar";
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 
 // Deterministic test-only signer; this test never connects to a network.
@@ -21,7 +21,7 @@ const success = (retval: xdr.ScVal): rpc.Api.SimulateTransactionSuccessResponse 
   latestLedger: 1,
   events: [],
   _parsed: true,
-  transactionData: new SorobanDataBuilder(),
+  transactionData: new SorobanDataBuilder().setResourceFee(100),
   minResourceFee: "100",
   result: { auth: [], retval },
 });
@@ -30,7 +30,9 @@ function setup() {
     passphrase: TESTNET.networkPassphrase,
     protocolVersion: "27",
   });
-  vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(key.publicKey(), "0"));
+  vi.spyOn(rpc.Server.prototype, "getAccount").mockImplementation(() =>
+    Promise.resolve(new Account(key.publicKey(), "0")),
+  );
   vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
     executable: {
       type: "contractExecutableWasm",
@@ -224,7 +226,7 @@ describe("Signed Stellar submission failure boundaries", () => {
     const sim = await simulateOperation(key.publicKey(), op);
     expect(sim.resourceFee).toBe(100n);
     expect(sim.networkFee).toBe(100n);
-    expect(sim.totalFee).toBe(100n);
+    expect(sim.totalFee).toBe(200n);
 
     let submittedXdr: string | undefined;
     const wallet = vi.fn((xdrVal: string) => {
@@ -232,7 +234,15 @@ describe("Signed Stellar submission failure boundaries", () => {
       return sign(xdrVal);
     });
 
-    const result = await submitOperation(key.publicKey(), op, wallet, undefined, undefined, sim);
+    const result = await submitOperation(
+      key.publicKey(),
+      op,
+      wallet,
+      undefined,
+      undefined,
+      undefined,
+      sim,
+    );
     expect(result).toEqual({ status: "pending", txHash: hash });
     expect(wallet).toHaveBeenCalledTimes(1);
     expect(submittedXdr).toBe(sim.envelopeXdr);
@@ -255,7 +265,7 @@ describe("Signed Stellar submission failure boundaries", () => {
     const sim = await simulateOperation(key.publicKey(), op2);
     const wallet = vi.fn(sign);
     await expect(
-      submitOperation(key.publicKey(), op1, wallet, undefined, undefined, sim),
+      submitOperation(key.publicKey(), op1, wallet, undefined, undefined, undefined, sim),
     ).rejects.toThrow(
       "Displayed operation does not correspond to the envelope sent to the wallet.",
     );
@@ -285,5 +295,20 @@ describe("Signed Stellar submission failure boundaries", () => {
     expect(sim.totalFee).toBe(45100n);
     expect(sim.networkFee).toBe(100n);
     expect(sim.preparedTransaction.fee).toBe("45100");
+  });
+  it("does not broadcast after the wallet disconnects while signing", async () => {
+    const { send } = setup();
+    let account: string | null = key.publicKey();
+    const wallet = (value: string) => {
+      account = null;
+      return sign(value);
+    };
+    await expect(
+      submitSettleClaim(key.publicKey(), 1n, wallet, undefined, {
+        expectedAccount: key.publicKey(),
+        getCurrentAccount: () => account,
+      }),
+    ).rejects.toThrow("switched");
+    expect(send).not.toHaveBeenCalled();
   });
 });

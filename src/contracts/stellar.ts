@@ -605,7 +605,7 @@ export function reconcileSignatureReturn(
   if (!current || !validateReviewMatch(original, current)) {
     return { valid: false, reason: "superseded" };
   }
-  if (currentAccount && currentAccount !== original.account) {
+  if (currentAccount !== original.account) {
     return { valid: false, reason: "account_switch" };
   }
   return { valid: true };
@@ -664,30 +664,18 @@ export function validateEnvelopeOperation(
   expectedOperation: xdr.Operation,
   preparedTransaction: Transaction,
 ): boolean {
-  if (preparedTransaction.operations.length === 0) return false;
-  const op = preparedTransaction.operations[0];
-  if (!op) return false;
-  const body = expectedOperation.body as unknown as {
-    type?: string;
-    invokeHostFunctionOp?: {
-      hostFunction?: { toXdr: (format: string) => string };
-    };
-  };
-  if (op.type === "invokeHostFunction" && body.type === "invokeHostFunction") {
-    const expectedHostFn = body.invokeHostFunctionOp?.hostFunction;
-    if (!expectedHostFn || typeof expectedHostFn.toXdr !== "function") return false;
-    return op.func.toXdr("base64") === expectedHostFn.toXdr("base64");
-  }
-  return false;
+  const envelope = preparedTransaction.toEnvelope();
+  return (
+    envelope.type === "envelopeTypeTx" &&
+    envelope.v1.tx.operations.length === 1 &&
+    envelope.v1.tx.operations[0]?.toXdr("base64") === expectedOperation.toXdr("base64")
+  );
 }
 
 export async function simulateOperation(
   sender: string,
   operation: xdr.Operation,
-  sign: WalletSigner,
-  progress?: (phase: TransactionPhase, hash?: string) => void,
-  approval?: WalletApprovalProvenance,
-): Promise<TransactionResult> {
+): Promise<SimulatedOperation> {
   const client = server();
   const network = await client.getNetwork();
   if (network.passphrase !== TESTNET.networkPassphrase)
@@ -711,7 +699,8 @@ export async function simulateOperation(
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
   const resourceFee = BigInt(simulation.minResourceFee);
   const totalFee = BigInt(prepared.fee);
-  const networkFee = totalFee > resourceFee ? totalFee - resourceFee : BigInt(BASE_FEE);
+  const networkFee = totalFee - resourceFee;
+  if (networkFee < 0n) throw new Error("Invalid simulation fee data. Refresh the simulation.");
   return {
     resourceFee,
     networkFee,
@@ -737,6 +726,7 @@ export async function submitOperation(
   operation: xdr.Operation,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
+  approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   simulated?: SimulatedOperation,
 ): Promise<TransactionResult> {
@@ -753,13 +743,19 @@ export async function submitOperation(
       );
     }
     prepared = simulated.preparedTransaction;
+    if (
+      prepared.source !== sender ||
+      prepared.toXdr() !== simulated.envelopeXdr ||
+      prepared.sequence !== simulated.sequence
+    )
+      throw new Error("The reviewed simulation changed. Review a fresh simulation before signing.");
   } else {
     const sim = await simulateOperation(sender, operation);
     prepared = sim.preparedTransaction;
   }
   await verifyAccountSequence(client, sender, prepared.sequence);
   progress?.("signing");
-  return signAndSubmit(prepared, sign, progress, approval);
+  return signAndSubmit(prepared, sign, progress, approval, reconcile);
 }
 
 export async function submitClassicOperations(
@@ -768,6 +764,7 @@ export async function submitClassicOperations(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
 ): Promise<TransactionResult> {
   const client = server();
   if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
@@ -778,7 +775,7 @@ export async function submitClassicOperations(
     networkPassphrase: TESTNET.networkPassphrase,
   });
   for (const operation of operations) builder.addOperation(operation);
-  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval);
+  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval, reconcile);
 }
 
 async function signAndSubmit(
@@ -786,6 +783,7 @@ async function signAndSubmit(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("signing");
@@ -814,7 +812,7 @@ async function signAndSubmit(
     const currentAccount = reconcile.getCurrentAccount
       ? reconcile.getCurrentAccount()
       : reconcile.expectedAccount;
-    if (currentAccount && currentAccount !== reconcile.expectedAccount) {
+    if (currentAccount !== reconcile.expectedAccount) {
       if (reconcile.onAccountSwitch) {
         await reconcile.onAccountSwitch(hash, signedTransaction);
       }
@@ -868,6 +866,8 @@ export async function submitBridgeOut(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
+  simulated?: SimulatedOperation,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
   const refreshed = await quoteTransfer(
@@ -892,6 +892,8 @@ export async function submitBridgeOut(
     sign,
     progress,
     approval,
+    reconcile,
+    simulated,
   );
 }
 
@@ -916,6 +918,7 @@ export async function submitSettleClaim(
   id: bigint,
   sign: WalletSigner,
   approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
@@ -934,5 +937,6 @@ export async function submitSettleClaim(
     sign,
     undefined,
     approval,
+    reconcile,
   );
 }
