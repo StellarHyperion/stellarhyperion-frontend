@@ -2,7 +2,6 @@ import { Header, ThemeSelector } from "../src/components/nav";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Header, ThemeSelector } from "../src/components/nav";
 
 describe("Accessibility and Design Token Audits", () => {
   const globalsCss = readFileSync(join(__dirname, "../src/app/globals.css"), "utf-8");
