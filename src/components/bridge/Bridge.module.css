@@ -107,6 +107,29 @@
   color: var(--text-secondary);
   opacity: 1;
 }
+.maxSpend {
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background var(--motion-state),
+    color var(--motion-state);
+}
+.maxSpend:hover:not(:disabled) {
+  background: var(--surface-well);
+  color: var(--text-primary);
+}
+.maxSpend:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .tokenSelector {
   display: flex;
   align-items: center;

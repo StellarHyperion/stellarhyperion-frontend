@@ -18,10 +18,12 @@ export interface SourceAsset {
   verification: AssetVerification;
   trustline: TrustlineState;
   balance?: string;
+  sellingLiabilities?: string;
+  available?: string;
 }
 export type AssetVerification =
   "configured" | "wallet-trustline" | "horizon-search" | "horizon-path";
-export type TrustlineState = "native" | "present" | "not-checked";
+export type TrustlineState = "native" | "present" | "not-checked" | "frozen" | "unauthorized";
 
 export const XLM: SourceAsset = {
   id: "native",
@@ -51,9 +53,33 @@ export function trustlineLabel(asset: SourceAsset): string {
       return "Native balance";
     case "present":
       return "Wallet trustline present";
+    case "frozen":
+      return "Trustline frozen by issuer";
+    case "unauthorized":
+      return "Trustline not authorized by issuer";
     default:
       return "Trustline not checked for this asset";
   }
+}
+
+function formatSpendableUnits(units: bigint): string {
+  const scale = 10_000_000n;
+  return `${units / scale}.${(units % scale).toString().padStart(7, "0")}`;
+}
+
+export function spendableBalance(asset: SourceAsset): string {
+  if (asset.trustline === "frozen" || asset.trustline === "unauthorized") {
+    return "0.0000000";
+  }
+  if (!asset.balance) return "0.0000000";
+  const balanceUnits = parseUnits(asset.balance, 7);
+  const liabilitiesUnits = asset.sellingLiabilities ? parseUnits(asset.sellingLiabilities, 7) : 0n;
+  const availableUnits = balanceUnits > liabilitiesUnits ? balanceUnits - liabilitiesUnits : 0n;
+  return formatSpendableUnits(availableUnits);
+}
+
+export function suggestSourceSpend(asset: SourceAsset): string {
+  return spendableBalance(asset);
 }
 
 export function stellarAsset(asset: SourceAsset): Asset {
@@ -99,20 +125,51 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
   if (!Array.isArray(body.balances)) throw new Error("Invalid Stellar account balances.");
   return body.balances.flatMap((entry: Record<string, unknown>) => {
     if (typeof entry.balance !== "string") return [];
-    if (entry.asset_type === "native") return [{ ...XLM, balance: entry.balance }];
-    if (
-      entry.is_authorized === false ||
-      typeof entry.asset_code !== "string" ||
-      typeof entry.asset_issuer !== "string"
-    )
-      return [];
+    if (entry.asset_type === "native") {
+      const sellingLiabilities =
+        typeof entry.selling_liabilities === "string" ? entry.selling_liabilities : "0.0000000";
+      const total = parseUnits(entry.balance, 7);
+      const liabilities = parseUnits(sellingLiabilities, 7);
+      const availableUnits = total > liabilities ? total - liabilities : 0n;
+      return [
+        {
+          ...XLM,
+          balance: entry.balance,
+          sellingLiabilities,
+          available: formatSpendableUnits(availableUnits),
+        },
+      ];
+    }
+    if (typeof entry.asset_code !== "string" || typeof entry.asset_issuer !== "string") return [];
+    const sellingLiabilities =
+      typeof entry.selling_liabilities === "string" ? entry.selling_liabilities : "0.0000000";
+    const isFrozen =
+      entry.is_authorized === false && entry.is_authorized_to_maintain_liabilities === true;
+    const isUnauthorized = entry.is_authorized === false && !isFrozen;
+    const trustline: TrustlineState = isFrozen
+      ? "frozen"
+      : isUnauthorized
+        ? "unauthorized"
+        : "present";
+
+    const total = parseUnits(entry.balance, 7);
+    const liabilities = parseUnits(sellingLiabilities, 7);
+    const availableUnits =
+      trustline === "frozen" || trustline === "unauthorized"
+        ? 0n
+        : total > liabilities
+          ? total - liabilities
+          : 0n;
+
     const asset: SourceAsset = {
       id: `${entry.asset_code}:${entry.asset_issuer}`,
       code: entry.asset_code,
       issuer: entry.asset_issuer,
       verification: "wallet-trustline",
-      trustline: "present",
+      trustline,
       balance: entry.balance,
+      sellingLiabilities,
+      available: formatSpendableUnits(availableUnits),
     };
     stellarAsset(asset);
     return [asset];
@@ -190,6 +247,10 @@ export interface TradeQuote {
 
 export async function quoteConversion(source: SourceAsset, amount: bigint): Promise<Conversion> {
   const asset = stellarAsset(source);
+  if (source.trustline === "frozen")
+    throw new Error(`Trustline for ${source.code} is frozen by the issuer.`);
+  if (source.trustline === "unauthorized")
+    throw new Error(`Trustline for ${source.code} is not authorized by the issuer.`);
   if (amount <= 0n || amount > (1n << 63n) - 1n)
     throw new Error("Enter a positive amount within Stellar's asset limit.");
   const params = new URLSearchParams({
@@ -245,6 +306,10 @@ export async function quoteTrade(
   route: BridgeRoute,
 ): Promise<TradeQuote> {
   stellarAsset(source);
+  if (source.trustline === "frozen")
+    throw new Error(`Trustline for ${source.code} is frozen by the issuer.`);
+  if (source.trustline === "unauthorized")
+    throw new Error(`Trustline for ${source.code} is not authorized by the issuer.`);
   const amount = parseUnits(input.trim(), 7);
   if (amount <= 0n || amount > (1n << 63n) - 1n)
     throw new Error("Enter a positive amount within Stellar's asset limit.");
@@ -283,9 +348,20 @@ export async function submitConversion(
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const assets = await accountAssets(sender);
-  const balance = assets.find((asset) => asset.id === conversion.source.id)?.balance ?? "0";
-  if (parseUnits(balance, 7) < conversion.sourceMax)
-    throw new Error(`Insufficient ${conversion.source.code} balance.`);
+  const sourceAsset = assets.find((asset) => asset.id === conversion.source.id);
+  if (!sourceAsset)
+    throw new Error(`Trustline for ${conversion.source.code} not found on your account.`);
+  if (sourceAsset.trustline === "frozen")
+    throw new Error(`Trustline for ${conversion.source.code} is frozen by the issuer.`);
+  if (sourceAsset.trustline === "unauthorized")
+    throw new Error(`Trustline for ${conversion.source.code} is not authorized by the issuer.`);
+  const spendable = parseUnits(spendableBalance(sourceAsset), 7);
+  if (spendable < conversion.sourceMax)
+    throw new Error(
+      sourceAsset.sellingLiabilities && parseUnits(sourceAsset.sellingLiabilities, 7) > 0n
+        ? `Insufficient available ${conversion.source.code} balance. Selling liabilities reduce your spendable balance to ${spendableBalance(sourceAsset)} ${conversion.source.code}.`
+        : `Insufficient ${conversion.source.code} balance.`,
+    );
   return submitClassicOperations(
     sender,
     conversionOperations(sender, conversion, !assets.some((asset) => asset.id === USDC.id)),
