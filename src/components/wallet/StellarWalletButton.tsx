@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useStellarWallet } from "../../wallets/stellar";
+import { useEffect, useId, useRef, useState } from "react";
+import {
+  useStellarWallet,
+  isWalletId,
+  walletCapabilities,
+  walletAvailabilityLabel,
+} from "../../wallets/stellar";
 import styles from "./StellarWalletButton.module.css";
 
 export function StellarWalletButton() {
@@ -10,15 +15,26 @@ export function StellarWalletButton() {
     isConnecting,
     shortAddress,
     address,
+    walletId,
     error,
     pendingSigningRequest,
     connect,
     disconnect,
   } = useStellarWallet();
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuId = useId();
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const activeCapabilities = isWalletId(walletId) ? walletCapabilities(walletId) : null;
+  const walletDisplayName = activeCapabilities?.name ?? "Unknown wallet";
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        buttonRef.current?.focus();
+      }
+    }
     function handleClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setMenuOpen(false);
@@ -26,8 +42,10 @@ export function StellarWalletButton() {
     }
     if (menuOpen) {
       document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener("keydown", handleKey);
       return () => {
         document.removeEventListener("mousedown", handleClickOutside);
+        document.removeEventListener("keydown", handleKey);
       };
     }
   }, [menuOpen]);
@@ -61,7 +79,8 @@ export function StellarWalletButton() {
         onClick={() => {
           setMenuOpen((prev) => !prev);
         }}
-        aria-haspopup="menu"
+        ref={buttonRef}
+        aria-controls={menuId}
         aria-expanded={menuOpen}
       >
         <span className={styles.dot} />
@@ -70,11 +89,50 @@ export function StellarWalletButton() {
       </button>
 
       {menuOpen && (
-        <div className={styles.menu} role="menu">
+        <div id={menuId} className={styles.menu} role="region" aria-label="Wallet details">
           <div className={styles.addressRow}>
             <span className={styles.addressLabel}>stellar account</span>
             <span className={styles.fullAddress}>{address}</span>
           </div>
+
+          <div className={styles.diagnosticsSection}>
+            <span className={styles.diagTitle}>adapter diagnostics</span>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>wallet</span>
+              <span className={styles.diagVal}>{walletDisplayName}</span>
+            </div>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>availability</span>
+              <span className={styles.diagVal}>{walletAvailabilityLabel("available")}</span>
+            </div>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>tx signing</span>
+              <span className={styles.diagVal}>
+                {activeCapabilities?.signingLimitations.canSignTransaction
+                  ? "supported"
+                  : "unsupported"}
+              </span>
+            </div>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>auth entry</span>
+              <span className={styles.diagVal}>Unsupported by this app</span>
+            </div>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>account events</span>
+              <span className={styles.diagVal}>Checked before signing</span>
+            </div>
+
+            <div className={styles.diagRow}>
+              <span className={styles.diagKey}>active lane</span>
+              <span className={styles.diagVal}>Stellar Testnet</span>
+            </div>
+          </div>
+
           <button
             type="button"
             className={styles.disconnectBtn}
