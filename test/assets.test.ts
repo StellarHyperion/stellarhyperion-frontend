@@ -195,3 +195,92 @@ describe("Live relay fee headroom", () => {
     expect(() => relayBudget(0n)).toThrow();
   });
 });
+
+describe("Horizon search cancellation", () => {
+  it("forwards the abort signal to the Horizon fetch", async () => {
+    const captured: AbortSignal[] = [];
+    const request = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) throw new Error("The Horizon fetch must carry an abort signal.");
+      captured.push(signal);
+      return Promise.resolve(
+        new Response(JSON.stringify({ _embedded: { records: [] } }), { status: 200 }),
+      );
+    });
+    vi.stubGlobal("fetch", request);
+    const controller = new AbortController();
+    await searchAssets("USDC", controller.signal);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toBeDefined();
+    vi.unstubAllGlobals();
+  });
+  it("rejects a stale search when its signal is aborted", async () => {
+    const stored: { resolve: (value: Response) => void; signal: AbortSignal }[] = [];
+    const request = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("The Horizon fetch must carry an abort signal."));
+            return;
+          }
+          const onAbort = () => {
+            reject(new Error("The search was aborted."));
+          };
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+          stored.push({ resolve, signal });
+        }),
+    );
+    vi.stubGlobal("fetch", request);
+    const controller = new AbortController();
+    const promise = searchAssets("USDC", controller.signal);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.signal).toBeDefined();
+    controller.abort();
+    await expect(promise).rejects.toThrow("The search was aborted.");
+    vi.unstubAllGlobals();
+  });
+  it("lets the current query complete while an older aborted search does not replace it", async () => {
+    const stored: { resolve: (value: Response) => void; signal: AbortSignal }[] = [];
+    const request = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("The Horizon fetch must carry an abort signal."));
+            return;
+          }
+          const onAbort = () => {
+            reject(new Error("The search was aborted."));
+          };
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+          stored.push({ resolve, signal });
+        }),
+    );
+    vi.stubGlobal("fetch", request);
+    const olderController = new AbortController();
+    const currentController = new AbortController();
+    const older = searchAssets("USDC", olderController.signal);
+    const current = searchAssets("ABC", currentController.signal);
+    expect(stored).toHaveLength(2);
+    olderController.abort();
+    await expect(older).rejects.toThrow("The search was aborted.");
+    const body = JSON.stringify({
+      _embedded: { records: [{ asset_code: USDC.code, asset_issuer: USDC.issuer }] },
+    });
+    const currentResponse = stored[1];
+    if (!currentResponse) throw new Error("Missing the current search response.");
+    currentResponse.resolve(new Response(body, { status: 200 }));
+    const assets = await current;
+    expect(assets.map((asset) => asset.id)).toEqual([USDC.id]);
+    vi.unstubAllGlobals();
+  });
+});

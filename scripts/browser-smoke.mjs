@@ -16,6 +16,36 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+
+  // Opening a shared link loads bounded form state without any submission intent.
+  const recipient = "0x" + "a".repeat(40);
+  await page.goto(`${origin}?a=1&r=${recipient}&d=sepolia&t=0&s=native`, {
+    waitUntil: "networkidle",
+  });
+  await page.getByLabel("Amount to send").waitFor();
+  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), "1");
+  assert.strictEqual(
+    await page.getByLabel("Recipient on Ethereum Sepolia").inputValue(),
+    recipient,
+  );
+  assert.ok((await page.getByLabel("Choose source token").textContent()).includes("XLM"));
+  assert.ok(page.url().match(new RegExp(`\\?a=1&r=${recipient}&d=sepolia&t=0&s=native`)));
+  // No checkpoint or automatic submission intent is restored from a shared link.
+  assert.strictEqual(
+    await page.getByRole("button", { name: /Bridge converted USDC|continue/i }).count(),
+    0,
+  );
+  // Returning to (reloading) the link re-applies the bounded form state on mount: fresh lookup,
+  // no stale submission intent carried over.
+  await page.reload({ waitUntil: "networkidle" });
+  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), "1");
+  assert.strictEqual(
+    await page.getByLabel("Recipient on Ethereum Sepolia").inputValue(),
+    recipient,
+  );
+  assert.ok(page.url().match(new RegExp(`\\?a=1&r=${recipient}&d=sepolia&t=0&s=native`)));
+
+  await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
   assert.equal(await page.getByLabel("Amount to send").count(), 1);
   assert.equal(await page.getByLabel("Recipient on Ethereum Sepolia").count(), 1);
   const themeToggle = page.getByRole("button", { name: "Toggle dark theme" });
@@ -27,6 +57,7 @@ try {
   await page.getByRole("button", { name: "Choose source token", exact: true }).click();
   await page.getByRole("dialog", { name: "Choose a token" }).waitFor();
   await page.getByLabel("Search Stellar assets").waitFor();
+  await page.getByLabel("Search Stellar assets").fill("USDC");
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "Choose destination network and token" }).click();
@@ -55,7 +86,7 @@ try {
   }
   assert.deepEqual(errors, [], "Uncaught browser errors");
   console.log(
-    "Browser smoke passed: transfer inputs, real wallet picker, history and mobile layout.",
+    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history and mobile layout.",
   );
 } finally {
   await browser.close();

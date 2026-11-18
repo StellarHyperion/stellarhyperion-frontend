@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, Check, ChevronRight, Search } from "lucide-react";
 import { DESTINATIONS, type BridgeRoute, type DestinationKey } from "../../config/testnet";
 import {
@@ -38,16 +38,19 @@ export function SourceAssetPicker({
     assets: SourceAsset[];
     error: string | null;
   } | null>(null);
+  const latest = useRef(0);
   useEffect(() => {
     if (!query.trim()) return;
     const controller = new AbortController();
+    const requestId = ++latest.current;
     const timer = setTimeout(() => {
       void searchAssets(query, controller.signal)
         .then((assets) => {
-          if (!controller.signal.aborted) setRemote({ key: query, assets, error: null });
+          if (requestId === latest.current && !controller.signal.aborted)
+            setRemote({ key: query, assets, error: null });
         })
         .catch((error: unknown) => {
-          if (!controller.signal.aborted)
+          if (requestId === latest.current && !controller.signal.aborted)
             setRemote({ key: query, assets: [], error: errorMessage(error) });
         });
     }, 250);

@@ -6,13 +6,15 @@ import {
   ArrowRight,
   ArrowUpRight,
   ChevronDown,
+  Copy,
   LoaderCircle,
   Plus,
   RefreshCw,
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import {
   TESTNET,
@@ -38,12 +40,14 @@ import {
 } from "../../contracts";
 import {
   USDC,
+  XLM,
   accountAssets,
   issuerVerificationLabel,
   conversionExecutionIntent,
   conversionRoute,
   quoteTrade,
   submitConversion,
+  stellarAsset,
   trustlineLabel,
   type Conversion,
   type SourceAsset,
@@ -51,6 +55,7 @@ import {
 } from "../../contracts/assets";
 import {
   saveCheckpoint,
+  checkpointMatches,
   useTransferCheckpoint,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
@@ -61,6 +66,68 @@ import styles from "./Bridge.module.css";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
+
+export interface BridgeFormParams {
+  amount: string;
+  recipient: string;
+  destination: DestinationKey;
+  route: BridgeRoute;
+  source: SourceAsset;
+}
+
+// Bounded public form state: only these keys are part of a shareable bridge link.
+// Checkpoints, signatures and submission intent are deliberately excluded.
+export function parseBridgeFormParams(search: string): BridgeFormParams | null {
+  const params = new URLSearchParams(search);
+  const amount = params.get("a") ?? "";
+  const recipient = params.get("r") ?? "";
+  const destinationRaw = params.get("d");
+  const routeRaw = params.get("t");
+  const sourceRaw = params.get("s");
+
+  let destination: DestinationKey = "sepolia";
+  if (destinationRaw) {
+    try {
+      destination = destinationFor(destinationRaw).key;
+    } catch {
+      return null;
+    }
+  }
+
+  let route: BridgeRoute = 1;
+  if (routeRaw) {
+    if (routeRaw === "0") route = 0;
+    else if (routeRaw === "1") route = 1;
+    else return null;
+  }
+
+  let source: SourceAsset = USDC;
+  if (sourceRaw) {
+    if (sourceRaw === XLM.id) {
+      source = XLM;
+    } else if (sourceRaw === USDC.id) {
+      source = USDC;
+    } else {
+      const [code, issuer] = sourceRaw.split(":");
+      if (!code || !issuer) return null;
+      const candidate: SourceAsset = {
+        id: sourceRaw,
+        code,
+        issuer,
+        verification: "horizon-search",
+        trustline: "not-checked",
+      };
+      try {
+        stellarAsset(candidate);
+      } catch {
+        return null;
+      }
+      source = candidate;
+    }
+  }
+
+  return { amount, recipient, destination, route, source };
+}
 
 function ApprovalDetails({
   approval,
@@ -148,11 +215,17 @@ function PendingTransferCard({
   checkpoint,
   busy,
   latest,
+  destination,
+  route,
+  bridgeAmount,
   onReset,
 }: {
   checkpoint: TransferCheckpoint;
   busy: boolean;
   latest: TransactionResult | null;
+  destination: DestinationKey;
+  route: BridgeRoute;
+  bridgeAmount: string;
   onReset: () => void;
 }) {
   const wallet = useStellarWallet();
@@ -160,12 +233,22 @@ function PendingTransferCard({
   const [checked, setChecked] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<LiveQuote | null>(null);
+  const [copied, setCopied] = useState(false);
   const current =
     checked?.txHash === checkpoint.txHash
       ? checked
       : latest?.txHash === checkpoint.txHash
         ? latest
         : null;
+  // A saved confirmation only applies to this session when the account and intent still match.
+  // A different account or intent means the checkpoint is stale and must not be continued here.
+  const matches = checkpointMatches(checkpoint, {
+    account: wallet.address ?? "",
+    destination,
+    route,
+    bridgeAmount,
+    stage: checkpoint.stage,
+  });
   const sameAccount = wallet.address === checkpoint.account;
   const check = async () => {
     if (checking || busy) return;
@@ -174,7 +257,12 @@ function PendingTransferCard({
     try {
       const result = await readTransaction(checkpoint.txHash);
       setChecked(result);
-      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount)
+      if (
+        matches &&
+        result?.status === "confirmed" &&
+        checkpoint.stage === "conversion" &&
+        sameAccount
+      )
         setReview(
           await quoteTransfer(
             checkpoint.destination,
@@ -189,7 +277,7 @@ function PendingTransferCard({
     }
   };
   const continueBridge = async () => {
-    if (!review || !sameAccount || checking) return;
+    if (!review || !matches || !sameAccount || checking) return;
     setChecking(true);
     setError(null);
     try {
@@ -210,6 +298,18 @@ function PendingTransferCard({
       setError(message);
     } finally {
       setChecking(false);
+    }
+  };
+  const copyTransactionHash = async () => {
+    const hash = checkpoint.txHash;
+    try {
+      await navigator.clipboard.writeText(hash);
+      setCopied(true);
+      setTimeout(() => {
+        setCopied(false);
+      }, 1500);
+    } catch {
+      /* Clipboard access unavailable; the hash remains selectable for manual copy. */
     }
   };
   return (
@@ -233,15 +333,33 @@ function PendingTransferCard({
           ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
           : "Follow destination delivery in your transfer activity. A Stellar confirmation starts the bridge journey."}
       </p>
-      <a
-        className={styles.transactionLink}
-        href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        {checkpoint.txHash.slice(0, 12)}...{checkpoint.txHash.slice(-8)}{" "}
-        <ArrowUpRight size={14} aria-hidden="true" />
-      </a>
+      <div className={styles.transactionIdentity}>
+        <span className={styles.transactionIdentityLabel}>
+          Source identity ({TESTNET.networkPassphrase.split(";")[0]?.trim() ?? "Testnet"})
+        </span>
+        <div className={styles.transactionIdentityValue}>
+          <code className={styles.transactionHash}>{checkpoint.txHash}</code>
+          <button
+            type="button"
+            className={styles.copyHash}
+            aria-label="Copy transaction hash"
+            onClick={() => {
+              void copyTransactionHash();
+            }}
+            title={copied ? "Copied" : "Copy transaction hash"}
+          >
+            <Copy size={13} aria-hidden="true" />
+          </button>
+        </div>
+        <a
+          className={styles.transactionLink}
+          href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          View on Stellar Expert <ArrowUpRight size={13} aria-hidden="true" />
+        </a>
+      </div>
       {checkpoint.stage === "bridge" && (
         <Link href={`/transfers/${checkpoint.txHash}`}>
           Track transfer <ArrowRight size={14} aria-hidden="true" />
@@ -253,18 +371,24 @@ function PendingTransferCard({
           this transfer.
         </p>
       )}
+      {!matches && (
+        <p>
+          This checkpoint belongs to a different account or transfer intent. Reconnect the original
+          wallet or start a new transfer before continuing.
+        </p>
+      )}
       {error && (
         <p role="alert" className={styles.error}>
           {error}
         </p>
       )}
       {current?.status === "failed" ||
-      (checkpoint.stage === "bridge" && current?.status === "confirmed") ? (
+      (matches && checkpoint.stage === "bridge" && current?.status === "confirmed") ? (
         <button
           type="button"
           className={styles.secondary}
           onClick={onReset}
-          disabled={busy || checking}
+          disabled={busy || checking || !matches}
         >
           Start another transfer
         </button>
@@ -275,11 +399,11 @@ function PendingTransferCard({
           onClick={() => {
             void check();
           }}
-          disabled={busy || checking}
+          disabled={busy || checking || !matches}
         >
           {checking
             ? "Checking transaction..."
-            : checkpoint.stage === "conversion" && sameAccount
+            : checkpoint.stage === "conversion" && matches && sameAccount
               ? "Check and continue"
               : "Check status"}
         </button>
@@ -322,6 +446,7 @@ function PendingTransferCard({
 export function Bridge() {
   const wallet = useStellarWallet();
   const checkpoint = useTransferCheckpoint();
+  const pathname = usePathname();
   const [source, setSource] = useState<SourceAsset>(USDC);
   const [destination, setDestination] = useState<DestinationKey>("sepolia");
   const [route, setRoute] = useState<BridgeRoute>(1);
@@ -348,6 +473,7 @@ export function Bridge() {
     error: string | null;
   } | null>(null);
   const [busy, setBusy] = useState(false);
+  const abortController = useRef<AbortController | null>(null);
   const [phase, setPhase] = useState<TransactionPhase | null>(null);
   const [step, setStep] = useState<"conversion" | "bridge">("bridge");
   const [result, setResult] = useState<TransactionResult | null>(null);
@@ -385,6 +511,48 @@ export function Bridge() {
   const fetching =
     valid && !locked && !laneError && (!lane || (lane.available && quoted?.key !== quoteKey));
   const chain = destinationFor(destination);
+
+  // Apply bounded public form state from a shared link on mount, then re-quote fresh.
+  // Never restores checkpoints, signatures or submission intent.
+  useEffect(() => {
+    const state = parseBridgeFormParams(window.location.search);
+    if (!state) return;
+    const apply = () => {
+      setSource(state.source);
+      setDestination(state.destination);
+      setRoute(state.route);
+      setAmount(state.amount);
+      setRecipient(state.recipient);
+    };
+    const timer = setTimeout(apply, 0);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, []);
+
+  // Stop local waiting on unmount without discarding the checkpoint or changing chain outcome.
+  useEffect(() => {
+    return () => {
+      abortController.current?.abort();
+      abortController.current = null;
+    };
+  }, []);
+
+  // Push only bounded form state to the URL: no checkpoints, signatures or submission intent.
+  const pushFormState = useCallback(() => {
+    window.history.replaceState(
+      null,
+      "",
+      `${pathname}?${new URLSearchParams({
+        a: amount,
+        r: recipient,
+        d: destination,
+        t: String(route),
+        s: source.id,
+      }).toString()}`,
+    );
+  }, [amount, recipient, destination, route, source.id, pathname]);
+
   useEffect(() => {
     let active = true;
     const load = () => {
@@ -460,6 +628,11 @@ export function Bridge() {
     setPhase("preparing");
     const sender = wallet.address;
     let converted: TransferCheckpoint | null = null;
+    // Stop any previous local waiting before starting a new submission; never resubmit an
+    // ambiguous signed transaction. The checkpoint (signed hash) is preserved either way.
+    abortController.current?.abort();
+    const controller = new AbortController();
+    abortController.current = controller;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
       router: TESTNET.router,
       account: sender,
@@ -482,6 +655,7 @@ export function Bridge() {
             if (hash) saveCheckpoint(pending("conversion", hash));
           },
           { ...reviewApproval, operation: "conversion" },
+          controller.signal,
         );
         if (swap.status !== "confirmed") {
           setResult(swap);
@@ -507,6 +681,7 @@ export function Bridge() {
           }
         },
         { ...reviewApproval, operation: "bridge" },
+        controller.signal,
       );
       setResult(submitted);
     } catch (cause) {
@@ -516,6 +691,7 @@ export function Bridge() {
     } finally {
       setBusy(false);
       setPhase(null);
+      abortController.current = null;
     }
   };
   const reset = () => {
@@ -531,7 +707,15 @@ export function Bridge() {
   return (
     <>
       {checkpoint && (
-        <PendingTransferCard checkpoint={checkpoint} busy={busy} latest={result} onReset={reset} />
+        <PendingTransferCard
+          checkpoint={checkpoint}
+          busy={busy}
+          latest={result}
+          destination={destination}
+          route={route}
+          bridgeAmount={amount}
+          onReset={reset}
+        />
       )}
       <section className={styles.panel} aria-labelledby="bridge-heading" aria-busy={fetching}>
         <div className={styles.heading}>
@@ -571,6 +755,7 @@ export function Bridge() {
               onChange={(event) => {
                 setAmount(event.target.value);
                 setError(null);
+                pushFormState();
               }}
             />
             <button
@@ -677,6 +862,7 @@ export function Bridge() {
             onChange={(event) => {
               setRecipient(event.target.value);
               setError(null);
+              pushFormState();
             }}
           />
         </div>
@@ -761,6 +947,17 @@ export function Bridge() {
                   ? "waiting for Stellar confirmation"
                   : "checking the current quote"}
             .
+            {phase === "pending" && (
+              <button
+                type="button"
+                className={styles.secondary}
+                onClick={() => {
+                  abortController.current?.abort();
+                }}
+              >
+                Stop waiting
+              </button>
+            )}
           </p>
         )}
         {!wallet.isConnected ? (
@@ -836,6 +1033,7 @@ export function Bridge() {
           onSelect={(asset) => {
             setSource(asset);
             setError(null);
+            pushFormState();
           }}
           onClose={() => {
             setPicker(null);
@@ -850,6 +1048,7 @@ export function Bridge() {
             setDestination(next);
             setRoute(bridge);
             setError(null);
+            pushFormState();
           }}
           onClose={() => {
             setPicker(null);

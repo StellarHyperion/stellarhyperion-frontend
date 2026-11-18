@@ -538,6 +538,7 @@ async function submitOperation(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("preparing");
@@ -562,7 +563,7 @@ async function submitOperation(
   }
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
   progress?.("signing");
-  return signAndSubmit(prepared, sign, progress, approval);
+  return signAndSubmit(prepared, sign, progress, approval, signal);
 }
 
 export async function submitClassicOperations(
@@ -571,6 +572,7 @@ export async function submitClassicOperations(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const client = server();
   if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
@@ -580,7 +582,22 @@ export async function submitClassicOperations(
     networkPassphrase: TESTNET.networkPassphrase,
   });
   for (const operation of operations) builder.addOperation(operation);
-  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval);
+  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval, signal);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 async function signAndSubmit(
@@ -588,6 +605,7 @@ async function signAndSubmit(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("signing");
@@ -621,7 +639,8 @@ async function signAndSubmit(
   }
   progress?.("pending", hash);
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (signal?.aborted) return { status: "pending", txHash: hash };
+    await sleep(2000, signal);
     let result: TransactionResult | null;
     try {
       result = await readTransaction(hash);
@@ -643,6 +662,7 @@ export async function submitBridgeOut(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
   const refreshed = await quoteTransfer(
@@ -667,6 +687,7 @@ export async function submitBridgeOut(
     sign,
     progress,
     approval,
+    signal,
   );
 }
 
@@ -691,6 +712,7 @@ export async function submitSettleClaim(
   id: bigint,
   sign: WalletSigner,
   approval?: WalletApprovalProvenance,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
@@ -709,5 +731,6 @@ export async function submitSettleClaim(
     sign,
     undefined,
     approval,
+    signal,
   );
 }

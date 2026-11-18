@@ -280,6 +280,7 @@ export async function submitConversion(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const assets = await accountAssets(sender);
   const balance = assets.find((asset) => asset.id === conversion.source.id)?.balance ?? "0";
@@ -291,5 +292,6 @@ export async function submitConversion(
     sign,
     progress,
     approval,
+    signal,
   );
 }
