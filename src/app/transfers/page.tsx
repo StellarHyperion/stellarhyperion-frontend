@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Column } from "../../components/chrome";
 import {
   fetchIndexerMetrics,
@@ -11,6 +11,7 @@ import {
 } from "../../api";
 import { TransferList } from "../../components/transfers";
 import { errorMessage } from "../../contracts";
+import { ActivityRequestGuard } from "../../lib/activity-request";
 import { useStellarWallet } from "../../wallets";
 import styles from "./page.module.css";
 
@@ -67,6 +68,9 @@ function ActivityCoverage({
 
 export default function TransfersPage() {
   const { address } = useStellarWallet();
+  return <TransfersPageContent key={address ?? "public"} address={address} />;
+}
+function TransfersPageContent({ address }: { address?: string | null }) {
   const [transfers, setTransfers] = useState<readonly FormattedTransfer[]>([]);
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
@@ -75,9 +79,21 @@ export default function TransfersPage() {
   const [metrics, setMetrics] = useState<IndexerMetrics | null>(null);
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [response, setResponse] = useState<TransfersResponse | null>(null);
+  const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
-    let active = true;
+    const guard = requestGuard.current;
+    const identityChanged = guard.setIdentity(address ?? null);
+    if (identityChanged) {
+      setTransfers([]);
+      setError(null);
+      setResponse(null);
+      setMetrics(null);
+      setMetricsError(null);
+      setLoading(true);
+    }
+    guard.invalidate();
     const load = async () => {
+      const token = guard.begin();
       try {
         const [historyResult, metricsResult] = await Promise.allSettled([
           fetchTransfers({
@@ -88,7 +104,7 @@ export default function TransfersPage() {
           }),
           fetchIndexerMetrics(),
         ]);
-        if (!active) return;
+        if (!guard.isCurrent(token)) return;
         if (historyResult.status === "fulfilled") {
           setResponse(historyResult.value);
           setTransfers(historyResult.value.transfers);
@@ -106,7 +122,7 @@ export default function TransfersPage() {
           setMetricsError(errorMessage(metricsResult.reason));
         }
       } finally {
-        if (active) setLoading(false);
+        if (guard.isCurrent(token)) setLoading(false);
       }
     };
     const delay = setTimeout(() => {
@@ -115,11 +131,11 @@ export default function TransfersPage() {
     }, 300);
     const timer = setInterval(() => void load(), 10_000);
     return () => {
-      active = false;
+      guard.invalidate();
       clearTimeout(delay);
       clearInterval(timer);
     };
-  }, [address, search, offset]);
+  }, [address, offset, search]);
   return (
     <Column>
       <h1 className="display">Transfer history</h1>
@@ -132,7 +148,7 @@ export default function TransfersPage() {
         Claim numbers appear when a destination router holds funds for recovery. Delivered transfers
         need no claim recovery. Open transfer details to check a claim and its status.
       </p>
-      {(response || metricsError) && (
+      {(response ?? metricsError) && (
         <ActivityCoverage response={response} metrics={metrics} metricsError={metricsError} />
       )}
       <input
@@ -145,9 +161,8 @@ export default function TransfersPage() {
           setOffset(0);
         }}
       />
-      {error ? (
-        <p role="alert">{error}</p>
-      ) : loading ? (
+      {error && <p role="alert">{error}</p>}
+      {loading && transfers.length === 0 ? (
         <p role="status">Loading indexed transfers...</p>
       ) : (
         <TransferList transfers={transfers} />

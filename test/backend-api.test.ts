@@ -60,6 +60,12 @@ describe("Real indexer client", () => {
 
   it("reads indexer cursors for freshness without conflating metrics failure with empty history", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const cursor = {
+      chain: "stellar-testnet",
+      block: "123",
+      hash: null,
+      updatedAt: "2026-11-18T12:00:00.000Z",
+    };
     const payload = {
       service: "hyperion-backend",
       network: "testnet",
@@ -67,14 +73,7 @@ describe("Real indexer client", () => {
       transfers: { totalOutbound: 0, totalInbound: 0 },
       claims: { total: 0, settled: 0, unsettled: 0 },
       railAttestations: {},
-      cursors: [
-        {
-          chain: "stellar-testnet",
-          block: "123",
-          hash: null,
-          updatedAt: "2026-11-18T12:00:00.000Z",
-        },
-      ],
+      cursors: [cursor],
     };
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)));
     vi.stubGlobal("fetch", fetcher);
@@ -83,8 +82,6 @@ describe("Real indexer client", () => {
       "https://indexer.example/v1/metrics",
       expect.objectContaining({ cache: "no-store" }),
     );
-    expect(cursorFreshness(payload.cursors[0], Date.parse("2026-11-18T12:31:00.000Z"))).toBe(
-      "stale",
-    );
+    expect(cursorFreshness(cursor, Date.parse("2026-11-18T12:31:00.000Z"))).toBe("stale");
   });
 });
