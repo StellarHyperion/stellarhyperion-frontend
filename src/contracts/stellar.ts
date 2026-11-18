@@ -805,7 +805,10 @@ export async function simulateOperation(
     );
   }
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
-  const resourceFee = BigInt(simulation.minResourceFee);
+  const envelope = prepared.toEnvelope();
+  if (envelope.type !== "envelopeTypeTx" || envelope.v1.tx.ext.type !== "sorobanData")
+    throw new Error("The simulation did not assemble a Soroban envelope.");
+  const resourceFee = envelope.v1.tx.ext.sorobanData.resourceFee;
   const totalFee = BigInt(prepared.fee);
   const networkFee = totalFee - resourceFee;
   if (networkFee < 0n) throw new Error("Invalid simulation fee data. Refresh the simulation.");
@@ -851,6 +854,17 @@ export async function submitOperation(
       );
     }
     prepared = simulated.preparedTransaction;
+    const envelope = prepared.toEnvelope();
+    if (
+      envelope.type !== "envelopeTypeTx" ||
+      envelope.v1.tx.ext.type !== "sorobanData" ||
+      simulated.totalFee !== BigInt(prepared.fee) ||
+      simulated.resourceFee !== envelope.v1.tx.ext.sorobanData.resourceFee ||
+      simulated.networkFee !== simulated.totalFee - simulated.resourceFee
+    )
+      throw new Error(
+        "The displayed simulation fees changed. Review a fresh simulation before signing.",
+      );
     if (
       prepared.source !== sender ||
       prepared.toXdr() !== simulated.envelopeXdr ||
