@@ -1,10 +1,11 @@
 "use client";
 import Link from "next/link";
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { Column } from "../../../components/chrome";
 import { fetchTransferByTx, getRouteName, type FormattedTransfer } from "../../../api";
 import { readTransaction, errorMessage, type TransactionResult } from "../../../contracts";
 import { formatTokenAmount, getExplorerUrl } from "../../../lib/format";
+import { ActivityRequestGuard } from "../../../lib/activity-request";
 import styles from "./page.module.css";
 export default function TransferDetailPage({ params }: { params: Promise<{ txHash: string }> }) {
   const { txHash } = use(params);
@@ -13,37 +14,41 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
   const [error, setError] = useState<string | null>(null);
   const [indexerError, setIndexerError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
-    let active = true;
+    const guard = requestGuard.current;
+    guard.setIdentity(txHash);
+    guard.invalidate();
     const load = async () => {
+      const token = guard.begin();
       await Promise.allSettled([
         readTransaction(txHash)
           .then((result) => {
-            if (active) {
+            if (guard.isCurrent(token)) {
               setOrigin(result);
               setError(null);
             }
           })
           .catch((cause: unknown) => {
-            if (active) setError(errorMessage(cause));
+            if (guard.isCurrent(token)) setError(errorMessage(cause));
           }),
         fetchTransferByTx(txHash)
           .then((result) => {
-            if (active) {
+            if (guard.isCurrent(token)) {
               setRecord(result);
               setIndexerError(null);
             }
           })
           .catch((cause: unknown) => {
-            if (active) setIndexerError(errorMessage(cause));
+            if (guard.isCurrent(token)) setIndexerError(errorMessage(cause));
           }),
       ]);
-      if (active) setLoading(false);
+      if (guard.isCurrent(token)) setLoading(false);
     };
     void load();
     const timer = setInterval(() => void load(), 5000);
     return () => {
-      active = false;
+      guard.invalidate();
       clearInterval(timer);
     };
   }, [txHash]);
