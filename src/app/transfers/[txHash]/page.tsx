@@ -5,6 +5,8 @@ import { Column } from "../../../components/chrome";
 import { fetchTransferByTx, getRouteName, type FormattedTransfer } from "../../../api";
 import { readTransaction, errorMessage, type TransactionResult } from "../../../contracts";
 import { formatTokenAmount, getExplorerUrl } from "../../../lib/format";
+import { hasVerifiedDestinationEvidence } from "../../../lib/evidence";
+import { EvidenceTimeline } from "../../../components/transfers/EvidenceTimeline";
 import styles from "./page.module.css";
 export default function TransferDetailPage({ params }: { params: Promise<{ txHash: string }> }) {
   const { txHash } = use(params);
@@ -88,6 +90,7 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
         <section className={styles.legPanel} aria-label="Indexed transfer status">
           <h2>{getRouteName(record.route)}</h2>
           <p role="status">Status: {record.stage}</p>
+          <EvidenceTimeline transfer={record} />
           <p>
             Sent from {record.origin.chain} to {record.destination.chain}
           </p>
@@ -98,7 +101,7 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
             {formatTokenAmount(record.origin.fee, record.origin.decimals)}{" "}
             {record.origin.symbol ?? "token"}.
           </p>
-          {record.destination.delivered && record.destination.amount && (
+          {hasVerifiedDestinationEvidence(record) && record.destination.amount && (
             <p>
               Received: {formatTokenAmount(record.destination.amount, record.destination.decimals)}{" "}
               {record.destination.symbol ?? ""}.
@@ -131,7 +134,7 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
             </div>
           ) : (
             <p>
-              {record.destination.delivered
+              {hasVerifiedDestinationEvidence(record)
                 ? "No recovery claim. This transfer was delivered to the destination wallet."
                 : "No recovery claim has been recorded for this transfer. A pending transfer does not automatically create a claim."}
             </p>
