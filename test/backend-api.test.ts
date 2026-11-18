@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchClaims, fetchTransferByTx, fetchTransfers } from "../src/api/backend";
+import {
+  cursorFreshness,
+  fetchIndexerMetrics,
+  fetchClaims,
+  fetchTransferByTx,
+  fetchTransfers,
+} from "../src/api/backend";
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -46,5 +52,51 @@ describe("Real indexer client", () => {
     expect(fetcher.mock.calls[0]?.[0]).toBe(
       "https://indexer.example/v1/claims?chain=stellar-testnet&settled=false&limit=20",
     );
+  });
+  it("preserves optional scoped coverage metadata without inventing it", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const payload = {
+      transfers: [],
+      count: 0,
+      limit: 20,
+      offset: 0,
+      coverage: {
+        complete: false,
+        oldestObservedAt: "2026-11-01T00:00:00.000Z",
+        reason: "The public RPC retention window starts later.",
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))));
+    expect((await fetchTransfers()).coverage).toEqual(payload.coverage);
+  });
+
+  it("reads indexer cursors for freshness without conflating metrics failure with empty history", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const payload = {
+      service: "hyperion-backend",
+      network: "testnet",
+      uptimeSeconds: 20,
+      transfers: { totalOutbound: 0, totalInbound: 0 },
+      claims: { total: 0, settled: 0, unsettled: 0 },
+      railAttestations: {},
+      cursors: [
+        {
+          chain: "stellar-testnet",
+          block: "123",
+          hash: null,
+          updatedAt: "2026-11-18T12:00:00.000Z",
+        },
+      ],
+    };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)));
+    vi.stubGlobal("fetch", fetcher);
+    expect(await fetchIndexerMetrics()).toEqual(payload);
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://indexer.example/v1/metrics",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(
+      cursorFreshness(payload.cursors[0] ?? null, Date.parse("2026-11-18T12:31:00.000Z")),
+    ).toBe("stale");
   });
 });
