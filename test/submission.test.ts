@@ -11,8 +11,8 @@ import {
   type xdr,
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
-import { simulateOperation, submitOperation, submitSettleClaim } from "../src/contracts/stellar";
-import { TESTNET } from "../src/config/testnet";
+import { submitSettleClaim } from "../src/contracts/stellar";
+import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 
 // Deterministic test-only signer; this test never connects to a network.
 const key = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(7));
@@ -30,9 +30,16 @@ function setup() {
     passphrase: TESTNET.networkPassphrase,
     protocolVersion: "27",
   });
-  vi.spyOn(rpc.Server.prototype, "getAccount").mockImplementation(() =>
-    Promise.resolve(new Account(key.publicKey(), "0")),
-  );
+  vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(key.publicKey(), "0"));
+  vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
+    executable: {
+      type: "contractExecutableWasm",
+      wasmHash: Uint8Array.from({ length: 32 }, (_, index) =>
+        parseInt(STELLAR_DEPLOYMENT.wasmHash.slice(index * 2, index * 2 + 2), 16),
+      ),
+    },
+    storage: null,
+  } as never);
   const simulation = vi.spyOn(rpc.Server.prototype, "simulateTransaction");
   simulation.mockResolvedValueOnce(
     success(
