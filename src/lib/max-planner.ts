@@ -4,20 +4,11 @@ import { relayBudget } from "./relay-budget";
 export const XLM_MINIMUM_RESERVE = 20_000_000n; // 2 XLM in 7-decimal stroops
 
 /**
- * Conservative maximum USDC amount that can be bridged, given live lane constraints and
- * wallet balances.  Returns null when a safe maximum cannot be determined because pricing
- * is unavailable or balances are insufficient.
- *
- * route 0 (CCTP): estimatedRelayGas is denominated in USDC 7-decimal.  Circle's forwarding
- * budget is deducted from the destination so the full relayBudget is subtracted from the
- * spendable USDC balance before capping against flowAvailable.
- *
- * route 1 (ITS / Axelar): estimatedRelayGas is denominated in XLM 7-decimal.  The user
- * pays it from the native XLM balance.  The function verifies XLM covers the budgeted gas
- * plus the minimum account reserve before allowing any USDC to be bridged.
- *
- * Missing pricing (estimatedRelayGas <= 0) always returns null so a falsely executable
- * maximum is never produced.
+ * Bound USDC spending by liquidity and relay pricing. xlmSpendable must exclude
+ * the actual live account reserve and selling liabilities. Keep an additional XLM
+ * buffer for transaction fees; unknown pricing or insufficient native funds disables Max.
+ * Circle forwarding is deducted from destination proceeds; retaining its budget
+ * in the source balance provides a conservative buffer.
  */
 export function planMaxUsdcAmount(params: {
   route: number;

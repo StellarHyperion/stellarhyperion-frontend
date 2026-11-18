@@ -303,8 +303,8 @@ describe("Spendable-balance maximum amount planner", () => {
       expect(result).toBeNull();
     });
 
-    it("does not consult XLM balance on CCTP route", () => {
-      // XLM is zero; CCTP does not need it, so max should still be computed.
+    it("requires native transaction fee funds on the CCTP route", () => {
+      // CCTP forwarding uses USDC, but its transaction still needs native fee funds.
       const result = planMaxUsdcAmount({
         route: 0,
         usdcSpendable: usdc100,
@@ -312,7 +312,7 @@ describe("Spendable-balance maximum amount planner", () => {
         flowAvailable: flow50,
         estimatedRelayGas: gas1usdc,
       });
-      expect(result).toBe(flow50);
+      expect(result).toBeNull();
     });
   });
 
@@ -332,7 +332,7 @@ describe("Spendable-balance maximum amount planner", () => {
       const result = planMaxUsdcAmount({
         route: 0,
         usdcSpendable: 10_000_000_000n,
-        xlmSpendable: 0n,
+        xlmSpendable: xlm10,
         flowAvailable: flow50,
         estimatedRelayGas: gas1usdc,
       });
@@ -377,7 +377,7 @@ describe("Spendable-balance maximum amount planner", () => {
   describe("Exact integer preservation", () => {
     it("XLM_MINIMUM_RESERVE is a positive bigint with 7-decimal stroop precision", () => {
       expect(typeof XLM_MINIMUM_RESERVE).toBe("bigint");
-      expect(XLM_MINIMUM_RESERVE > 0n).toBe(true);
+      expect(XLM_MINIMUM_RESERVE).toBe(20_000_000n);
     });
 
     it("planMaxUsdcAmount preserves exact bigint arithmetic without float rounding", () => {

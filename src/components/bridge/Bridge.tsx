@@ -46,7 +46,6 @@ import {
   quoteTrade,
   spendableBalance,
   submitConversion,
-  suggestSourceSpend,
   trustlineLabel,
   type Conversion,
   type SourceAsset,
@@ -894,7 +893,7 @@ export function Bridge() {
               : `Your ${source.code} balance is lower than this amount.`}
           </p>
         )}
-        {exceedsFlow && conservativeMax !== null && (
+        {exceedsFlow && (
           <p role="alert" className={styles.error}>
             {`This amount exceeds the available route limit. Maximum bridgeable: ${formatUnits(conservativeMax, 7)} USDC.`}
           </p>
