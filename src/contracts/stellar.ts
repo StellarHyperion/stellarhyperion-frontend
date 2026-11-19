@@ -32,6 +32,7 @@ import {
 import type { TransferCheckpoint } from "./checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
+import { validateProviderFee } from "../lib/fee-schema";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
@@ -736,7 +737,13 @@ export async function quoteTransfer(
     return response;
   });
   if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");
-  const fee: unknown = await feeResponse.json();
+  const providerDestination =
+    route === 0 ? destinationKey : destinationFor(destinationKey).axelarName;
+  if (!providerDestination) throw new Error("This destination has no configured provider chain.");
+  const fee = validateProviderFee(await feeResponse.json(), {
+    token: route === 0 ? "USDC" : "XLM",
+    destination: providerDestination,
+  });
   const providerAt = new Date().toISOString();
   const relayGas = integer(object(fee).amount);
   const estimatedRelayGas = integer(object(fee).estimatedAmount ?? relayGas);
@@ -860,7 +867,10 @@ function matchesConversion(checkpoint: TransferCheckpoint, operations: ParsedOpe
 }
 
 function numericValue(value: unknown, expected: bigint): boolean {
-  return value === expected || (typeof value === "number" && BigInt(value) === expected);
+  return (
+    value === expected ||
+    (typeof value === "number" && Number.isSafeInteger(value) && BigInt(value) === expected)
+  );
 }
 
 function matchesBridge(checkpoint: TransferCheckpoint, operation: ParsedOperation | undefined) {
@@ -907,7 +917,12 @@ function inspectCheckpointEnvelope(
   successful: boolean | null,
 ): "confirmed" | "failed" | null {
   try {
-    if (checkpoint.router !== TESTNET.router) return null;
+    if (
+      checkpoint.router !== TESTNET.router ||
+      envelopeXdr.length > 200_000 ||
+      resultXdr.length > 200_000
+    )
+      return null;
     const transaction = TransactionBuilder.fromXdr(envelopeXdr, TESTNET.networkPassphrase);
     if (
       "innerTransaction" in transaction ||
@@ -922,8 +937,7 @@ function inspectCheckpointEnvelope(
           matchesBridge(checkpoint, transaction.operations[0]);
     if (!matches) return null;
     const transactionResult = xdr.TransactionResult.fromXdr(resultXdr, "base64");
-    const resultSucceeded =
-      transactionResult.result().switch() === xdr.TransactionResultCode.txSuccess();
+    const resultSucceeded = transactionResult.result.type === "txSuccess";
     if (successful !== null && successful !== resultSucceeded) return null;
     return resultSucceeded ? "confirmed" : "failed";
   } catch {

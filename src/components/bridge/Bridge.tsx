@@ -367,7 +367,9 @@ function PendingTransferCard({
   const wallet = useStellarWallet();
   const [copied, setCopied] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [checked, setChecked] = useState<(CheckpointRecoveryResult & {txHash: string}) | null>(null);
+  const [checked, setChecked] = useState<(CheckpointRecoveryResult & { txHash: string }) | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<LiveQuote | null>(null);
   const currentAccount = useRef(wallet.address);
@@ -391,10 +393,12 @@ function PendingTransferCard({
     ownerRef.current = recoveryOwner;
     requestRef.current?.abort();
     requestRef.current = null;
-    return () => { requestRef.current?.abort(); };
+    return () => {
+      requestRef.current?.abort();
+    };
   }, [recoveryOwner]);
-  const visibleCurrent = checked?.txHash === checkpoint.txHash && ownerRef.current === recoveryOwner
-    ? checked : current;
+  const visibleCurrent =
+    checked?.txHash === checkpoint.txHash && ownerRef.current === recoveryOwner ? checked : current;
   const check = async () => {
     if (checking || busy || requestRef.current) return;
     const controller = new AbortController();
@@ -406,12 +410,23 @@ function PendingTransferCard({
     try {
       const result = await resolveCheckpointTransaction(checkpoint, controller.signal);
       if (!active()) return;
-      setChecked({...result, txHash: checkpoint.txHash});
-      if (result.status === "unknown") { setError(result.message); return; }
+      setChecked({ ...result, txHash: checkpoint.txHash });
+      if (result.status === "unknown") {
+        setError(result.message);
+        return;
+      }
       if (result.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
-        await requireRecoveredUsdc(checkpoint.account, BigInt(checkpoint.bridgeAmount), controller.signal);
+        await requireRecoveredUsdc(
+          checkpoint.account,
+          BigInt(checkpoint.bridgeAmount),
+          controller.signal,
+        );
         if (!active()) return;
-        const nextQuote = await quoteTransfer(checkpoint.destination, BigInt(checkpoint.bridgeAmount), checkpoint.route);
+        const nextQuote = await quoteTransfer(
+          checkpoint.destination,
+          BigInt(checkpoint.bridgeAmount),
+          checkpoint.route,
+        );
         if (!active()) return;
         setReview(nextQuote);
         setCardSimulating(true);
@@ -421,11 +436,17 @@ function PendingTransferCard({
           if (!active()) return;
           setCardSimulation(sim);
         } catch (cause) {
-          if (active()) { setCardSimulation(null); setCardSimError(errorMessage(cause)); }
-        } finally { if (active()) setCardSimulating(false); }
+          if (active()) {
+            setCardSimulation(null);
+            setCardSimError(errorMessage(cause));
+          }
+        } finally {
+          if (active()) setCardSimulating(false);
+        }
       }
-    } catch (cause) { if (active()) setError(errorMessage(cause)); }
-    finally {
+    } catch (cause) {
+      if (active()) setError(errorMessage(cause));
+    } finally {
       if (requestRef.current === controller) requestRef.current = null;
       // Busy UI state is safe to release even when identity invalidated this read.
       setChecking(false);
@@ -433,9 +454,22 @@ function PendingTransferCard({
     }
   };
   const continueBridge = async () => {
-    if (!review || !sameAccount || checking || cardSimulating || !!cardSimError || !cardSimulation || requestRef.current)
+    if (
+      !review ||
+      !sameAccount ||
+      checking ||
+      cardSimulating ||
+      !!cardSimError ||
+      !cardSimulation ||
+      requestRef.current
+    )
       return;
-    try { assertCheckpointStorage(); } catch (cause) { setError(errorMessage(cause)); return; }
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     const controller = new AbortController();
     requestRef.current = controller;
     const owner = recoveryOwner;
@@ -443,24 +477,45 @@ function PendingTransferCard({
     setChecking(true);
     setError(null);
     try {
-      await requireRecoveredUsdc(checkpoint.account, BigInt(checkpoint.bridgeAmount), controller.signal);
+      await requireRecoveredUsdc(
+        checkpoint.account,
+        BigInt(checkpoint.bridgeAmount),
+        controller.signal,
+      );
       if (!active()) return;
       const result = await submitBridgeOut(
-        checkpoint.account, review, checkpoint.recipient,
-        (xdr, opts) => wallet.signTransaction(xdr, {...opts, operation: "bridge"}),
-        (_phase, hash) => { if (hash) saveCheckpoint({...checkpoint, stage: "bridge", txHash: hash}); },
-        {account: checkpoint.account, network: TESTNET.networkPassphrase, operation: "bridge"},
-        {expectedAccount: checkpoint.account, getCurrentAccount: () => currentAccount.current,
-         isSuperseded: () => !active()},
-        cardSimulation, controller.signal,
+        checkpoint.account,
+        review,
+        checkpoint.recipient,
+        (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "bridge" }),
+        (_phase, hash) => {
+          if (hash) saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
+        },
+        { account: checkpoint.account, network: TESTNET.networkPassphrase, operation: "bridge" },
+        {
+          expectedAccount: checkpoint.account,
+          getCurrentAccount: () => currentAccount.current,
+          isSuperseded: () => !active(),
+        },
+        cardSimulation,
+        controller.signal,
       );
       if (active()) {
-        setChecked(result.status === "pending" ? null : {...result, source: "rpc", message: `The transaction is ${result.status} on Stellar Testnet.`});
-        setReview(null); setCardSimulation(null);
+        setChecked(
+          result.status === "pending"
+            ? null
+            : {
+                ...result,
+                source: "rpc",
+                message: `The transaction is ${result.status} on Stellar Testnet.`,
+              },
+        );
+        setReview(null);
+        setCardSimulation(null);
       }
     } catch (cause) {
       if (active()) {
-        const message=errorMessage(cause);
+        const message = errorMessage(cause);
         if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
         setError(message);
       }
