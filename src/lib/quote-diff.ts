@@ -68,7 +68,8 @@ function formatUnitsDisplay(value: bigint, decimals: number, cap?: number): stri
   if (cap === undefined || cap < 0) return full;
   const [whole = "", fraction] = full.split(".");
   if (!fraction || fraction.length <= cap) return full;
-  return cap === 0 ? whole : `${whole}.${fraction.slice(0, cap)}`;
+  const trimmed = fraction.slice(0, cap).replace(/0+$/, "");
+  return trimmed ? `${whole}.${trimmed}` : whole;
 }
 
 export function compareQuotes(

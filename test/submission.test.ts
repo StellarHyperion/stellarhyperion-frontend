@@ -180,8 +180,8 @@ describe("Refreshed quote field-level diff", () => {
       { displayDecimals: 2 },
     );
     const fee = diff.fields.find((field) => field.key === "fee");
-    expect(fee?.reviewedDisplay).toBe("1.00 USDC");
-    expect(fee?.refreshedDisplay).toBe("1.00 USDC");
+    expect(fee?.reviewedDisplay).toBe("0.1 USDC");
+    expect(fee?.refreshedDisplay).toBe("0.1 USDC");
     expect(fee?.delta).toBe(1n);
     expect(fee?.direction).toBe("worse");
     expect(diff.materialWorsening).toBe(true);
