@@ -157,6 +157,8 @@ export function saveCheckpoint(value: TransferCheckpoint | null) {
     );
   if (value) memoryCheckpoint = JSON.stringify(value);
   try {
+    if (typeof window !== "undefined" && typeof localStorage === "undefined")
+      throw new Error("Transaction recovery storage is unavailable.");
     if (typeof localStorage !== "undefined") {
       if (value) {
         const serialized = JSON.stringify(value);

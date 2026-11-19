@@ -87,7 +87,8 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
   it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
-    const values = new Map<string, string>();
+    const checkpointKey = "hyperion.testnet.pending-transfer";
+    const values = new Map<string, string>([[checkpointKey, "existing signed hash"]]);
     const storage = {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => void values.set(key, value),
@@ -99,6 +100,7 @@ describe("Signed Stellar submission failure boundaries", () => {
       kind: "transaction-recovery",
       reason: null,
     });
+    expect([...values]).toEqual([[checkpointKey, "existing signed hash"]]);
     const blocked = {
       getItem: () => null,
       setItem: () => {
@@ -110,6 +112,19 @@ describe("Signed Stellar submission failure boundaries", () => {
       available: false,
       persistent: false,
       kind: "transaction-recovery",
+    });
+  });
+  it("rejects a store that silently drops writes before an approval can rely on it", () => {
+    expect(
+      inspectCheckpointStorage({
+        getItem: () => null,
+        setItem: () => undefined,
+        removeItem: () => undefined,
+      }),
+    ).toMatchObject({
+      available: false,
+      persistent: false,
+      reason: "The browser did not retain the recovery probe.",
     });
   });
   it("classifies bounded pre-broadcast failures without attaching a fake hash", () => {
