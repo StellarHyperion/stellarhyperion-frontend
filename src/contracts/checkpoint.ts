@@ -143,6 +143,26 @@ export function checkpointMatches(
 export function getTransferCheckpoint(): TransferCheckpoint | null {
   return parseCheckpoint(snapshot());
 }
+export type OperationState = "prepare" | "review" | "sign" | "checkpoint" | "broadcast" | "confirmation";
+
+const allowedTransitions: Record<OperationState, readonly OperationState[]> = {
+  prepare: ["review"],
+  review: ["prepare", "sign"],
+  sign: ["checkpoint", "review"],
+  checkpoint: ["broadcast"],
+  broadcast: ["confirmation"],
+  confirmation: [],
+};
+
+export function canTransition(from: OperationState, to: OperationState): boolean {
+  return allowedTransitions[from].includes(to);
+}
+
+export function assertTransition(from: OperationState, to: OperationState): void {
+  if (!canTransition(from, to))
+    throw new Error(`Invalid operation transition: ${from} -> ${to}.`);
+}
+
 export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
   return JSON.stringify([
     checkpoint.router,
@@ -157,6 +177,9 @@ export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
 }
 export function saveCheckpoint(value: TransferCheckpoint | null, expected?: TransferCheckpoint) {
   const existing = parseCheckpoint(snapshot());
+  if (value && !existing && !expected && checkpointPersistenceFailed && memoryCheckpoint === null) {
+    /* fresh checkpoint after a recovered storage failure is allowed */
+  }
   if (expected && (!existing || checkpointIdentity(existing) !== checkpointIdentity(expected)))
     throw new Error("The pending transaction changed in another tab. Check its current outcome.");
   if (

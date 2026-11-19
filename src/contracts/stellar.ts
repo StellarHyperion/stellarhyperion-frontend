@@ -86,6 +86,80 @@ export type WalletSigner = (
   opts: { networkPassphrase: string; approval?: WalletApprovalProvenance },
 ) => Promise<{ signedTxXdr: string }>;
 export type TransactionPhase = "preparing" | "signing" | "submitting" | "pending" | "confirmed";
+
+/**
+ * Deterministic operation-state machine for prepare -> review -> sign -> checkpoint -> broadcast
+ * -> confirmation. Only the listed events are allowed; anything else is rejected so that duplicate
+ * send controls cannot be enabled from an invalid state. Unknown outcomes stay `pending`, bound to
+ * the signed hash and account, and are never automatically resubmitted.
+ */
+export type SubmissionState =
+  | "idle"
+  | "preparing"
+  | "reviewing"
+  | "signing"
+  | "checkpointed"
+  | "broadcasting"
+  | "pending"
+  | "confirmed"
+  | "failed"
+  | "cancelled";
+
+export type SubmissionEvent =
+  | { readonly type: "PREPARE" }
+  | { readonly type: "PREPARED" }
+  | { readonly type: "REVIEW_APPROVED" }
+  | { readonly type: "SIGNED"; readonly signedHash: string; readonly account: string }
+  | { readonly type: "CHECKPOINTED" }
+  | { readonly type: "BROADCAST_SENT" }
+  | { readonly type: "BROADCAST_UNKNOWN" }
+  | { readonly type: "CONFIRMED" }
+  | { readonly type: "FAILED" }
+  | { readonly type: "CANCEL" }
+  | { readonly type: "RESET" };
+
+export interface SubmissionMachineState {
+  readonly state: SubmissionState;
+  /** Set once signed; bound to the account and hash for unknown-outcome recovery. */
+  readonly binding: { readonly signedHash: string; readonly account: string } | null;
+}
+
+const SUBMISSION_TRANSITIONS: Readonly<Record<SubmissionState, Partial<Record<SubmissionEvent["type"], SubmissionState>>>> = {
+  idle: { PREPARE: "preparing" },
+  preparing: { PREPARED: "reviewing", FAILED: "failed", CANCEL: "cancelled" },
+  reviewing: { REVIEW_APPROVED: "signing", CANCEL: "cancelled", FAILED: "failed" },
+  signing: { SIGNED: "checkpointed", CANCEL: "cancelled", FAILED: "failed" },
+  checkpointed: { CHECKPOINTED: "broadcasting", FAILED: "failed" },
+  broadcasting: { BROADCAST_SENT: "pending", BROADCAST_UNKNOWN: "pending", FAILED: "failed" },
+  pending: { CONFIRMED: "confirmed", FAILED: "failed" },
+  confirmed: { RESET: "idle" },
+  failed: { RESET: "idle" },
+  cancelled: { RESET: "idle" },
+};
+
+export const INITIAL_SUBMISSION: SubmissionMachineState = { state: "idle", binding: null };
+
+export function submissionTransition(
+  current: SubmissionMachineState,
+  event: SubmissionEvent,
+): SubmissionMachineState {
+  const next = SUBMISSION_TRANSITIONS[current.state][event.type];
+  if (!next) throw new Error(`Invalid submission transition: ${event.type} from ${current.state}.`);
+  if (event.type === "SIGNED") {
+    if (!event.signedHash || !event.account)
+      throw new Error("A signed submission must be bound to an account and hash.");
+    return { state: next, binding: { signedHash: event.signedHash, account: event.account } };
+  }
+  if (current.state === "pending" && event.type !== "CONFIRMED" && event.type !== "FAILED")
+    throw new Error("Pending submissions are bound to their signed hash and cannot change otherwise.");
+  if (event.type === "RESET") return INITIAL_SUBMISSION;
+  return { state: next, binding: current.binding };
+}
+
+/** Send controls may only be enabled from the reviewing state, and never while a binding is pending. */
+export function canEnableSendControl(current: SubmissionMachineState): boolean {
+  return current.state === "reviewing" && current.binding === null;
+}
 export interface TransactionResult {
   status: "confirmed" | "pending" | "failed";
   txHash: string;
