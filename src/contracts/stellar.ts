@@ -731,9 +731,12 @@ export async function quoteTransfer(
     return response;
   });
   if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");
+  const providerDestination =
+    route === 0 ? destinationKey : destinationFor(destinationKey).axelarName;
+  if (!providerDestination) throw new Error("This destination has no configured provider chain.");
   const fee = validateProviderFee(await feeResponse.json(), {
     token: route === 0 ? "USDC" : "XLM",
-    destination: route === 0 ? destinationKey : destinationFor(destinationKey).axelarName,
+    destination: providerDestination,
   });
   const providerAt = new Date().toISOString();
   const relayGas = integer(object(fee).amount);
