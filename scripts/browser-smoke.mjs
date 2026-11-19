@@ -108,7 +108,7 @@ try {
   await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
   await page
     .getByText(
-      "Source outcome is not yet confirmed. Check this exact transaction before submitting anything else.",
+      "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer.",
     )
     .waitFor();
   await page.getByRole("button", { name: "Check status" }).waitFor();
@@ -123,18 +123,14 @@ try {
   );
   assert.equal(
     await page.getByRole("link", { name: "Recovery" }).getAttribute("href"),
-    "/#pending-recovery-action",
+    "/#pending-recovery",
   );
-  await page.waitForFunction(
-    () => document.activeElement?.id === "pending-recovery-action",
-  );
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
   await page.getByRole("link", { name: "Activity" }).click();
   await page.getByRole("heading", { name: "Transfer history" }).waitFor();
   await page.getByRole("link", { name: "Recovery" }).click();
   await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
-  await page.waitForFunction(
-    () => document.activeElement?.id === "pending-recovery-action",
-  );
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
   assert.equal(
     await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
     checkpointBeforeNavigation,

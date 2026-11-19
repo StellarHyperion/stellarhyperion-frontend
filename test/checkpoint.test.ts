@@ -24,7 +24,9 @@ function createStorage() {
     get length() {
       return values.size;
     },
-    clear: () => values.clear(),
+    clear: () => {
+      values.clear();
+    },
     getItem: (key: string) => values.get(key) ?? null,
     key: (index: number) => Array.from(values.keys())[index] ?? null,
     setItem: (key: string, value: string) => {
