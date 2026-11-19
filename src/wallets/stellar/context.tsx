@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { StellarWalletContextValue } from "./types";
+import type { StellarWalletContextValue, WalletApprovalProvenance } from "./types";
 import { TESTNET } from "../../config/testnet";
 
 import { Dialog } from "../../components/common/Dialog";
@@ -19,35 +19,65 @@ import {
   isWalletId,
   walletAddress,
   walletSign,
+  createSigningCoordinator,
   type StellarWalletId,
+  type PendingSigningRequest,
 } from "./sdk";
+import styles from "./WalletPicker.module.css";
+
+import {
+  walletAvailability,
+  walletAvailabilityLabel,
+  type WalletAvailabilityStatus,
+} from "./capabilities";
+
 import {
   isRecognizedWalletPreference,
   readWalletPreference,
   saveWalletPreference,
 } from "./preference";
-import styles from "./WalletPicker.module.css";
 
 const Context = createContext<StellarWalletContextValue | null>(null);
 
 export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
-  const [walletId, setWalletId] = useState<StellarWalletId | null>(null);
+  const restorationAllowed = useRef(true);
   const [rememberedWallet, setRememberedWallet] = useState<StellarWalletId | null>(null);
+  const [preferenceError, setPreferenceError] = useState<string | null>(null);
+  const [walletId, setWalletId] = useState<StellarWalletId | null>(null);
   const [isConnecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [preferenceError, setPreferenceError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [availability, setAvailability] = useState<
+    Partial<Record<StellarWalletId, WalletAvailabilityStatus>>
+  >({});
+  useEffect(() => {
+    if (!pickerOpen) return;
+    let active = true;
+    for (const wallet of STELLAR_WALLETS)
+      void walletAvailability(wallet.id).then((status) => {
+        if (active) setAvailability((current) => ({ ...current, [wallet.id]: status }));
+      });
+    return () => {
+      active = false;
+    };
+  }, [pickerOpen]);
   const [authorizing, setAuthorizing] = useState<StellarWalletId | null>(null);
+  const [pendingSigningRequest, setPendingSigningRequest] = useState<PendingSigningRequest | null>(
+    null,
+  );
+  const coordinator = useRef(createSigningCoordinator(setPendingSigningRequest));
   const pending = useRef<((address: string | null) => void) | null>(null);
   const attempt = useRef(0);
 
   useEffect(() => {
     let active = true;
     const version = attempt.current;
-    const preference = readWalletPreference();
-    const saved = preference.id;
-    if (active) {
+    // Hydrate browser storage after mount; cleanup also covers strict-mode remounts.
+    queueMicrotask(() => {
+      if (!active) return;
+      const preference = readWalletPreference();
+      const saved = preference.id;
       setRememberedWallet(isWalletId(saved) ? saved : null);
       setPreferenceError(
         preference.error ??
@@ -55,19 +85,19 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
             ? "The saved wallet preference is not recognized. Clear it before connecting."
             : null),
       );
-    }
-    // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
-    if (isWalletId(saved) && saved === "freighter")
-      void walletAddress(saved, false)
-        .then((value) => {
-          if (active && attempt.current === version) {
-            setAddress(value);
-            setWalletId(saved);
-          }
-        })
-        .catch(() => {
-          /* Explicit connection remains available. */
-        });
+      // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
+      if (isWalletId(saved) && saved === "freighter")
+        void walletAddress(saved, false)
+          .then((value) => {
+            if (active && restorationAllowed.current && attempt.current === version) {
+              setAddress(value);
+              setWalletId(saved);
+            }
+          })
+          .catch(() => {
+            /* Explicit connection remains available. */
+          });
+    });
     return () => {
       active = false;
     };
@@ -88,6 +118,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     attempt.current++;
     setConnecting(true);
     setError(null);
+    setAvailability({});
     setPickerOpen(true);
     return await new Promise<string | null>((resolve) => {
       pending.current = resolve;
@@ -105,11 +136,8 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       setAddress(value);
       setWalletId(id);
       const storageError = saveWalletPreference(id);
-      if (storageError) setPreferenceError(storageError);
-      else {
-        setRememberedWallet(id);
-        setPreferenceError(null);
-      }
+      setPreferenceError(storageError);
+      if (!storageError) setRememberedWallet(id);
       pending.current(value);
       pending.current = null;
       setPickerOpen(false);
@@ -127,30 +155,40 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     setAddress(null);
     setWalletId(null);
     const storageError = saveWalletPreference(null);
-    if (storageError) setPreferenceError(storageError);
-    else {
-      setRememberedWallet(null);
-      setPreferenceError(null);
-    }
+    setPreferenceError(storageError);
+    if (!storageError) setRememberedWallet(null);
     return Promise.resolve();
   }, [closePicker]);
 
   const clearRememberedWallet = useCallback(() => {
+    // Clear only the preference. An explicit connection or signed checkpoint stays intact.
+    restorationAllowed.current = false;
     const storageError = saveWalletPreference(null);
-    if (storageError) {
-      setPreferenceError(storageError);
-      return;
-    }
-    setRememberedWallet(null);
-    setPreferenceError(null);
+    setPreferenceError(storageError);
+    if (!storageError) setRememberedWallet(null);
   }, []);
 
   const signTransaction = useCallback(
-    async (transaction: string, opts?: { networkPassphrase?: string }) => {
+    async (
+      transaction: string,
+      opts?: {
+        networkPassphrase?: string;
+        operation?: PendingSigningRequest["operation"];
+        approval?: WalletApprovalProvenance;
+      },
+    ) => {
       if (!address || !walletId) throw new Error("Connect your Stellar wallet first.");
       if (opts?.networkPassphrase && opts.networkPassphrase !== TESTNET.networkPassphrase)
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
-      return walletSign(walletId, transaction, address);
+      if (opts?.approval && opts.approval.account !== address)
+        throw new Error("The wallet account changed. Review the transaction again.");
+      return coordinator.current.run(
+        {
+          operation: opts?.approval?.operation ?? opts?.operation ?? "transaction",
+          account: address,
+        },
+        () => walletSign(walletId, transaction, address, opts?.approval),
+      );
     },
     [address, walletId],
   );
@@ -159,25 +197,29 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     () => ({
       address,
       shortAddress: address ? `${address.slice(0, 6)}...${address.slice(-6)}` : null,
+      walletId,
       isConnected: address !== null,
       isConnecting,
       error,
       rememberedWallet,
       preferenceError,
+      clearRememberedWallet,
+      pendingSigningRequest,
       connect,
       disconnect,
-      clearRememberedWallet,
       signTransaction,
     }),
     [
       address,
+      walletId,
       isConnecting,
       error,
       rememberedWallet,
       preferenceError,
+      clearRememberedWallet,
+      pendingSigningRequest,
       connect,
       disconnect,
-      clearRememberedWallet,
       signTransaction,
     ],
   );
@@ -200,6 +242,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
                 >
                   {authorizing === wallet.id ? `Connecting to ${wallet.name}...` : wallet.name}
                 </button>
+                <span role="status">
+                  {walletAvailabilityLabel(availability[wallet.id] ?? "unknown")}
+                </span>
                 <a
                   href={wallet.url}
                   target="_blank"
