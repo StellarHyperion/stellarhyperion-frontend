@@ -1,0 +1,88 @@
+.timelineSection {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--face-display);
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+}
+
+.timeline {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stage {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+  padding-left: var(--space-1);
+}
+
+.marker {
+  width: 0.625rem;
+  height: 0.625rem;
+  margin-top: 0.25rem;
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 50%;
+  background: var(--surface-page);
+}
+
+.confirmed .marker,
+.verified .marker {
+  background: var(--state-settled);
+  border-color: var(--state-settled);
+}
+
+.candidate .marker {
+  background: var(--state-caution);
+  border-color: var(--state-caution);
+}
+
+.content {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.heading {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.label,
+.status {
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+}
+
+.label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.status {
+  color: var(--text-data);
+  text-transform: uppercase;
+}
+
+.detail {
+  color: var(--text-secondary);
+  font-size: var(--type-mono-sm-size);
+  overflow-wrap: anywhere;
+}
+
+.link {
+  color: var(--leg-origin);
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+}

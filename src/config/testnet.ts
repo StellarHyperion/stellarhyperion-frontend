@@ -19,6 +19,14 @@ export const TESTNET = {
     "https://horizon-testnet.stellar.org",
   ),
 } as const;
+export const STELLAR_DEPLOYMENT = {
+  chain: "stellar-testnet",
+  router: stellar.router,
+  networkPassphrase: stellar.networkPassphrase,
+  wasmHash: stellar.wasmHashes.router,
+  commit: stellar.commit,
+  deployedLedger: stellar.deployedAt.ledger,
+} as const;
 export type BridgeRoute = 0 | 1;
 const cctpDestinations = new Set(
   stellar.activation.cctp.status === "active" && stellar.activation.cctp.acceptance === "delivered"
