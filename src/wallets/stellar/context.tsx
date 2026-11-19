@@ -144,7 +144,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
       if (isWalletId(saved) && saved === "freighter")
         void connectionGeneration.current
-          .run(() => walletAddress(saved, false))
+          .run((signal) => walletAddress(saved, false, signal))
           .then((value) => {
             if (active && restorationAllowed.current && attempt.current === version) {
               setConnectedAddress(value);
@@ -202,7 +202,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     setAuthorizing(id);
     setError(null);
     try {
-      const value = await connectionGeneration.current.run(() => walletAddress(id));
+      const value = await connectionGeneration.current.run((signal) =>
+        walletAddress(id, true, signal),
+      );
       if (attempt.current !== version) return;
       setConnectedAddress(value);
       setWalletId(id);
