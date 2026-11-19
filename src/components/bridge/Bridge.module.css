@@ -393,6 +393,54 @@
 .routeDetails .assetNote {
   margin-top: 10px;
 }
+.routeComparison {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--edge-color);
+}
+.comparisonTitle {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.routeOption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--edge-color);
+  border-radius: 10px;
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  text-align: start;
+  cursor: pointer;
+}
+.routeOption[aria-pressed="true"] {
+  border-color: var(--leg-origin);
+}
+.routeOption:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+.routeOption span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.routeOption strong {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.routeOption small {
+  color: var(--text-secondary);
+  font-size: 0.625rem;
+  line-height: 1.4;
+}
 .summary {
   display: grid;
   gap: 12px;

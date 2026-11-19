@@ -84,6 +84,48 @@ function QuoteDetails({ quote }: { quote: LiveQuote }) {
   );
 }
 
+function RouteComparison({
+  routes,
+  selected,
+  onSelect,
+}: {
+  routes: TradeQuote["routes"];
+  selected: BridgeRoute;
+  onSelect: (route: BridgeRoute) => void;
+}) {
+  return (
+    <div className={styles.routeComparison} aria-label="Live route comparison">
+      <p className={styles.comparisonTitle}>Live route comparison</p>
+      {routes.map((candidate) => (
+        <button
+          type="button"
+          key={candidate.route}
+          className={styles.routeOption}
+          disabled={!candidate.quote}
+          aria-pressed={candidate.route === selected}
+          onClick={() => {
+            if (candidate.quote) onSelect(candidate.route);
+          }}
+        >
+          <span>
+            <strong>{provider(candidate.route)}</strong>
+            <small>
+              {candidate.quote
+                ? `${formatUnits(candidate.quote.destinationAmount, destinationDecimals(candidate.route))} ${receiveSymbol(candidate.route)} · ${candidate.route === 0 ? "USDC" : "XLM"} gas`
+                : `Unavailable: ${candidate.error ?? "No live price"}`}
+            </small>
+          </span>
+          {candidate.quote && <ChevronDown size={14} aria-hidden="true" />}
+        </button>
+      ))}
+      <p className={styles.assetNote}>
+        Each option uses a live quote and a distinct destination representation. Select a route to
+        review its exact fee and receive minimum before signing.
+      </p>
+    </div>
+  );
+}
+
 function PendingTransferCard({
   checkpoint,
   busy,
@@ -618,6 +660,14 @@ export function Bridge() {
               </span>
             </summary>
             <QuoteDetails quote={quote.bridge} />
+            <RouteComparison
+              routes={quote.routes}
+              selected={route}
+              onSelect={(next) => {
+                setRoute(next);
+                setError(null);
+              }}
+            />
             {quote.conversion && (
               <p className={styles.assetNote}>
                 Convert up to {formatUnits(quote.sourceAmount, 7)} {source.code} into{" "}
@@ -777,6 +827,15 @@ export function Bridge() {
             <p className={styles.address}>Source issuer: {source.issuer}</p>
           )}
           <QuoteDetails quote={quote.bridge} />
+          <RouteComparison
+            routes={quote.routes}
+            selected={route}
+            onSelect={(next) => {
+              setReviewing(false);
+              setRoute(next);
+              setError(null);
+            }}
+          />
           {quote.conversion && (
             <p className={styles.reviewNote}>
               Two signatures: convert to USDC, then bridge. Price tolerance is 0.5%. If the bridge

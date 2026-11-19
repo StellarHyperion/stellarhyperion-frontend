@@ -55,6 +55,11 @@ export interface LiveQuote {
   relayGas: bigint;
   estimatedRelayGas?: bigint;
 }
+export interface RouteComparison {
+  route: BridgeRoute;
+  quote: LiveQuote | null;
+  error: string | null;
+}
 export interface LaneState {
   available: boolean;
   reason: string | null;
@@ -424,6 +429,22 @@ export async function quoteTransfer(
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
   };
+}
+
+/** Compare only live, independently validated lanes. A failed lane is retained as unavailable. */
+export async function compareTransferRoutes(
+  destinationKey: DestinationKey,
+  amount: bigint,
+): Promise<RouteComparison[]> {
+  return Promise.all(
+    ([0, 1] as const).map(async (route): Promise<RouteComparison> => {
+      try {
+        return { route, quote: await quoteTransfer(destinationKey, amount, route), error: null };
+      } catch (error) {
+        return { route, quote: null, error: errorMessage(error) };
+      }
+    }),
+  );
 }
 
 export async function readBalance(account: string): Promise<bigint> {

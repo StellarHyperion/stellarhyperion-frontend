@@ -2,9 +2,10 @@ import { Asset, Operation, StrKey, type xdr } from "@stellar/stellar-sdk";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import { TESTNET, type BridgeRoute, type DestinationKey } from "../config/testnet";
 import {
-  quoteTransfer,
+  compareTransferRoutes,
   submitClassicOperations,
   type LiveQuote,
+  type RouteComparison,
   type TransactionPhase,
   type TransactionResult,
   type WalletSigner,
@@ -117,6 +118,7 @@ export interface TradeQuote {
   sourceAmount: bigint;
   bridge: LiveQuote;
   conversion: Conversion | null;
+  routes: RouteComparison[];
 }
 
 export async function quoteConversion(source: SourceAsset, amount: bigint): Promise<Conversion> {
@@ -178,8 +180,10 @@ export async function quoteTrade(
   if (amount <= 0n || amount > (1n << 63n) - 1n)
     throw new Error("Enter a positive amount within Stellar's asset limit.");
   const conversion = source.id === USDC.id ? null : await quoteConversion(source, amount);
-  const bridge = await quoteTransfer(destination, conversion?.usdcAmount ?? amount, route);
-  return { source, sourceAmount: amount, bridge, conversion };
+  const routes = await compareTransferRoutes(destination, conversion?.usdcAmount ?? amount);
+  const selected = routes.find((candidate) => candidate.route === route);
+  if (!selected?.quote) throw new Error(selected?.error ?? "This bridge lane is unavailable.");
+  return { source, sourceAmount: amount, bridge: selected.quote, conversion, routes };
 }
 
 export function conversionOperations(
