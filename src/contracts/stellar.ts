@@ -84,15 +84,18 @@ export function quoteBreakdown(quote: LiveQuote): QuoteBreakdown {
   const quantum = 10n ** BigInt(7 - destinationDecimals(quote.route));
   const representableBridgeAmount = quote.representableAmount * quantum;
   if (
-    quote.requestedAmount <= 0n || quote.requestedAmount > I128_MAX ||
-    quote.fee < 0n || quote.fee >= quote.requestedAmount ||
+    quote.requestedAmount <= 0n ||
+    quote.requestedAmount > I128_MAX ||
+    quote.fee < 0n ||
+    quote.fee >= quote.requestedAmount ||
     representableBridgeAmount <= 0n ||
     representableBridgeAmount !== quote.netAmount ||
     quote.grossAmount !== quote.fee + representableBridgeAmount ||
     quote.grossAmount > quote.requestedAmount ||
     quote.requestedAmount - quote.grossAmount >= quantum ||
     quote.destinationAmount <= 0n
-  ) throw new Error("The live quote does not conserve its exact source and destination amounts.");
+  )
+    throw new Error("The live quote does not conserve its exact source and destination amounts.");
   return {
     requestedSourceAmount: quote.requestedAmount,
     actualSourceDebit: quote.grossAmount,
