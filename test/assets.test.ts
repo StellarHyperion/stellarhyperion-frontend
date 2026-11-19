@@ -66,9 +66,7 @@ describe("Real Stellar conversion transaction boundaries", () => {
       returnedPaths: 3,
       eligiblePaths: 2,
       excludedPaths: 1,
-      diagnostics: [
-        { responseIndex: 2, reason: "path asset 1 has an unsupported asset type." },
-      ],
+      diagnostics: [{ responseIndex: 2, reason: "path asset 1 has an unsupported asset type." }],
     });
     const tx = new TransactionBuilder(new Account(TESTNET.reader, "1"), {
       fee: "100",
@@ -203,9 +201,7 @@ describe("Real Stellar conversion transaction boundaries", () => {
     const forward = compareConversionPaths(XLM, 10000000n, [first, second]);
     const reversed = compareConversionPaths(XLM, 10000000n, [second, first]);
     expect(forward.selected).toEqual(reversed.selected);
-    expect(forward.selected?.path[0]?.issuer).toBe(
-      [issuerA, issuerB].sort()[0],
-    );
+    expect(forward.selected?.path[0]?.issuer).toBe([issuerA, issuerB].sort()[0]);
   });
   it("rejects a response that exceeds the bounded comparison limit", () => {
     const result = compareConversionPaths(
