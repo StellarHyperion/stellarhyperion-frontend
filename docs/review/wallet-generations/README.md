@@ -7,3 +7,5 @@ Chromium 158.0.8127.18 drove the production provider, wallet button, SDK and sig
 Six scenarios passed: delayed silent restoration, picker cancellation followed by a newer connection, disconnect during silent restoration, disconnect during explicit authorization, an old signature returning after account change, and provider unmount during authorization. Pending checkpoint storage remained intact and there were no browser runtime errors. The fixture menu uses the same placement as the application header.
 
 Deterministic generation, SDK, signature and submission regressions also run through `npm run check`. Live signing suites remain opt-in.
+
+The current Next production build also passed explicit wallet selection, Escape cancellation with immediate reconnect availability, saved-preference clearing without checkpoint loss, generated signed-hash retention after reload and mobile overflow checks. RPC/Horizon outage responses were isolated fixtures. No automatic network submission occurred. The additional picker captures come from that production build.
