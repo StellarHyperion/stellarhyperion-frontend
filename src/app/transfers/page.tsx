@@ -69,11 +69,25 @@ export default function TransfersPage() {
   const { address } = useStellarWallet();
   return <TransfersPageContent key={address ?? "public"} address={address} />;
 }
+
+function mergeTransfers(
+  current: TransfersResponse["transfers"],
+  incoming: TransfersResponse["transfers"],
+) {
+  const merged = new Map(current.map((transfer) => [transfer.id, transfer]));
+  for (const transfer of incoming) merged.set(transfer.id, transfer);
+  return [...merged.values()];
+}
+
 function TransfersPageContent({ address }: { address?: string | null }) {
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [cursorHistory, setCursorHistory] = useState<(string | null)[]>([]);
+  const [loadedTransfers, setLoadedTransfers] = useState<TransfersResponse["transfers"]>([]);
+  const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(true);
-  const scope = JSON.stringify([address ?? null, search, offset]);
+  const scope = JSON.stringify([address ?? null, search, cursor, offset]);
   const [snapshot, setSnapshot] = useState<{
     scope: string;
     response: TransfersResponse | null;
@@ -83,7 +97,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   } | null>(null);
   const current = snapshot?.scope === scope ? snapshot : null;
   const response = current?.response ?? null;
-  const transfers = response?.transfers ?? [];
+  const transfers = loadedTransfers;
   const metrics = current?.metrics ?? null;
   const metricsError = current?.metricsError ?? null;
   const error = current?.error ?? null;
@@ -101,7 +115,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
             ...(address ? { sender: address } : {}),
             search,
             limit: "20",
-            offset: String(offset),
+            ...(cursor ? { cursor } : { offset: String(offset) }),
           }),
           fetchIndexerMetrics(),
         ]);
@@ -114,6 +128,14 @@ function TransfersPageContent({ address }: { address?: string | null }) {
           metricsError:
             metricsResult.status === "rejected" ? errorMessage(metricsResult.reason) : null,
         });
+        if (historyResult.status === "fulfilled") {
+          setLoadedTransfers((existing) => mergeTransfers(existing, historyResult.value.transfers));
+          const next = historyResult.value.nextCursor ?? null;
+          setHasMore(
+            (historyResult.value.hasMore ?? Boolean(next)) ||
+              historyResult.value.transfers.length >= historyResult.value.limit,
+          );
+        }
       } finally {
         if (guard.isCurrent(token)) setLoading(false);
       }
@@ -128,7 +150,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
       clearTimeout(delay);
       clearInterval(timer);
     };
-  }, [address, offset, search, scope]);
+  }, [address, cursor, offset, search, scope]);
   return (
     <Column>
       <h1 className="display">Transfer history</h1>
@@ -152,6 +174,11 @@ function TransfersPageContent({ address }: { address?: string | null }) {
         onChange={(event) => {
           setSearch(event.target.value);
           setOffset(0);
+          setCursor(null);
+          setCursorHistory([]);
+          setLoadedTransfers([]);
+          setHasMore(true);
+          setSnapshot(null);
         }}
       />
       {error && <p role="alert">{error}</p>}
@@ -163,19 +190,29 @@ function TransfersPageContent({ address }: { address?: string | null }) {
       <div className={styles.filterControls}>
         <button
           type="button"
-          disabled={offset === 0 || pending}
+          disabled={pending || (cursor === null && offset === 0 && cursorHistory.length === 0)}
           onClick={() => {
-            setOffset((value) => Math.max(0, value - 20));
+            if (cursorHistory.length > 0) {
+              setCursorHistory((history) => history.slice(0, -1));
+              setCursor(cursorHistory[cursorHistory.length - 1] ?? null);
+            } else {
+              setOffset((value) => Math.max(0, value - 20));
+            }
           }}
         >
           Previous
         </button>
-        <span>Page {offset / 20 + 1}</span>
+        <span>{cursor !== null ? "Keyset page" : `Page ${offset / 20 + 1}`}</span>
         <button
           type="button"
-          disabled={transfers.length < 20 || pending}
+          disabled={!hasMore || pending}
           onClick={() => {
-            setOffset((value) => value + 20);
+            if (response?.nextCursor) {
+              setCursorHistory((history) => [...history, cursor]);
+              setCursor(response.nextCursor);
+            } else {
+              setOffset((value) => value + 20);
+            }
           }}
         >
           Next

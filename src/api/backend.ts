@@ -72,6 +72,11 @@ export interface TransfersResponse {
   readonly limit: number;
   readonly offset: number;
   readonly count: number;
+  /** Keyset pagination fields are optional while older indexers still return offsets. */
+  readonly cursor?: string | null;
+  readonly nextCursor?: string | null;
+  readonly previousCursor?: string | null;
+  readonly hasMore?: boolean;
   /** Optional until the backend implements scoped historical coverage metadata. */
   readonly coverage?: TransferCoverage;
 }
@@ -158,6 +163,7 @@ export interface TransfersQuery {
   readonly recipient?: string;
   readonly limit?: string;
   readonly offset?: string;
+  readonly cursor?: string;
   readonly search?: string;
 }
 

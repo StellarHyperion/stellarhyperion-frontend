@@ -176,16 +176,6 @@ function ApprovalDetails({
         Operation:{" "}
         {approval.operation === "claim-settlement" ? "Claim settlement" : approval.operation}
       </div>
-      {quote.observedAt && quote.validUntil && (
-        <div>
-          <dt>Estimate validity</dt>
-          <dd>
-            {quote.provider ?? (quote.route === 0 ? "Circle CCTP" : "Axelar ITS")} observed at{" "}
-            {new Date(quote.observedAt).toLocaleTimeString()}; expires at{" "}
-            {new Date(quote.validUntil).toLocaleTimeString()}
-          </dd>
-        </div>
-      )}
       {issuer && <div>Source issuer: {issuer}</div>}
     </div>
   );
@@ -210,6 +200,16 @@ function QuoteDetails({
         <dt>Bridge amount</dt>
         <dd>{formatUnits(quote.grossAmount, 7)} USDC</dd>
       </div>
+      {quote.observedAt && quote.validUntil && (
+        <div>
+          <dt>Estimate validity</dt>
+          <dd>
+            {quote.provider ?? (quote.route === 0 ? "Circle CCTP" : "Axelar ITS")} observed at{" "}
+            {new Date(quote.observedAt).toLocaleTimeString()}; expires at{" "}
+            {new Date(quote.validUntil).toLocaleTimeString()}
+          </dd>
+        </div>
+      )}
       <div>
         <dt>Hyperion fee</dt>
         <dd>{formatUnits(quote.fee, 7)} USDC</dd>

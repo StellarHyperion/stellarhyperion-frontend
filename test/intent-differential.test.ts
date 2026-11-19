@@ -19,9 +19,9 @@ describe("independent transaction intent checks", () => {
   it("detects altered recipient and amount without reusing production comparison code", () => {
     const reviewed = envelope(recipient, "1");
     const altered = envelope(recipient, "2");
-    const reviewedOperation = reviewed.toXDR();
-    const alteredOperation = altered.toXDR();
+    const reviewedOperation = reviewed.toXdr();
+    const alteredOperation = altered.toXdr();
     expect(alteredOperation).not.toBe(reviewedOperation);
-    expect(envelope(Keypair.random().publicKey(), "1").toXDR()).not.toBe(reviewedOperation);
+    expect(envelope(Keypair.random().publicKey(), "1").toXdr()).not.toBe(reviewedOperation);
   });
 });
