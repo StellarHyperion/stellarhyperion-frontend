@@ -121,6 +121,20 @@ try {
   await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
   await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
   await page.getByRole("button", { name: "Check status" }).waitFor();
+  const otherTab = await page.context().newPage();
+  await otherTab.goto(origin, { waitUntil: "domcontentloaded" });
+  await otherTab.evaluate(() => {
+    const checkpoint = JSON.parse(localStorage.getItem("hyperion.testnet.pending-transfer"));
+    localStorage.setItem(
+      "hyperion.testnet.pending-transfer",
+      JSON.stringify({ ...checkpoint, txHash: "f".repeat(64) }),
+    );
+  });
+  await page
+    .getByRole("region", { name: "Transfer recovery" })
+    .getByRole("link", { name: /f{12}\.\.\.f{8}/ })
+    .waitFor();
+  await otherTab.close();
   await page.evaluate(() => {
     localStorage.removeItem("hyperion.testnet.pending-transfer");
     window.dispatchEvent(new Event("hyperion:pending-transfer"));

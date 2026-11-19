@@ -188,8 +188,25 @@ export function checkpointMatches(
     checkpoint.stage === context.stage
   );
 }
-export function saveCheckpoint(value: TransferCheckpoint | null) {
+export function getTransferCheckpoint(): TransferCheckpoint | null {
+  return parseCheckpoint(snapshot());
+}
+export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
+  return JSON.stringify([
+    checkpoint.router,
+    checkpoint.account,
+    checkpoint.recipient,
+    checkpoint.destination,
+    checkpoint.route,
+    checkpoint.bridgeAmount,
+    checkpoint.stage,
+    checkpoint.txHash,
+  ]);
+}
+export function saveCheckpoint(value: TransferCheckpoint | null, expected?: TransferCheckpoint) {
   const existing = parseCheckpoint(snapshot());
+  if (expected && (!existing || checkpointIdentity(existing) !== checkpointIdentity(expected)))
+    throw new Error("The pending transaction changed in another tab. Check its current outcome.");
   if (value && existing && compareCheckpoints(existing, value) === "conflict")
     throw new Error(
       "A previous transaction remains pending. Check its outcome before submitting another.",
