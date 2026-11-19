@@ -31,6 +31,7 @@ import {
 } from "../config/testnet";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
+import { validateProviderFee } from "../lib/fee-schema";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
@@ -730,7 +731,13 @@ export async function quoteTransfer(
     return response;
   });
   if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");
-  const fee: unknown = await feeResponse.json();
+  const providerDestination =
+    route === 0 ? destinationKey : destinationFor(destinationKey).axelarName;
+  if (!providerDestination) throw new Error("This destination has no configured provider chain.");
+  const fee = validateProviderFee(await feeResponse.json(), {
+    token: route === 0 ? "USDC" : "XLM",
+    destination: providerDestination,
+  });
   const providerAt = new Date().toISOString();
   const relayGas = integer(object(fee).amount);
   const estimatedRelayGas = integer(object(fee).estimatedAmount ?? relayGas);
