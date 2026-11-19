@@ -16,10 +16,11 @@ import { TESTNET } from "../../config/testnet";
 import { Dialog } from "../../components/common/Dialog";
 import {
   STELLAR_WALLETS,
+  createGenerationTracker,
+  createSigningCoordinator,
   isWalletId,
   walletAddress,
   walletSign,
-  createSigningCoordinator,
   type StellarWalletId,
   type PendingSigningRequest,
 } from "./sdk";
@@ -72,6 +73,12 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const coordinator = useRef(createSigningCoordinator(setPendingSigningRequest));
   const pending = useRef<((address: string | null) => void) | null>(null);
   const attempt = useRef(0);
+  // Identifies the currently bound address/wallet pair. Advances whenever the active
+  // connection changes (silent restore, explicit connect, switch, or disconnect). A signing
+  // request captures this generation before it asks the wallet to sign, and refuses to hand
+  // back the result if the generation has since moved on - so a slow wallet response can
+  // never be applied to, or silently resubmitted under, a connection it was not issued for.
+  const connectionGeneration = useRef(createGenerationTracker());
 
   useEffect(() => {
     let active = true;
@@ -90,24 +97,33 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       );
       // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
       if (isWalletId(saved) && saved === "freighter")
-        void walletAddress(saved, false)
+        void connectionGeneration.current
+          .run(() => walletAddress(saved, false))
           .then((value) => {
             if (active && restorationAllowed.current && attempt.current === version) {
               setAddress(value);
               setWalletId(saved);
+              connectionGeneration.current.advance();
             }
           })
           .catch(() => {
             /* Explicit connection remains available. */
           });
     });
+
     return () => {
       active = false;
+      attempt.current++;
+      connectionGeneration.current.advance();
+      coordinator.current.abandon(new Error("Wallet connection closed before signing completed."));
+      pending.current?.(null);
+      pending.current = null;
     };
   }, []);
 
   const closePicker = useCallback(() => {
     attempt.current++;
+    connectionGeneration.current.advance();
     pending.current?.(null);
     pending.current = null;
     setPickerOpen(false);
@@ -118,6 +134,10 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const connect = useCallback(async () => {
     if (pending.current) return null;
+    connectionGeneration.current.advance();
+    coordinator.current.abandon(
+      new Error("Your wallet connection changed. Review the transaction again."),
+    );
     attempt.current++;
     setConnecting(true);
     setError(null);
@@ -134,10 +154,11 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     setAuthorizing(id);
     setError(null);
     try {
-      const value = await walletAddress(id);
+      const value = await connectionGeneration.current.run(() => walletAddress(id));
       if (attempt.current !== version) return;
       setAddress(value);
       setWalletId(id);
+      connectionGeneration.current.advance();
       const storageError = saveWalletPreference(id);
       setPreferenceError(storageError);
       if (!storageError) setRememberedWallet(id);
@@ -155,6 +176,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(() => {
     closePicker();
+    connectionGeneration.current.advance();
     // A pending approval must never be left to resolve against a wallet we've already walked
     // away from: settle it to an explicit failure instead of letting it hang or complete silently.
     coordinator.current.abandon(
@@ -200,18 +222,32 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
       if (opts?.approval && opts.approval.account !== address)
         throw new Error("The wallet account changed. Review the transaction again.");
-      // Only one outstanding approval at a time: a wallet extension popup generally can't field a
-      // second concurrent request, and serializing them (via the coordinator) keeps "which
-      // request failed" unambiguous. The coordinator also force-settles this to an explicit
-      // rejection on disconnect or explicit cancellation, so a vanished wallet/popup can never
-      // leave it locked forever, and never resubmits a late response.
-      return coordinator.current.run(
+      const generation = connectionGeneration.current.value();
+      const result = await coordinator.current.run(
         {
           operation: opts?.approval?.operation ?? opts?.operation ?? "transaction",
           account: address,
         },
-        (signal) => walletSign(walletId, transaction, address, opts?.approval, signal),
+        (signal) =>
+          connectionGeneration.current.run((connectionSignal) =>
+            walletSign(
+              walletId,
+              transaction,
+              address,
+              opts?.approval,
+              AbortSignal.any([signal, connectionSignal]),
+            ),
+          ),
       );
+      // The wallet took long enough to respond that the user disconnected or switched
+      // accounts in the meantime. Never hand back a signature bound to a connection that is
+      // no longer current - the caller must not treat it as valid, and it must never be
+      // auto-resubmitted.
+      if (connectionGeneration.current.value() !== generation)
+        throw new Error(
+          "Your wallet connection changed before signing finished. Review and sign again.",
+        );
+      return result;
     },
     [address, walletId],
   );

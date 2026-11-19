@@ -12,6 +12,60 @@ export type StellarWalletId = (typeof STELLAR_WALLETS)[number]["id"];
 export const isWalletId = (value: string | null): value is StellarWalletId =>
   STELLAR_WALLETS.some((wallet) => wallet.id === value);
 
+/**
+ * Tags every asynchronous wallet call with the connection generation it was issued under.
+ *
+ * Connecting, switching accounts and disconnecting each advance the generation. A caller that
+ * captures `value()` before starting a wallet request can compare it again once that request
+ * settles: if the generation has since moved on, the result belongs to a connection that is no
+ * longer current and must be discarded rather than applied, so a slow or stale wallet response
+ * can never overwrite a later connection (or be treated as a valid signature for one).
+ */
+export function createGenerationTracker() {
+  let current = 0;
+  let controller = new AbortController();
+  return {
+    /** Starts a new generation and returns it. */
+    advance(): number {
+      controller.abort(new Error("Your wallet connection changed. Review the transaction again."));
+      controller = new AbortController();
+      current += 1;
+      return current;
+    },
+    /** The generation currently in effect. */
+    value(): number {
+      return current;
+    },
+    async run<T>(action: (signal: AbortSignal) => Promise<T>): Promise<T> {
+      const signal = controller.signal;
+      let abort!: () => void;
+      const cancelled = new Promise<never>((_resolve, reject) => {
+        abort = () => {
+          const reason: unknown = signal.reason;
+          reject(
+            reason instanceof Error
+              ? reason
+              : new Error("Your wallet connection changed. Review the transaction again."),
+          );
+        };
+        signal.addEventListener("abort", abort, { once: true });
+      });
+      try {
+        return await Promise.race([
+          Promise.resolve().then(() => {
+            signal.throwIfAborted();
+            return action(signal);
+          }),
+          cancelled,
+        ]);
+      } finally {
+        signal.removeEventListener("abort", abort);
+      }
+    },
+  };
+}
+export type GenerationTracker = ReturnType<typeof createGenerationTracker>;
+
 export type SigningOperation =
   "bridge" | "conversion" | "claim" | "claim-settlement" | "transaction";
 export interface PendingSigningRequest {
