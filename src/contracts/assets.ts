@@ -386,6 +386,24 @@ export interface Conversion {
   sourceMax: bigint;
   usdcAmount: bigint;
   path: SourceAsset[];
+  pathComparison: ConversionPathComparison;
+}
+export interface ConversionPathComparison {
+  returnedPaths: number;
+  eligiblePaths: number;
+  selectedOutput: bigint;
+  excludedPaths: number;
+  diagnostics: ConversionPathDiagnostic[];
+  omittedDiagnostics: number;
+}
+export interface ConversionPathDiagnostic {
+  responseIndex: number | null;
+  reason: string;
+}
+interface ConversionPathCandidate {
+  output: bigint;
+  path: SourceAsset[];
+  key: string;
 }
 export interface ConversionExecutionIntent {
   operation: "pathPaymentStrictReceive";
@@ -427,6 +445,173 @@ export interface TradeQuote {
   conversion: Conversion | null;
 }
 
+export const MAX_CONVERSION_PATHS = 50;
+const MAX_PATH_DIAGNOSTICS = 5;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function exactPathAmount(value: unknown, label: string): { amount?: bigint; reason?: string } {
+  if (typeof value !== "string") return { reason: `${label} is missing or not a string.` };
+  if (value.length > 27 || !/^\d{1,19}(?:\.\d{1,7})?$/.test(value))
+    return { reason: `${label} is not a valid exact 7-decimal amount.` };
+  let amount: bigint;
+  try {
+    amount = parseUnits(value, 7);
+  } catch {
+    return { reason: `${label} is not a valid exact 7-decimal amount.` };
+  }
+  if (amount <= 0n) return { reason: `${label} must be positive.` };
+  return { amount };
+}
+
+function parseConversionPathCandidate(
+  entry: unknown,
+  source: SourceAsset,
+  sourceAsset: Asset,
+  sourceAmount: bigint,
+  destinationAsset: Asset,
+): { candidate?: ConversionPathCandidate; reason?: string } {
+  if (!isRecord(entry)) return { reason: "record is not an object." };
+  if (entry.source_asset_type !== sourceAsset.getAssetType())
+    return { reason: "source asset type does not match the requested asset." };
+  if (
+    !sourceAsset.isNative() &&
+    (entry.source_asset_code !== source.code || entry.source_asset_issuer !== source.issuer)
+  )
+    return { reason: "source code or issuer does not match the requested asset." };
+  if (
+    sourceAsset.isNative() &&
+    ((entry.source_asset_code !== undefined && entry.source_asset_code !== null) ||
+      (entry.source_asset_issuer !== undefined && entry.source_asset_issuer !== null))
+  )
+    return { reason: "native source includes issued-asset identity fields." };
+  const returnedSourceAmount = exactPathAmount(entry.source_amount, "source amount");
+  if (returnedSourceAmount.reason) return { reason: returnedSourceAmount.reason };
+  if (returnedSourceAmount.amount !== sourceAmount)
+    return { reason: "source amount does not match the requested spend cap." };
+  if (
+    entry.destination_asset_type !== destinationAsset.getAssetType() ||
+    entry.destination_asset_code !== USDC.code ||
+    entry.destination_asset_issuer !== USDC.issuer
+  )
+    return { reason: "destination asset is not canonical USDC." };
+  const output = exactPathAmount(entry.destination_amount, "destination amount");
+  if (output.reason) return { reason: output.reason };
+  if (output.amount === undefined) return { reason: "destination amount is invalid." };
+  if (output.amount > (1n << 63n) - 1n)
+    return { reason: "destination amount exceeds Stellar's asset limit." };
+  if (!Array.isArray(entry.path)) return { reason: "path is not an array." };
+  if (entry.path.length > 5) return { reason: "path exceeds Stellar's five-asset limit." };
+
+  const visited = new Set([source.id, USDC.id]);
+  const path: SourceAsset[] = [];
+  for (const [index, item] of entry.path.entries()) {
+    if (!isRecord(item)) return { reason: `path asset ${index + 1} is not an object.` };
+    if (item.asset_type === "native") {
+      if (
+        (item.asset_code !== undefined && item.asset_code !== null) ||
+        (item.asset_issuer !== undefined && item.asset_issuer !== null)
+      )
+        return {
+          reason: `path asset ${index + 1} includes issued-asset identity fields on a native asset.`,
+        };
+      if (visited.has(XLM.id)) return { reason: `path asset ${index + 1} repeats an asset.` };
+      visited.add(XLM.id);
+      path.push(XLM);
+      continue;
+    }
+    if (item.asset_type !== "credit_alphanum4" && item.asset_type !== "credit_alphanum12")
+      return { reason: `path asset ${index + 1} has an unsupported asset type.` };
+    if (typeof item.asset_code !== "string" || typeof item.asset_issuer !== "string")
+      return { reason: `path asset ${index + 1} is missing its code or issuer.` };
+    const token: SourceAsset = {
+      id: `${item.asset_code}:${item.asset_issuer}`,
+      code: item.asset_code,
+      issuer: item.asset_issuer,
+      verification: "horizon-path",
+      trustline: "not-checked",
+    };
+    let tokenAsset: Asset;
+    try {
+      tokenAsset = stellarAsset(token);
+    } catch {
+      return { reason: `path asset ${index + 1} has an invalid code or issuer.` };
+    }
+    if (tokenAsset.getAssetType() !== item.asset_type)
+      return { reason: `path asset ${index + 1} type does not match its code.` };
+    if (visited.has(token.id)) return { reason: `path asset ${index + 1} repeats an asset.` };
+    visited.add(token.id);
+    path.push(token);
+  }
+  const key = path.map((asset) => asset.id).join("\u0000");
+  return { candidate: { output: output.amount, path, key } };
+}
+
+export function compareConversionPaths(
+  source: SourceAsset,
+  sourceAmount: bigint,
+  entries: unknown[],
+): {
+  selected: { output: bigint; path: SourceAsset[] } | null;
+  returnedPaths: number;
+  eligiblePaths: number;
+  excludedPaths: number;
+  diagnostics: ConversionPathDiagnostic[];
+  omittedDiagnostics: number;
+} {
+  if (entries.length > MAX_CONVERSION_PATHS) {
+    return {
+      selected: null,
+      returnedPaths: entries.length,
+      eligiblePaths: 0,
+      excludedPaths: entries.length,
+      diagnostics: [
+        {
+          responseIndex: null,
+          reason: `Horizon returned more than the ${MAX_CONVERSION_PATHS}-path comparison limit; all paths were excluded.`,
+        },
+      ],
+      omittedDiagnostics: 0,
+    };
+  }
+  const sourceAsset = stellarAsset(source);
+  const destinationAsset = stellarAsset(USDC);
+  const candidates: ConversionPathCandidate[] = [];
+  const diagnostics: ConversionPathDiagnostic[] = [];
+  let excludedPaths = 0;
+  entries.forEach((entry, responseIndex) => {
+    const result = parseConversionPathCandidate(
+      entry,
+      source,
+      sourceAsset,
+      sourceAmount,
+      destinationAsset,
+    );
+    if (result.candidate) {
+      candidates.push(result.candidate);
+    } else {
+      excludedPaths += 1;
+      if (diagnostics.length < MAX_PATH_DIAGNOSTICS)
+        diagnostics.push({ responseIndex, reason: result.reason ?? "path is invalid." });
+    }
+  });
+  candidates.sort((left, right) => {
+    if (left.output !== right.output) return left.output > right.output ? -1 : 1;
+    return left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
+  });
+  const best = candidates[0];
+  return {
+    selected: best ? { output: best.output, path: best.path } : null,
+    returnedPaths: entries.length,
+    eligiblePaths: candidates.length,
+    excludedPaths,
+    diagnostics,
+    omittedDiagnostics: excludedPaths - diagnostics.length,
+  };
+}
+
 export async function quoteConversion(source: SourceAsset, amount: bigint): Promise<Conversion> {
   const asset = stellarAsset(source);
   if (source.trustline === "frozen")
@@ -439,6 +624,7 @@ export async function quoteConversion(source: SourceAsset, amount: bigint): Prom
     source_asset_type: asset.getAssetType(),
     source_amount: formatUnits(amount, 7),
     destination_assets: USDC.id,
+    limit: String(MAX_CONVERSION_PATHS),
   });
   if (!asset.isNative()) {
     params.set("source_asset_code", asset.getCode());
@@ -446,39 +632,41 @@ export async function quoteConversion(source: SourceAsset, amount: bigint): Prom
     if (!issuer) throw new Error("The source asset issuer is missing.");
     params.set("source_asset_issuer", issuer);
   }
-  const paths = records(await horizon(`/paths/strict-send?${params}`))
-    .flatMap((entry) => {
-      if (
-        entry.destination_asset_code !== USDC.code ||
-        entry.destination_asset_issuer !== USDC.issuer ||
-        typeof entry.destination_amount !== "string" ||
-        !Array.isArray(entry.path) ||
-        entry.path.length > 5
+  const body = await horizon(`/paths/strict-send?${params}`);
+  const embedded = body._embedded as { records?: unknown } | undefined;
+  if (!Array.isArray(embedded?.records)) throw new Error("Invalid Stellar path list.");
+  const comparison = compareConversionPaths(source, amount, embedded.records);
+  const best = comparison.selected;
+  if (!best) {
+    const diagnostics = comparison.diagnostics
+      .map(({ responseIndex, reason }) =>
+        responseIndex === null ? reason : `Path ${responseIndex + 1}: ${reason}`,
       )
-        return [];
-      const path: SourceAsset[] = entry.path.map((item: Record<string, unknown>) => {
-        if (item.asset_type === "native") return XLM;
-        if (typeof item.asset_code !== "string" || typeof item.asset_issuer !== "string")
-          throw new Error("Invalid Stellar path asset.");
-        const token: SourceAsset = {
-          id: `${item.asset_code}:${item.asset_issuer}`,
-          code: item.asset_code,
-          issuer: item.asset_issuer,
-          verification: "horizon-path",
-          trustline: "not-checked",
-        };
-        stellarAsset(token);
-        return token;
-      });
-      return [{ amount: parseUnits(entry.destination_amount, 7), path }];
-    })
-    .sort((a, b) => (a.amount > b.amount ? -1 : a.amount < b.amount ? 1 : 0));
-  const best = paths[0];
-  if (!best)
-    throw new Error(`No liquid ${source.code} to USDC path is available on Stellar Testnet.`);
-  const usdcAmount = (best.amount * (10000n - SLIPPAGE_BPS)) / 10000n;
+      .join(" ");
+    const omitted =
+      comparison.omittedDiagnostics > 0
+        ? ` ${comparison.omittedDiagnostics} additional path exclusions are omitted.`
+        : "";
+    throw new Error(
+      `No liquid ${source.code} to USDC path is available on Stellar Testnet. ${diagnostics}${omitted}`.trim(),
+    );
+  }
+  const usdcAmount = (best.output * (10000n - SLIPPAGE_BPS)) / 10000n;
   if (usdcAmount <= 0n) throw new Error("This amount is too small to convert.");
-  return { source, sourceMax: amount, usdcAmount, path: best.path };
+  return {
+    source,
+    sourceMax: amount,
+    usdcAmount,
+    path: best.path,
+    pathComparison: {
+      returnedPaths: comparison.returnedPaths,
+      eligiblePaths: comparison.eligiblePaths,
+      selectedOutput: best.output,
+      excludedPaths: comparison.excludedPaths,
+      diagnostics: comparison.diagnostics,
+      omittedDiagnostics: comparison.omittedDiagnostics,
+    },
+  };
 }
 
 export async function revalidateConversion(reviewed: Conversion): Promise<Conversion> {

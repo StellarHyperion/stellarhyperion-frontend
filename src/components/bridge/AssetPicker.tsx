@@ -5,6 +5,7 @@ import { parseUnits } from "@hyperion/protocol";
 import { DESTINATIONS, type BridgeRoute, type DestinationKey } from "../../config/testnet";
 import {
   issuerVerificationLabel,
+  MAX_CONVERSION_PATHS,
   trustlineLabel,
   USDC,
   XLM,
@@ -118,7 +119,8 @@ export function SourceAssetPicker({
         />
       </label>
       <p className={styles.note}>
-        Stellar Testnet. Assets bridge through USDC when a liquid conversion path exists.
+        Stellar Testnet. Non-USDC quotes compare up to {MAX_CONVERSION_PATHS} Horizon paths by exact
+        USDC output. Only paths matching the asset identity and requested source amount qualify.
       </p>
       <div className={styles.list} aria-busy={loading}>
         {loading && <p role="status">Searching Stellar assets...</p>}
