@@ -83,6 +83,10 @@
   padding: 20px 0;
   font-size: 0.875rem;
 }
+.assetChoice {
+  display: grid;
+  gap: 6px;
+}
 .option {
   display: flex;
   align-items: center;
@@ -152,6 +156,34 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.issuerDetails {
+  padding: 0 14px 6px;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+}
+.issuerDetails summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.issuerDetails dl {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0 48px;
+}
+.issuerDetails dl div {
+  display: grid;
+  gap: 2px;
+}
+.issuerDetails dt {
+  font-family: var(--face-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.issuerDetails dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 .networks {
   display: grid;

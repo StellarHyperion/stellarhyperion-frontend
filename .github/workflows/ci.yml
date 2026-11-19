@@ -2,6 +2,7 @@ name: ci
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches: [main]
   merge_group:
@@ -22,6 +23,12 @@ env:
 jobs:
   supply-chain:
     uses: ./.github/workflows/supply-chain.yml
+
+  source-security:
+    uses: ./.github/workflows/source-security.yml
+
+  pr-description:
+    uses: ./.github/workflows/pr-description.yml
 
   frontend:
     name: check, test, build
@@ -45,12 +52,12 @@ jobs:
             nodejs.org:443
 
       - name: Check out frontend repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.22.1
 
@@ -60,17 +67,19 @@ jobs:
       - name: Run verification pipeline
         run: npm run check
 
-  # Vercel's installed Git integration deploys main and reports its own deployment status.
-  # Keep deployment credentials out of Actions and avoid duplicate production deployments.
+  # The paused Vercel project has automatic Git deployments disabled in vercel.json.
+  # Build, test, and contribution security remain required by this gate.
   gate:
     name: gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
-    needs: [frontend, supply-chain]
+    needs: [frontend, supply-chain, source-security, pr-description]
     steps:
       - name: Require successful checks
         env:
           CHECK_RESULT: ${{ needs.frontend.result }}
           SECURITY_RESULT: ${{ needs.supply-chain.result }}
-        run: test "$CHECK_RESULT" = success && test "$SECURITY_RESULT" = success
+          SOURCE_SECURITY_RESULT: ${{ needs.source-security.result }}
+          DESCRIPTION_RESULT: ${{ needs.pr-description.result }}
+        run: test "$CHECK_RESULT" = success && test "$SECURITY_RESULT" = success && test "$SOURCE_SECURITY_RESULT" = success && test "$DESCRIPTION_RESULT" = success
