@@ -47,9 +47,7 @@ try {
       deployment.networks["stellar-testnet"].tokens.USDC.sacId,
     ),
   );
-  await identityDetails
-    .getByRole("button", { name: "Copy canonical USDC issuer" })
-    .click();
+  await identityDetails.getByRole("button", { name: "Copy canonical USDC issuer" }).click();
   await identityDetails.getByRole("status").filter({ hasText: "Copied" }).waitFor();
   assert.equal(await page.evaluate(() => window.__hyperionCopiedAddress), canonicalIssuer);
   assert.ok((await identityDetails.innerText()).includes("Axelar ITS USDC representation"));
