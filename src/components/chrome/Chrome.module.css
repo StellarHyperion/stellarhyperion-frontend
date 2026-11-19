@@ -62,6 +62,12 @@
   background: var(--surface-panel);
   border: 1px solid var(--edge-color);
 }
+.navLinks[data-recovery="true"] {
+  grid-template-columns: repeat(3, 1fr);
+}
+.navLinks[data-recovery="true"]::before {
+  width: calc((100% - 6px) / 3);
+}
 .navLinks::before {
   content: "";
   position: absolute;
@@ -77,8 +83,10 @@
   transform: translateX(100%);
 }
 .navLink {
+  min-block-size: 44px;
+  display: grid;
+  align-items: center;
   position: relative;
-  display: block;
   text-align: center;
   padding: var(--space-2) var(--space-4);
   font-size: 0.75rem;
