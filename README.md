@@ -21,6 +21,8 @@ The interface reads the active router, adapter configuration, destination contra
 
 Conversion and bridging are separate signed transactions. The conversion uses a strict-receive path payment with an exact source spending cap and 0.5% price tolerance. It can create the canonical USDC trustline in the same transaction. If the bridge cannot proceed, the converted USDC remains in the user's wallet. The app saves the actual signed hash before broadcast; after an interruption, it checks the recorded transaction before offering a fresh bridge review. Unknown outcomes never trigger an automatic resend.
 
+Recovery first checks bounded Stellar RPC evidence, then falls back to Horizon when the RPC history is absent or unavailable. Every accepted result must establish the Testnet network, signed hash, account and matching operations. Conversion success also requires a matching canonical USDC payment result. Continuing requires the same wallet, a current authorized spendable USDC balance, a fresh quote and simulation, and explicit approval. Historical failure is distinct from missing, malformed or conflicting evidence, which leaves the checkpoint unknown and intact. Source confirmation does not establish destination delivery.
+
 ## Run
 
 Node 22.13 or newer is required.
