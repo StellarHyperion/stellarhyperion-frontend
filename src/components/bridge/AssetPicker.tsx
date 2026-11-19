@@ -30,8 +30,9 @@ export function CopyableAddress({ value, label }: { value: string; label: string
   const copy = async () => {
     setCopyStatus(null);
     try {
-      if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
-      await navigator.clipboard.writeText(value);
+      const clipboard = navigator.clipboard as Partial<Clipboard> | undefined;
+      if (!clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
+      await clipboard.writeText(value);
       setCopyStatus({ value, state: "copied" });
     } catch {
       setCopyStatus({ value, state: "failed" });
