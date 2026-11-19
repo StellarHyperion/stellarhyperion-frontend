@@ -20,6 +20,8 @@ import {
   TESTNET,
   destinationFor,
   destinationDecimals,
+  deploymentIdentityMismatch,
+  STELLAR_DEPLOYMENT,
   type BridgeRoute,
   type DestinationKey,
 } from "../../config/testnet";
@@ -53,6 +55,7 @@ import {
   accountAssets,
   accountTrustlineReserve,
   issuerVerificationLabel,
+  isCanonicalUsdc,
   conversionExecutionIntent,
   conversionRoute,
   quoteTrade,
@@ -81,7 +84,13 @@ import {
 } from "../../contracts/checkpoint";
 import { useStellarWallet } from "../../wallets";
 import type { WalletApprovalProvenance } from "../../wallets/stellar";
-import { AssetIcon, DestinationPicker, ReviewDialog, SourceAssetPicker } from "./AssetPicker";
+import {
+  AssetIcon,
+  CopyableAddress,
+  DestinationPicker,
+  ReviewDialog,
+  SourceAssetPicker,
+} from "./AssetPicker";
 import styles from "./Bridge.module.css";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
@@ -840,7 +849,7 @@ export function Bridge() {
   const xlmSpendable = xlmAsset?.available !== undefined ? parseUnits(xlmAsset.available, 7) : 0n;
   // Conservative maximum: for USDC source requires a live quote with relay pricing;
   // for non-USDC source the spendable asset balance is the binding spending cap.
-  const isUsdcSource = source.id === USDC.id;
+  const isUsdcSource = isCanonicalUsdc(source);
   const trustlineOk = activeSource.trustline === "present" || activeSource.trustline === "native";
   const conservativeMax: bigint | null = isUsdcSource
     ? quote !== null && lane !== null
@@ -883,6 +892,13 @@ export function Bridge() {
     !locked &&
     simulatedState?.key !== simKey;
   const chain = destinationFor(destination);
+  const deploymentMismatch = deploymentIdentityMismatch(TESTNET.router, TESTNET.token);
+  const destinationRepresentation =
+    route === 0
+      ? chain.usdc
+      : lane?.available && lane.destinationToken
+        ? lane.destinationToken
+        : null;
   const waitController = useRef<AbortController | null>(null);
   const waitGeneration = useRef(0);
   const [shareStatus, setShareStatus] = useState<string | null>(null);
@@ -1381,9 +1397,101 @@ export function Bridge() {
           </div>
           <p className={styles.balance}>
             {route === 0
-              ? "Native USDC. Automatic destination minting."
-              : "ITS representation of Stellar USDC, not Circle's native USDC."}
+              ? "Circle CCTP delivers native USDC after Stellar source confirmation; destination delivery is separate."
+              : "Axelar ITS delivers a representation of Stellar USDC, not Circle's native USDC. Destination delivery is separate."}
           </p>
+          <details className={styles.identityDetails}>
+            <summary>Inspect canonical USDC identity</summary>
+            <p>
+              Stellar USDC is identified by its code and issuer. The configured token contract and
+              router are compared with the checked-in Stellar Testnet deployment; a mismatch blocks
+              bridge readiness.
+            </p>
+            <dl>
+              <div>
+                <dt>Stellar asset</dt>
+                <dd>{STELLAR_DEPLOYMENT.usdcCode} (7 decimals)</dd>
+              </div>
+              <div>
+                <dt>Canonical issuer</dt>
+                <dd>
+                  <CopyableAddress
+                    value={STELLAR_DEPLOYMENT.usdcIssuer}
+                    label="canonical USDC issuer"
+                  />
+                </dd>
+              </div>
+              <div>
+                <dt>Configured Stellar token contract (SAC)</dt>
+                <dd>
+                  <CopyableAddress value={TESTNET.token} label="configured Stellar USDC contract" />
+                </dd>
+              </div>
+              <div>
+                <dt>Verified deployment token contract</dt>
+                <dd>
+                  <CopyableAddress
+                    value={STELLAR_DEPLOYMENT.usdcToken}
+                    label="verified Stellar USDC contract"
+                  />
+                </dd>
+              </div>
+              <div>
+                <dt>Configured bridge router</dt>
+                <dd>
+                  <CopyableAddress value={TESTNET.router} label="configured bridge router" />
+                </dd>
+              </div>
+              <div>
+                <dt>Verified deployment router</dt>
+                <dd>
+                  <CopyableAddress
+                    value={STELLAR_DEPLOYMENT.router}
+                    label="verified deployment router"
+                  />
+                </dd>
+              </div>
+              <div>
+                <dt>Deployment identity</dt>
+                <dd role={deploymentMismatch ? "alert" : "status"}>
+                  {deploymentMismatch ??
+                    "Configured router and USDC contract match the verified deployment."}
+                </dd>
+              </div>
+              <div>
+                <dt>Selected destination representation</dt>
+                <dd>
+                  {route === 0
+                    ? "Circle CCTP native USDC (6 decimals)"
+                    : "Axelar ITS USDC representation (7 decimals)"}
+                  {destinationRepresentation ? (
+                    <CopyableAddress
+                      value={destinationRepresentation}
+                      label={
+                        route === 0 ? "native destination USDC contract" : "ITS destination token"
+                      }
+                    />
+                  ) : (
+                    <span className={styles.identityNotice}>
+                      Address is shown after the ITS lane is independently verified.
+                    </span>
+                  )}
+                </dd>
+              </div>
+              {route === 1 && (
+                <div>
+                  <dt>Axelar ITS service</dt>
+                  <dd>
+                    <CopyableAddress value={chain.its} label="Axelar ITS service contract" />
+                  </dd>
+                </div>
+              )}
+            </dl>
+            <p>
+              Stellar source confirmation starts processing; it does not confirm destination
+              delivery. Track the destination leg separately.
+            </p>
+          </details>
         </div>
         <div className={styles.recipientField}>
           <label htmlFor="recipient">

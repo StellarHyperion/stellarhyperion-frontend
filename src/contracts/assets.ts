@@ -60,6 +60,10 @@ export const USDC: SourceAsset = {
 };
 export const SLIPPAGE_BPS = 50n;
 
+export function isCanonicalUsdc(asset: SourceAsset): boolean {
+  return asset.id === USDC.id && asset.code === USDC.code && asset.issuer === USDC.issuer;
+}
+
 export function issuerVerificationLabel(asset: SourceAsset): string {
   if (!asset.issuer) return "Native Stellar asset; no issuer";
   if (asset.verification === "cached-metadata")
@@ -508,7 +512,7 @@ export async function quoteTrade(
   const amount = parseUnits(input.trim(), 7);
   if (amount <= 0n || amount > (1n << 63n) - 1n)
     throw new Error("Enter a positive amount within Stellar's asset limit.");
-  const conversion = source.id === USDC.id ? null : await quoteConversion(source, amount);
+  const conversion = isCanonicalUsdc(source) ? null : await quoteConversion(source, amount);
   const bridge = await quoteTransfer(destination, conversion?.usdcAmount ?? amount, route);
   return { source, sourceAmount: amount, bridge, conversion };
 }
