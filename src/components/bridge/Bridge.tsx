@@ -524,6 +524,7 @@ function PendingTransferCard({
           this transfer.
         </p>
       )}
+      <p className={styles.address}>This recoverable operation belongs to {checkpoint.account}.</p>
       {error && (
         <p role="alert" className={styles.error}>
           {error}

@@ -6,6 +6,7 @@ import {
   createSigningCoordinator,
   WALLET_SIGN_TIMEOUT_MS,
   walletAddress,
+  walletCurrentAddress,
   walletSign,
 } from "../src/wallets/stellar/sdk";
 import { verifyWalletSignature } from "../src/wallets/stellar/signature";
@@ -72,6 +73,27 @@ beforeEach(() => {
   api.lobstr.getPublicKey.mockResolvedValue(signer.publicKey());
 });
 describe("Direct Stellar wallet adapters", () => {
+  it("detects a changed Freighter account without requesting access", async () => {
+    const changed = Keypair.random().publicKey();
+    api.freighter.getAddress.mockResolvedValue({ address: changed });
+    expect(await walletCurrentAddress("freighter")).toBe(changed);
+    expect(api.freighter.requestAccess).not.toHaveBeenCalled();
+  });
+  it("detects a changed LOBSTR account and reports unsupported silent popup checks", async () => {
+    const changed = Keypair.random().publicKey();
+    api.lobstr.getPublicKey.mockResolvedValue(changed);
+    expect(await walletCurrentAddress("lobstr")).toBe(changed);
+    expect(await walletCurrentAddress("albedo")).toBeUndefined();
+    expect(await walletCurrentAddress("xbull")).toBeUndefined();
+    expect(api.albedo.publicKey).not.toHaveBeenCalled();
+    expect(api.xbull.connect).not.toHaveBeenCalled();
+  });
+  it("reports a removed extension as disconnected without opening a prompt", async () => {
+    api.freighter.isConnected.mockResolvedValue({ isConnected: false });
+    expect(await walletCurrentAddress("freighter")).toBeNull();
+    expect(api.freighter.getAddress).not.toHaveBeenCalled();
+    expect(api.freighter.requestAccess).not.toHaveBeenCalled();
+  });
   it("releases signing ownership when an adapter throws before returning a promise", async () => {
     const coordinator = createSigningCoordinator();
     await expect(

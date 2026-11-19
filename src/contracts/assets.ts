@@ -308,17 +308,6 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
   });
 }
 
-export async function requireRecoveredUsdc(
-  account: string,
-  amount: bigint,
-  signal?: AbortSignal,
-): Promise<void> {
-  const assets = await accountAssets(account, signal);
-  const balance = assets.find((asset) => asset.id === USDC.id)?.balance;
-  if (balance === undefined || parseUnits(balance, 7) < amount)
-    throw new Error("The confirmed conversion's USDC is not currently available in this wallet.");
-}
-
 export async function searchAssets(query: string, signal?: AbortSignal): Promise<SourceAsset[]> {
   const input = query.trim();
   if (!input) return [USDC, XLM];

@@ -278,6 +278,56 @@ export async function walletAddress(
   }
 }
 
+/** Query an extension account without opening a wallet access prompt. Popup wallets have no silent query. */
+export async function walletCurrentAddress(
+  id: StellarWalletId,
+  signal?: AbortSignal,
+): Promise<string | null | undefined> {
+  if (id === "albedo" || id === "xbull") return undefined;
+  signal?.throwIfAborted();
+  if (id === "freighter") {
+    const api = await import("@stellar/freighter-api");
+    signal?.throwIfAborted();
+    const connected = await withTimeout(
+      api.isConnected(),
+      WALLET_AVAILABILITY_TIMEOUT_MS,
+      "Could not check Freighter availability.",
+      false,
+      signal,
+    );
+    if (!connected.isConnected) return null;
+    signal?.throwIfAborted();
+    const result = await withTimeout(
+      api.getAddress(),
+      WALLET_CONNECT_TIMEOUT_MS,
+      "Could not check the Freighter account.",
+      false,
+      signal,
+    );
+    if (result.error) throwWalletError(result.error);
+    return result.address ? account(result.address) : null;
+  }
+  const api = await import("@lobstrco/signer-extension-api");
+  signal?.throwIfAborted();
+  const connected = await withTimeout(
+    api.isConnected(),
+    WALLET_AVAILABILITY_TIMEOUT_MS,
+    "Could not check LOBSTR availability.",
+    false,
+    signal,
+  );
+  if (!connected) return null;
+  signal?.throwIfAborted();
+  const address = await withTimeout(
+    api.getPublicKey(),
+    WALLET_CONNECT_TIMEOUT_MS,
+    "Could not check the LOBSTR account.",
+    false,
+    signal,
+  );
+  return address ? account(address) : null;
+}
+
 export async function walletSign(
   id: StellarWalletId,
   xdr: string,

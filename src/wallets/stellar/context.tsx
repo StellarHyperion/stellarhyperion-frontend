@@ -20,6 +20,7 @@ import {
   createSigningCoordinator,
   isWalletId,
   walletAddress,
+  walletCurrentAddress,
   walletSign,
   type StellarWalletId,
   type PendingSigningRequest,
@@ -42,6 +43,7 @@ const Context = createContext<StellarWalletContextValue | null>(null);
 
 export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
+  const addressRef = useRef<string | null>(null);
   const restorationAllowed = useRef(true);
   const [rememberedWallet, setRememberedWallet] = useState<StellarWalletId | null>(null);
   const [preferenceError, setPreferenceError] = useState<string | null>(null);
@@ -101,6 +103,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
           .run((signal) => walletAddress(saved, false, signal))
           .then((value) => {
             if (active && restorationAllowed.current && attempt.current === version) {
+              addressRef.current = value;
               setAddress(value);
               setWalletId(saved);
               connectionGeneration.current.advance();
@@ -157,6 +160,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         walletAddress(id, true, signal),
       );
       if (attempt.current !== version) return;
+      addressRef.current = value;
       setAddress(value);
       setWalletId(id);
       connectionGeneration.current.advance();
@@ -177,6 +181,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(() => {
     closePicker();
+    addressRef.current = null;
     connectionGeneration.current.advance();
     // A pending approval must never be left to resolve against a wallet we've already walked
     // away from: settle it to an explicit failure instead of letting it hang or complete silently.
@@ -192,6 +197,69 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     if (!storageError) setRememberedWallet(null);
     return Promise.resolve();
   }, [closePicker]);
+
+  const invalidateAccount = useCallback((expectedAddress: string, message: string) => {
+    if (addressRef.current !== expectedAddress) return;
+    addressRef.current = null;
+    attempt.current++;
+    connectionGeneration.current.advance();
+    coordinator.current.abandon(new Error(message));
+    pending.current?.(null);
+    pending.current = null;
+    setAddress(null);
+    setWalletId(null);
+    setConnecting(false);
+    setPickerOpen(false);
+    setAuthorizing(null);
+    setError(message);
+  }, []);
+
+  useEffect(() => {
+    if (!address || !walletId) return;
+    let active = true;
+    let checking = false;
+    const verifyAccount = async () => {
+      if (checking) return;
+      checking = true;
+      const generation = connectionGeneration.current.value();
+      try {
+        const current = await connectionGeneration.current.run((signal) =>
+          walletCurrentAddress(walletId, signal),
+        );
+        if (
+          !active ||
+          connectionGeneration.current.value() !== generation ||
+          addressRef.current !== address ||
+          current === undefined
+        )
+          return;
+        if (current !== address)
+          invalidateAccount(
+            address,
+            "Your Stellar wallet account changed or disconnected. Reconnect before reviewing or signing.",
+          );
+      } catch {
+        // A failed silent check cannot establish a new account. Signing performs its own bounded checks.
+      } finally {
+        checking = false;
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void verifyAccount();
+    };
+    const onFocus = () => {
+      void verifyAccount();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    const timer = window.setInterval(onFocus, 5000);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(timer);
+    };
+  }, [address, walletId, invalidateAccount]);
 
   const cancelSignature = useCallback(() => {
     coordinator.current.abandon(
@@ -230,15 +298,21 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
           account: address,
         },
         (signal) =>
-          connectionGeneration.current.run((connectionSignal) =>
-            walletSign(
-              walletId,
-              transaction,
-              address,
-              opts?.approval,
-              AbortSignal.any([signal, connectionSignal]),
-            ),
-          ),
+          connectionGeneration.current.run(async (connectionSignal) => {
+            const combined = AbortSignal.any([signal, connectionSignal]);
+            if (addressRef.current !== address)
+              throw new Error("Your wallet account changed. Connect again.");
+            const current = await walletCurrentAddress(walletId, combined);
+            combined.throwIfAborted();
+            if (current !== undefined && current !== address) {
+              invalidateAccount(
+                address,
+                "Your Stellar wallet account changed. Reconnect before reviewing or signing.",
+              );
+              throw new Error("Your wallet account changed. Connect again.");
+            }
+            return walletSign(walletId, transaction, address, opts?.approval, combined);
+          }),
       );
       // The wallet took long enough to respond that the user disconnected or switched
       // accounts in the meantime. Never hand back a signature bound to a connection that is
@@ -250,7 +324,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         );
       return result;
     },
-    [address, walletId],
+    [address, walletId, invalidateAccount],
   );
 
   const value = useMemo(
