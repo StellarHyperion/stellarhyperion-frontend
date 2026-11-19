@@ -31,7 +31,8 @@ import {
   TRANSACTION_TIMEOUT_SECONDS,
   quoteFreshness,
   readLane,
-  readTransaction,
+  resolveCheckpointTransaction,
+  type CheckpointRecoveryResult,
   simulateBridgeOut,
   submitBridgeOut,
   submitSettleClaim,
@@ -56,6 +57,7 @@ import {
   conversionRoute,
   quoteTrade,
   spendableBalance,
+  requireRecoveredUsdc,
   submitConversion,
   stellarAsset,
   trustlineLabel,
@@ -73,6 +75,8 @@ import {
   saveCheckpoint,
   assertCheckpointStorage,
   useTransferCheckpoint,
+  getTransferCheckpoint,
+  checkpointIdentity,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
 import { useStellarWallet } from "../../wallets";
@@ -354,18 +358,18 @@ function ConversionDetails({ conversion }: { conversion: NonNullable<TradeQuote[
 function PendingTransferCard({
   checkpoint,
   busy,
-  latest,
   onReset,
 }: {
   checkpoint: TransferCheckpoint;
   busy: boolean;
-  latest: TransactionResult | null;
   onReset: () => void;
 }) {
   const wallet = useStellarWallet();
   const [copied, setCopied] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [checked, setChecked] = useState<TransactionResult | null>(null);
+  const [checked, setChecked] = useState<
+    (CheckpointRecoveryResult & { txHash: string; owner: string }) | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<LiveQuote | null>(null);
   const currentAccount = useRef(wallet.address);
@@ -375,47 +379,119 @@ function PendingTransferCard({
   const [cardSimulation, setCardSimulation] = useState<SimulatedOperation | null>(null);
   const [cardSimulating, setCardSimulating] = useState(false);
   const [cardSimError, setCardSimError] = useState<string | null>(null);
-  const current =
-    checked?.txHash === checkpoint.txHash
-      ? checked
-      : latest?.txHash === checkpoint.txHash
-        ? latest
-        : null;
   const sameAccount = wallet.address === checkpoint.account;
+  const actionRef = useRef<HTMLButtonElement>(null);
+  const recoveryMessageRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const focus = () => {
+      const action = actionRef.current;
+      if (action && !action.disabled) action.focus();
+      else recoveryMessageRef.current?.focus();
+    };
+    let frame = requestAnimationFrame(focus);
+    const requestFocus = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(focus);
+    };
+    const onHashChange = () => {
+      if (window.location.hash === "#pending-recovery") requestFocus();
+    };
+    window.addEventListener("hashchange", onHashChange);
+    window.addEventListener("hyperion:recovery-focus", requestFocus);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("hashchange", onHashChange);
+      window.removeEventListener("hyperion:recovery-focus", requestFocus);
+    };
+  }, [busy, checking, checkpoint.txHash]);
+  const recoveryOwner = JSON.stringify([checkpoint, wallet.address]);
+  const ownerRef = useRef(recoveryOwner);
+  const requestRef = useRef<AbortController | null>(null);
+  useLayoutEffect(() => {
+    ownerRef.current = recoveryOwner;
+    requestRef.current?.abort();
+    requestRef.current = null;
+    return () => {
+      requestRef.current?.abort();
+    };
+  }, [recoveryOwner]);
+  const visibleCurrent = checked?.owner === recoveryOwner ? checked : null;
   const check = async () => {
-    if (checking || busy) return;
+    if (checking || busy || requestRef.current) return;
+    const controller = new AbortController();
+    requestRef.current = controller;
+    const owner = recoveryOwner;
+    const active = () => {
+      const saved = getTransferCheckpoint();
+      return (
+        !controller.signal.aborted &&
+        ownerRef.current === owner &&
+        saved !== null &&
+        checkpointIdentity(saved) === checkpointIdentity(checkpoint)
+      );
+    };
     setChecking(true);
     setError(null);
     try {
-      const result = await readTransaction(checkpoint.txHash);
-      setChecked(result);
-      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+      const result = await resolveCheckpointTransaction(checkpoint, controller.signal);
+      if (!active()) return;
+      setReview(null);
+      setCardSimulation(null);
+      setChecked({ ...result, txHash: checkpoint.txHash, owner });
+      if (result.status === "unknown") {
+        setError(result.message);
+        return;
+      }
+      if (result.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+        await requireRecoveredUsdc(
+          checkpoint.account,
+          BigInt(checkpoint.bridgeAmount),
+          controller.signal,
+        );
+        if (!active()) return;
         const nextQuote = await quoteTransfer(
           checkpoint.destination,
           BigInt(checkpoint.bridgeAmount),
           checkpoint.route,
         );
+        if (!active()) return;
         setReview(nextQuote);
         setCardSimulating(true);
         setCardSimError(null);
         try {
           const sim = await simulateBridgeOut(checkpoint.account, nextQuote, checkpoint.recipient);
+          if (!active()) return;
           setCardSimulation(sim);
-        } catch (simCause) {
-          setCardSimulation(null);
-          setCardSimError(errorMessage(simCause));
+        } catch (cause) {
+          if (active()) {
+            setCardSimulation(null);
+            setCardSimError(errorMessage(cause));
+          }
         } finally {
-          setCardSimulating(false);
+          if (active()) setCardSimulating(false);
         }
       }
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (active()) setError(errorMessage(cause));
     } finally {
+      if (requestRef.current === controller) requestRef.current = null;
+      // Busy UI state is safe to release even when identity invalidated this read.
       setChecking(false);
+      setCardSimulating(false);
     }
   };
   const continueBridge = async () => {
-    if (!review || !sameAccount || checking || cardSimulating || !!cardSimError || !cardSimulation)
+    if (
+      !review ||
+      checked?.owner !== recoveryOwner ||
+      checked.status !== "confirmed" ||
+      !sameAccount ||
+      checking ||
+      cardSimulating ||
+      !!cardSimError ||
+      !cardSimulation ||
+      requestRef.current
+    )
       return;
     try {
       assertCheckpointStorage();
@@ -423,9 +499,27 @@ function PendingTransferCard({
       setError(errorMessage(cause));
       return;
     }
+    const controller = new AbortController();
+    requestRef.current = controller;
+    const owner = recoveryOwner;
+    const active = () => {
+      const saved = getTransferCheckpoint();
+      return (
+        !controller.signal.aborted &&
+        ownerRef.current === owner &&
+        saved !== null &&
+        checkpointIdentity(saved) === checkpointIdentity(checkpoint)
+      );
+    };
     setChecking(true);
     setError(null);
     try {
+      await requireRecoveredUsdc(
+        checkpoint.account,
+        BigInt(checkpoint.bridgeAmount),
+        controller.signal,
+      );
+      if (!active()) return;
       const result = await submitBridgeOut(
         checkpoint.account,
         review,
@@ -435,42 +529,74 @@ function PendingTransferCard({
           if (hash) saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
         },
         { account: checkpoint.account, network: TESTNET.networkPassphrase, operation: "bridge" },
-        { expectedAccount: checkpoint.account, getCurrentAccount: () => currentAccount.current },
+        {
+          expectedAccount: checkpoint.account,
+          getCurrentAccount: () => currentAccount.current,
+          isSuperseded: () => !active(),
+        },
         cardSimulation,
+        controller.signal,
       );
-      setChecked(result);
-      setReview(null);
-      setCardSimulation(null);
+      if (active()) {
+        setChecked(
+          result.status === "pending"
+            ? null
+            : {
+                ...result,
+                status: result.status === "confirmed" ? "confirmed" : "failed",
+                owner,
+                source: "rpc",
+                message: `The transaction is ${result.status} on Stellar Testnet.`,
+              },
+        );
+        setReview(null);
+        setCardSimulation(null);
+      }
     } catch (cause) {
-      const message = errorMessage(cause);
-      if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
-      setError(message);
+      if (active()) {
+        const message = errorMessage(cause);
+        if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
+        setError(message);
+      }
     } finally {
+      if (requestRef.current === controller) requestRef.current = null;
       setChecking(false);
     }
   };
   return (
-    <section className={styles.pending} aria-label="Transfer recovery">
+    <section
+      id="pending-recovery"
+      className={styles.pending}
+      aria-label="Transfer recovery"
+      aria-busy={checking}
+      tabIndex={-1}
+    >
       <div className={styles.pendingTitle}>
         <ShieldCheck size={18} aria-hidden="true" />
         <h2>
-          {current?.status === "failed"
+          {visibleCurrent?.status === "failed"
             ? "Transaction failed on Stellar"
             : checkpoint.stage === "conversion"
-              ? current?.status === "confirmed"
+              ? visibleCurrent?.status === "confirmed"
                 ? "Conversion confirmed"
                 : "Conversion source status unknown"
-              : current?.status === "confirmed"
+              : visibleCurrent?.status === "confirmed"
                 ? "Transfer confirmed on Stellar"
                 : "Transfer source status unknown"}
         </h2>
       </div>
-      <p>
+      <p id="pending-recovery-message" ref={recoveryMessageRef} role="status" tabIndex={-1}>
         {checkpoint.stage === "conversion"
-          ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
-          : current?.status === "confirmed"
-            ? "The source transaction is confirmed. Follow destination delivery separately in transfer activity."
-            : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
+          ? visibleCurrent?.status === "confirmed"
+            ? "Conversion confirmed on Stellar. Your bridge is a separate transaction and still requires your wallet approval."
+            : visibleCurrent?.status === "failed"
+              ? "Conversion failed on Stellar. No bridge transaction was submitted."
+              : "This saved signed hash does not establish broadcast or confirmation. Check the conversion source status before continuing with USDC."
+          : visibleCurrent?.status === "confirmed"
+            ? "Source transaction confirmed on Stellar. Destination delivery is tracked separately."
+            : visibleCurrent?.status === "failed"
+              ? "Source transaction failed on Stellar. No destination delivery was initiated."
+              : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
       <a
         className={styles.transactionLink}
@@ -524,14 +650,20 @@ function PendingTransferCard({
           this transfer.
         </p>
       )}
+      {checking && <p role="status">Checking Stellar Testnet transaction history...</p>}
+      {visibleCurrent && visibleCurrent.message !== error && (
+        <p role="status">{visibleCurrent.message}</p>
+      )}
       {error && (
         <p role="alert" className={styles.error}>
           {error}
         </p>
       )}
-      {current?.status === "failed" ||
-      (checkpoint.stage === "bridge" && current?.status === "confirmed") ? (
+      {visibleCurrent?.status === "failed" ||
+      (checkpoint.stage === "bridge" && visibleCurrent?.status === "confirmed") ? (
         <button
+          id="pending-recovery-action"
+          ref={actionRef}
           type="button"
           className={styles.secondary}
           onClick={onReset}
@@ -541,6 +673,8 @@ function PendingTransferCard({
         </button>
       ) : (
         <button
+          id="pending-recovery-action"
+          ref={actionRef}
           type="button"
           className={styles.secondary}
           onClick={() => {
@@ -555,7 +689,7 @@ function PendingTransferCard({
               : "Check status"}
         </button>
       )}
-      {review && (
+      {review && checked?.owner === recoveryOwner && (
         <ReviewDialog
           onClose={() => {
             if (!checking) {
@@ -963,6 +1097,7 @@ export function Bridge() {
     let converted: TransferCheckpoint | null = null;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
       router: TESTNET.router,
+      token: TESTNET.token,
       account: sender,
       recipient: validateRecipient(recipient),
       destination,
@@ -1046,13 +1181,18 @@ export function Bridge() {
     }
   };
   const reset = () => {
-    saveCheckpoint(null);
-    setResult(null);
-    setError(null);
-    setReviewed(null);
-    setAmount("");
-    setSimulatedState(null);
-    setRefresh((value) => value + 1);
+    if (!checkpoint) return;
+    try {
+      saveCheckpoint(null, checkpoint);
+      setResult(null);
+      setError(null);
+      setReviewed(null);
+      setAmount("");
+      setSimulatedState(null);
+      setRefresh((value) => value + 1);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    }
   };
   const insufficient = quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
   // Exceeds route liquidity even when the wallet balance is sufficient.
@@ -1086,7 +1226,12 @@ export function Bridge() {
   return (
     <>
       {checkpoint && (
-        <PendingTransferCard checkpoint={checkpoint} busy={busy} latest={result} onReset={reset} />
+        <PendingTransferCard
+          key={JSON.stringify([checkpoint, wallet.address])}
+          checkpoint={checkpoint}
+          busy={busy}
+          onReset={reset}
+        />
       )}
       <section className={styles.panel} aria-labelledby="bridge-heading" aria-busy={fetching}>
         <div className={styles.heading}>

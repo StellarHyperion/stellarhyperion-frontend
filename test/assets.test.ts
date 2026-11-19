@@ -545,6 +545,7 @@ describe("Trustline reserve and network fee disclosure", () => {
 describe("Interrupted transfer recovery", () => {
   const checkpoint: TransferCheckpoint = {
     router: TESTNET.router,
+    token: TESTNET.token,
     account: TESTNET.reader,
     recipient: `0x${"1".repeat(40)}`,
     destination: "sepolia",
