@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import {
   TESTNET,
@@ -45,10 +45,12 @@ import {
   type TradeQuote,
 } from "../../contracts/assets";
 import {
+  assertCheckpointStorage,
   saveCheckpoint,
   useTransferCheckpoint,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
+import { AsyncGeneration } from "../../lib/async-generation";
 import { useStellarWallet } from "../../wallets";
 import { AssetIcon, DestinationPicker, ReviewDialog, SourceAssetPicker } from "./AssetPicker";
 import styles from "./Bridge.module.css";
@@ -283,6 +285,7 @@ export function Bridge() {
   const [phase, setPhase] = useState<TransactionPhase | null>(null);
   const [step, setStep] = useState<"conversion" | "bridge">("bridge");
   const [result, setResult] = useState<TransactionResult | null>(null);
+  const quoteGeneration = useRef(new AsyncGeneration());
   const [error, setError] = useState<string | null>(null);
   const laneKey = `${destination}:${route}:${refresh}`;
   const lane = laneState?.key === laneKey ? laneState.value : null;
@@ -348,14 +351,17 @@ export function Bridge() {
   }, [wallet.address, result, refresh]);
   useEffect(() => {
     if (!valid || !lane?.available || locked) return;
+    const generation = quoteGeneration.current.next();
     let active = true;
     const timer = setTimeout(() => {
       void quoteTrade(destination, source, amount, route)
         .then((value) => {
-          if (active) setQuoted({ key: quoteKey, value, error: null });
+          if (active && quoteGeneration.current.isCurrent(generation))
+            setQuoted({ key: quoteKey, value, error: null });
         })
         .catch((cause: unknown) => {
-          if (active) setQuoted({ key: quoteKey, value: null, error: errorMessage(cause) });
+          if (active && quoteGeneration.current.isCurrent(generation))
+            setQuoted({ key: quoteKey, value: null, error: errorMessage(cause) });
         });
     }, 400);
     return () => {
@@ -365,6 +371,12 @@ export function Bridge() {
   }, [valid, lane, locked, destination, source, amount, route, quoteKey]);
   const submit = async () => {
     if (!quote || !wallet.address || busy || checkpoint) return;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setReviewing(false);
     setBusy(true);
     setError(null);

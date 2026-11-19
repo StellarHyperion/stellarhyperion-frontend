@@ -14,6 +14,15 @@ export interface TransferCheckpoint {
 }
 const key = "hyperion.testnet.pending-transfer";
 const event = "hyperion:pending-transfer";
+export function assertCheckpointStorage(): void {
+  const probe = `${key}.probe`;
+  try {
+    localStorage.setItem(probe, "ok");
+    localStorage.removeItem(probe);
+  } catch {
+    throw new Error("Browser storage is unavailable. Connect storage before signing.");
+  }
+}
 function snapshot(): string | null {
   try {
     return localStorage.getItem(key);
