@@ -72,6 +72,7 @@ import { useStellarWallet } from "../../wallets";
 import type { WalletApprovalProvenance } from "../../wallets/stellar";
 import { AssetIcon, DestinationPicker, ReviewDialog, SourceAssetPicker } from "./AssetPicker";
 import styles from "./Bridge.module.css";
+import { message } from "../../lib/messages";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
@@ -1160,7 +1161,7 @@ export function Bridge() {
             </span>
             <div>
               <strong>Finding your route</strong>
-              <span>Checking liquidity, bridge fees and the receive amount</span>
+              <span>{message("routeLoading")}</span>
             </div>
             <span className={styles.fetchDots} aria-hidden="true">
               <i />
