@@ -31,26 +31,19 @@ import {
   type WalletAvailabilityStatus,
 } from "./capabilities";
 
-const WALLET_KEY = "hyperion.stellar.walletId";
-function readSavedWallet(): string | null {
-  try {
-    return localStorage.getItem(WALLET_KEY);
-  } catch {
-    return null;
-  }
-}
-function saveWallet(id: string | null) {
-  try {
-    if (id) localStorage.setItem(WALLET_KEY, id);
-    else localStorage.removeItem(WALLET_KEY);
-  } catch {
-    /* Wallet access still works without browser storage. */
-  }
-}
+import {
+  isRecognizedWalletPreference,
+  readWalletPreference,
+  saveWalletPreference,
+} from "./preference";
+
 const Context = createContext<StellarWalletContextValue | null>(null);
 
 export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
+  const restorationAllowed = useRef(true);
+  const [rememberedWallet, setRememberedWallet] = useState<StellarWalletId | null>(null);
+  const [preferenceError, setPreferenceError] = useState<string | null>(null);
   const [walletId, setWalletId] = useState<StellarWalletId | null>(null);
   const [isConnecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +66,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [pendingSigningRequest, setPendingSigningRequest] = useState<PendingSigningRequest | null>(
     null,
   );
+  // Tracks (at most) one outstanding signing request. It can be force-settled from here on
+  // disconnect or explicit cancellation, so a vanished wallet extension/popup can never leave
+  // this locked forever.
   const coordinator = useRef(createSigningCoordinator(setPendingSigningRequest));
   const pending = useRef<((address: string | null) => void) | null>(null);
   const attempt = useRef(0);
@@ -80,19 +76,31 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     const version = attempt.current;
-    const saved = readSavedWallet();
-    // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
-    if (isWalletId(saved) && saved === "freighter")
-      void walletAddress(saved, false)
-        .then((value) => {
-          if (active && attempt.current === version) {
-            setAddress(value);
-            setWalletId(saved);
-          }
-        })
-        .catch(() => {
-          /* Explicit connection remains available. */
-        });
+    // Hydrate browser storage after mount; cleanup also covers strict-mode remounts.
+    queueMicrotask(() => {
+      if (!active) return;
+      const preference = readWalletPreference();
+      const saved = preference.id;
+      setRememberedWallet(isWalletId(saved) ? saved : null);
+      setPreferenceError(
+        preference.error ??
+          (!isRecognizedWalletPreference(saved)
+            ? "The saved wallet preference is not recognized. Clear it before connecting."
+            : null),
+      );
+      // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
+      if (isWalletId(saved) && saved === "freighter")
+        void walletAddress(saved, false)
+          .then((value) => {
+            if (active && restorationAllowed.current && attempt.current === version) {
+              setAddress(value);
+              setWalletId(saved);
+            }
+          })
+          .catch(() => {
+            /* Explicit connection remains available. */
+          });
+    });
     return () => {
       active = false;
     };
@@ -130,7 +138,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       if (attempt.current !== version) return;
       setAddress(value);
       setWalletId(id);
-      saveWallet(id);
+      const storageError = saveWalletPreference(id);
+      setPreferenceError(storageError);
+      if (!storageError) setRememberedWallet(id);
       pending.current(value);
       pending.current = null;
       setPickerOpen(false);
@@ -145,11 +155,36 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(() => {
     closePicker();
+    // A pending approval must never be left to resolve against a wallet we've already walked
+    // away from: settle it to an explicit failure instead of letting it hang or complete silently.
+    coordinator.current.abandon(
+      new Error(
+        "Wallet disconnected before the signature completed. Close any old wallet prompt, reconnect and review the transfer.",
+      ),
+    );
     setAddress(null);
     setWalletId(null);
-    saveWallet(null);
+    const storageError = saveWalletPreference(null);
+    setPreferenceError(storageError);
+    if (!storageError) setRememberedWallet(null);
     return Promise.resolve();
   }, [closePicker]);
+
+  const cancelSignature = useCallback(() => {
+    coordinator.current.abandon(
+      new Error(
+        "Stopped waiting for this signature. Close the wallet prompt and review before trying again.",
+      ),
+    );
+  }, []);
+
+  const clearRememberedWallet = useCallback(() => {
+    // Clear only the preference. An explicit connection or signed checkpoint stays intact.
+    restorationAllowed.current = false;
+    const storageError = saveWalletPreference(null);
+    setPreferenceError(storageError);
+    if (!storageError) setRememberedWallet(null);
+  }, []);
 
   const signTransaction = useCallback(
     async (
@@ -165,12 +200,17 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
       if (opts?.approval && opts.approval.account !== address)
         throw new Error("The wallet account changed. Review the transaction again.");
+      // Only one outstanding approval at a time: a wallet extension popup generally can't field a
+      // second concurrent request, and serializing them (via the coordinator) keeps "which
+      // request failed" unambiguous. The coordinator also force-settles this to an explicit
+      // rejection on disconnect or explicit cancellation, so a vanished wallet/popup can never
+      // leave it locked forever, and never resubmits a late response.
       return coordinator.current.run(
         {
           operation: opts?.approval?.operation ?? opts?.operation ?? "transaction",
           account: address,
         },
-        () => walletSign(walletId, transaction, address, opts?.approval),
+        (signal) => walletSign(walletId, transaction, address, opts?.approval, signal),
       );
     },
     [address, walletId],
@@ -183,21 +223,30 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       walletId,
       isConnected: address !== null,
       isConnecting,
+      isSigning: pendingSigningRequest !== null,
       error,
+      rememberedWallet,
+      preferenceError,
+      clearRememberedWallet,
       pendingSigningRequest,
       connect,
       disconnect,
       signTransaction,
+      cancelSignature,
     }),
     [
       address,
       walletId,
       isConnecting,
       error,
+      rememberedWallet,
+      preferenceError,
+      clearRememberedWallet,
       pendingSigningRequest,
       connect,
       disconnect,
       signTransaction,
+      cancelSignature,
     ],
   );
   return (
