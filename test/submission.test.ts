@@ -170,6 +170,45 @@ describe("Signed Stellar submission failure boundaries", () => {
     expect(progress.mock.calls.some((call) => call[0] === "submitting")).toBe(false);
   });
 
+  it("classifies simulation transport failure without wallet approval or broadcast", async () => {
+    const { simulation, send } = setup();
+    simulation.mockRejectedValueOnce(new Error("Provider unavailable"));
+    const approve = vi.fn();
+    await expect(
+      submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), approve),
+    ).rejects.toMatchObject({ stage: "simulation", txHash: undefined });
+    expect(approve).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("blocks broadcast when required checkpoint persistence fails", async () => {
+    const { send } = setup();
+    const progress = (phase: string) => {
+      if (phase === "submitting") throw new Error("Recovery storage is unavailable");
+    };
+    await expect(
+      submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), sign, progress),
+    ).rejects.toMatchObject({ stage: "checkpoint", txHash: undefined });
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("retains the actual signed hash and broadcast stage for an uncertain network send", async () => {
+    const { send } = setup();
+    send.mockRejectedValueOnce(new Error("Provider timed out"));
+    const result = await submitOperation(
+      TESTNET.reader,
+      new Contract(TESTNET.router).call("noop"),
+      sign,
+    );
+    expect(result.status).toBe("pending");
+    expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.failure).toMatchObject({ stage: "broadcast", txHash: result.txHash });
+  });
+  it("keeps classification bounded and strips hashes from pre-broadcast stages", () => {
+    expect(
+      classifySubmissionFailure("build", new Error("x".repeat(1000)), "a".repeat(64)),
+    ).toMatchObject({ stage: "build", message: "x".repeat(400), txHash: undefined });
+    expect(classifySubmissionFailure("broadcast", "timeout", "fake").txHash).toBeUndefined();
+  });
+
   it("never asks the wallet or submits when simulation fails", async () => {
     const { simulation, send } = setup();
     simulation.mockResolvedValueOnce({
