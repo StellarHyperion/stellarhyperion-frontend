@@ -88,7 +88,10 @@ export const TESTNET = {
     "https://soroban-testnet.stellar.org",
   ),
   networkPassphrase: "Test SDF Network ; September 2015",
-  horizonUrl: "https://horizon-testnet.stellar.org",
+  horizonUrl: configured(
+    process.env.NEXT_PUBLIC_STELLAR_HORIZON_URL,
+    "https://horizon-testnet.stellar.org",
+  ),
 } as const;
 export const STELLAR_DEPLOYMENT = {
   chain: "stellar-testnet",
