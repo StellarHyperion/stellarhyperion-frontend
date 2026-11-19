@@ -61,6 +61,8 @@ export function assertWalletApproval(
 }
 
 export function verifyWalletSignature(original: string, signed: string, account: string): string {
+  if (!signed)
+    throw new Error("The wallet did not return a signed transaction. Review the transfer again.");
   const requested = TransactionBuilder.fromXdr(original, TESTNET.networkPassphrase);
   const result = TransactionBuilder.fromXdr(signed, TESTNET.networkPassphrase);
   if (!(requested instanceof Transaction) || !(result instanceof Transaction))
