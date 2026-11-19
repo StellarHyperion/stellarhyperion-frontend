@@ -29,6 +29,7 @@ import {
   quoteTransfer,
   readLane,
   readTransaction,
+  simulateBridgeOut,
   submitBridgeOut,
   submitSettleClaim,
   submitSettleClaims,
@@ -36,6 +37,7 @@ import {
   type LaneState,
   type LiveQuote,
   type PendingClaim,
+  type SimulatedOperation,
   type SubmissionReconciliation,
   type TransactionPhase,
   type TransactionResult,
@@ -92,7 +94,19 @@ function ApprovalDetails({
   );
 }
 
-function QuoteDetails({ quote }: { quote: LiveQuote }) {
+function QuoteDetails({
+  quote,
+  simulation,
+  simulating,
+  simulationError,
+}: {
+  quote: LiveQuote;
+  simulation?: SimulatedOperation | null;
+  simulating?: boolean;
+  simulationError?: string | null;
+}) {
+  const resourceFee = simulation?.resourceFee;
+  const networkFee = simulation?.networkFee;
   return (
     <dl className={styles.summary}>
       <div>
@@ -109,6 +123,30 @@ function QuoteDetails({ quote }: { quote: LiveQuote }) {
           {formatUnits(quote.relayGas, 7)} {quote.route === 0 ? "USDC" : "XLM"}
         </dd>
       </div>
+      {resourceFee !== undefined && (
+        <div>
+          <dt>Assembled resource fee</dt>
+          <dd>{formatUnits(resourceFee, 7)} XLM</dd>
+        </div>
+      )}
+      {networkFee !== undefined && (
+        <div>
+          <dt>Stellar network fee</dt>
+          <dd>{formatUnits(networkFee, 7)} XLM</dd>
+        </div>
+      )}
+      {simulating && (
+        <div>
+          <dt>Assembled resource fee</dt>
+          <dd>Estimating simulation...</dd>
+        </div>
+      )}
+      {simulationError && (
+        <div>
+          <dt>Simulation status</dt>
+          <dd>Simulation failed</dd>
+        </div>
+      )}
       <div>
         <dt>Minimum received</dt>
         <dd>
@@ -187,6 +225,13 @@ function PendingTransferCard({
   const [checked, setChecked] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<LiveQuote | null>(null);
+  const currentAccount = useRef(wallet.address);
+  useLayoutEffect(() => {
+    currentAccount.current = wallet.address;
+  }, [wallet.address]);
+  const [cardSimulation, setCardSimulation] = useState<SimulatedOperation | null>(null);
+  const [cardSimulating, setCardSimulating] = useState(false);
+  const [cardSimError, setCardSimError] = useState<string | null>(null);
   const current =
     checked?.txHash === checkpoint.txHash
       ? checked
@@ -201,14 +246,25 @@ function PendingTransferCard({
     try {
       const result = await readTransaction(checkpoint.txHash);
       setChecked(result);
-      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount)
-        setReview(
-          await quoteTransfer(
-            checkpoint.destination,
-            BigInt(checkpoint.bridgeAmount),
-            checkpoint.route,
-          ),
+      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+        const nextQuote = await quoteTransfer(
+          checkpoint.destination,
+          BigInt(checkpoint.bridgeAmount),
+          checkpoint.route,
         );
+        setReview(nextQuote);
+        setCardSimulating(true);
+        setCardSimError(null);
+        try {
+          const sim = await simulateBridgeOut(checkpoint.account, nextQuote, checkpoint.recipient);
+          setCardSimulation(sim);
+        } catch (simCause) {
+          setCardSimulation(null);
+          setCardSimError(errorMessage(simCause));
+        } finally {
+          setCardSimulating(false);
+        }
+      }
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -216,7 +272,8 @@ function PendingTransferCard({
     }
   };
   const continueBridge = async () => {
-    if (!review || !sameAccount || checking) return;
+    if (!review || !sameAccount || checking || cardSimulating || !!cardSimError || !cardSimulation)
+      return;
     setChecking(true);
     setError(null);
     try {
@@ -228,9 +285,13 @@ function PendingTransferCard({
         (_phase, hash) => {
           if (hash) saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
         },
+        { account: checkpoint.account, network: TESTNET.networkPassphrase, operation: "bridge" },
+        { expectedAccount: checkpoint.account, getCurrentAccount: () => currentAccount.current },
+        cardSimulation,
       );
       setChecked(result);
       setReview(null);
+      setCardSimulation(null);
     } catch (cause) {
       const message = errorMessage(cause);
       if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
@@ -314,7 +375,11 @@ function PendingTransferCard({
       {review && (
         <ReviewDialog
           onClose={() => {
-            if (!checking) setReview(null);
+            if (!checking) {
+              setReview(null);
+              setCardSimulation(null);
+              setCardSimError(null);
+            }
           }}
         >
           <p className={styles.reviewNote}>
@@ -327,17 +392,36 @@ function PendingTransferCard({
               operation: "bridge",
             }}
           />
-          <QuoteDetails quote={review} />
+          <QuoteDetails quote={review} simulation={cardSimulation} />
           <p className={styles.address}>Recipient: {checkpoint.recipient}</p>
+          {cardSimulation && (
+            <p className={styles.address}>
+              Operation: bridge_out_with_gas ({formatUnits(cardSimulation.totalFee, 7)} XLM total
+              envelope fee)
+            </p>
+          )}
+          {cardSimError && (
+            <p role="alert" className={styles.error}>
+              Simulation failed: {cardSimError}. Approval blocked.
+            </p>
+          )}
           <button
             type="button"
             className={styles.primary}
-            disabled={checking || !sameAccount}
+            disabled={
+              checking || !sameAccount || cardSimulating || !!cardSimError || !cardSimulation
+            }
             onClick={() => {
               void continueBridge();
             }}
           >
-            {checking ? "Confirming in your wallet..." : "Bridge converted USDC"}
+            {checking
+              ? "Confirming in your wallet..."
+              : cardSimulating
+                ? "Estimating simulation..."
+                : cardSimError
+                  ? "Approval blocked"
+                  : "Bridge converted USDC"}
           </button>
           {error && <p role="alert">{error}</p>}
         </ReviewDialog>
@@ -380,10 +464,16 @@ export function Bridge() {
   const [step, setStep] = useState<"conversion" | "bridge">("bridge");
   const [result, setResult] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [simulatedState, setSimulatedState] = useState<{
+    key: string;
+    value: SimulatedOperation | null;
+    error: string | null;
+  } | null>(null);
   const [reviewed, setReviewed] = useState<{
     key: string;
     quote: TradeQuote;
     addTrustline: boolean;
+    simulation: SimulatedOperation | null;
   } | null>(null);
   const laneKey = `${destination}:${route}:${refresh}`;
   const lane = laneState?.key === laneKey ? laneState.value : null;
@@ -391,6 +481,9 @@ export function Bridge() {
   const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
   const quote = quoted?.key === quoteKey && lane?.available ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
+  const simKey = `${quoteKey}:${wallet.address}`;
+  const simulation = simulatedState?.key === simKey ? simulatedState.value : null;
+  const simulationError = simulatedState?.key === simKey ? simulatedState.error : null;
   const balances = accounts?.account === wallet.address ? accounts.assets : [];
   const walletAsset = balances.find((asset) => asset.id === source.id);
   const activeSource: SourceAsset = useMemo(
@@ -463,6 +556,13 @@ export function Bridge() {
   }
   const fetching =
     valid && !locked && !laneError && (!lane || (lane.available && quoted?.key !== quoteKey));
+  const simulating =
+    valid &&
+    !!wallet.address &&
+    !!quote &&
+    !quote.conversion &&
+    !locked &&
+    simulatedState?.key !== simKey;
   const chain = destinationFor(destination);
   const invalidateQuote = () => {
     setQuoteVersion((version) => version + 1);
@@ -519,6 +619,26 @@ export function Bridge() {
       clearTimeout(timer);
     };
   }, [valid, lane, locked, destination, activeSource, amount, route, quoteKey]);
+  useEffect(() => {
+    const sender = wallet.address;
+    // Conversion funds the later bridge. Simulate that bridge only after conversion confirms.
+    if (!valid || !quote || quote.conversion || !sender || locked) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      void simulateBridgeOut(sender, quote.bridge, recipient)
+        .then((sim) => {
+          if (active) setSimulatedState({ key: simKey, value: sim, error: null });
+        })
+        .catch((cause: unknown) => {
+          if (active) setSimulatedState({ key: simKey, value: null, error: errorMessage(cause) });
+        });
+    }, 450);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [valid, quote, wallet.address, locked, recipient, simKey]);
+
   const submit = async () => {
     if (!reviewed || !wallet.address || busy || checkpoint) return;
     if (reviewApproval?.account !== wallet.address) {
@@ -626,6 +746,8 @@ export function Bridge() {
         }
         converted = pending("conversion", swap.txHash);
         saveCheckpoint(converted);
+        setResult(swap);
+        return;
       }
       setStep("bridge");
       setPhase("preparing");
@@ -643,6 +765,7 @@ export function Bridge() {
         },
         { ...reviewApproval, operation: "bridge" },
         bridgeReconcile,
+        reviewed.simulation ?? undefined,
       );
       setResult(submitted);
     } catch (cause) {
@@ -661,6 +784,7 @@ export function Bridge() {
     setError(null);
     setReviewed(null);
     setAmount("");
+    setSimulatedState(null);
     setRefresh((value) => value + 1);
   };
   const insufficient = quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
@@ -882,7 +1006,12 @@ export function Bridge() {
                 Fee details <ChevronDown size={13} aria-hidden="true" />
               </span>
             </summary>
-            <QuoteDetails quote={quote.bridge} />
+            <QuoteDetails
+              quote={quote.bridge}
+              simulation={simulation}
+              simulating={simulating}
+              simulationError={simulationError}
+            />
             {quote.conversion && <ConversionDetails conversion={quote.conversion} />}
             <p className={styles.assetNote}>
               Quoted at Stellar ledger {quote.bridge.ledger}. Fees are checked again before signing.
@@ -955,6 +1084,7 @@ export function Bridge() {
               className={styles.primary}
               disabled={
                 !quote ||
+                (!quote.conversion && !simulation) ||
                 busy ||
                 !!insufficient ||
                 sourceBalance === undefined ||
@@ -962,7 +1092,7 @@ export function Bridge() {
                 activeSource.trustline === "unauthorized"
               }
               onClick={() => {
-                if (!wallet.address || !quote) return;
+                if (!wallet.address || !quote || (!quote.conversion && !simulation)) return;
                 setReviewApproval({
                   account: wallet.address,
                   network: TESTNET.networkPassphrase,
@@ -971,12 +1101,19 @@ export function Bridge() {
                 setReviewed({
                   key: quoteKey,
                   quote,
+                  simulation,
                   addTrustline: !balances.some((asset) => asset.id === USDC.id),
                 });
                 setReviewing(true);
               }}
             >
-              {fetching ? "Finding your route..." : "Review transfer"}
+              {fetching
+                ? "Finding your route..."
+                : simulating
+                  ? "Estimating bridge fees..."
+                  : simulationError
+                    ? "Refresh to retry simulation"
+                    : "Review transfer"}
               <ArrowRight size={18} aria-hidden="true" />
             </button>
           )
@@ -1083,24 +1220,44 @@ export function Bridge() {
               addTrustline={reviewed.addTrustline}
             />
           )}
-          <QuoteDetails quote={reviewed.quote.bridge} />
+          <QuoteDetails quote={reviewed.quote.bridge} simulation={reviewed.simulation} />
           {reviewed.quote.conversion && (
             <p className={styles.reviewNote}>
-              Two signatures: convert to USDC, then bridge. Price tolerance is 0.5%. If the bridge
-              cannot proceed, your converted USDC remains in your wallet.
+              Two signatures: convert to USDC, then review the bridge simulation and its fees. Price
+              tolerance is 0.5%. If the bridge cannot proceed, your converted USDC remains in your
+              wallet.
             </p>
           )}
           <p className={styles.reviewNote}>
             Source confirmation starts the transfer. Destination delivery is verified separately.
           </p>
+          {reviewed.simulation && (
+            <p className={styles.address}>
+              Operation: bridge_out_with_gas ({formatUnits(reviewed.simulation.totalFee, 7)} XLM
+              total envelope fee)
+            </p>
+          )}
+          {simulationError && (
+            <p role="alert" className={styles.error}>
+              Simulation failed: {simulationError}. Approval blocked.
+            </p>
+          )}
           <button
             type="button"
             className={styles.primary}
+            disabled={
+              !reviewed.quote.conversion && (simulating || !!simulationError || !simulation)
+            }
             onClick={() => {
               void submit();
             }}
           >
-            Confirm in wallet <ArrowUpRight size={17} aria-hidden="true" />
+            {simulating
+              ? "Estimating simulation..."
+              : simulationError
+                ? "Approval blocked"
+                : "Confirm in wallet"}{" "}
+            <ArrowUpRight size={17} aria-hidden="true" />
           </button>
         </ReviewDialog>
       )}

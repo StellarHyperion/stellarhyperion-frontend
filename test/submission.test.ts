@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Account,
+  Address,
+  Contract,
   Keypair,
   SorobanDataBuilder,
   TransactionBuilder,
@@ -9,7 +11,7 @@ import {
   type xdr,
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
-import { submitSettleClaim } from "../src/contracts/stellar";
+import { submitSettleClaim, submitOperation, simulateOperation } from "../src/contracts/stellar";
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 import {
   planMaxUsdcAmount,
@@ -24,7 +26,7 @@ const success = (retval: xdr.ScVal): rpc.Api.SimulateTransactionSuccessResponse 
   latestLedger: 1,
   events: [],
   _parsed: true,
-  transactionData: new SorobanDataBuilder(),
+  transactionData: new SorobanDataBuilder().setResourceFee(100),
   minResourceFee: "100",
   result: { auth: [], retval },
 });
@@ -190,6 +192,115 @@ describe("Signed Stellar submission failure boundaries", () => {
     };
     await expect(submitSettleClaim(key.publicKey(), 1n, altered)).rejects.toThrow();
     expect(send).not.toHaveBeenCalled();
+  });
+  it("blocks approval and rejects submission when simulation fails", async () => {
+    const { simulation, send } = setup();
+    simulation.mockReset();
+    simulation.mockResolvedValue({
+      id: "test",
+      latestLedger: 1,
+      _parsed: true,
+      events: [],
+      error: "unsupported route on router",
+    });
+    const wallet = vi.fn(sign);
+    const op = new Contract(TESTNET.router).call(
+      "settle_claim",
+      new Address(key.publicKey()).toScVal(),
+      nativeToScVal(1n, { type: "u64" }),
+    );
+    await expect(submitOperation(key.publicKey(), op, wallet)).rejects.toThrow(
+      "unsupported route on router",
+    );
+    expect(wallet).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("submits the exact assembled envelope matching the displayed operation", async () => {
+    const { simulation, send } = setup();
+    simulation.mockReset();
+    simulation.mockResolvedValue(success(nativeToScVal(1n)));
+    let hash: string | undefined;
+    send.mockImplementation((tx) => {
+      hash = toHex(tx.hash()).slice(2);
+      return Promise.reject(new Error("timeout"));
+    });
+    const op = new Contract(TESTNET.router).call(
+      "settle_claim",
+      new Address(key.publicKey()).toScVal(),
+      nativeToScVal(1n, { type: "u64" }),
+    );
+    const sim = await simulateOperation(key.publicKey(), op);
+    expect(sim.resourceFee).toBe(100n);
+    expect(sim.networkFee).toBe(100n);
+    expect(sim.totalFee).toBe(200n);
+
+    let submittedXdr: string | undefined;
+    const wallet = vi.fn((xdrVal: string) => {
+      submittedXdr = xdrVal;
+      return sign(xdrVal);
+    });
+
+    const result = await submitOperation(
+      key.publicKey(),
+      op,
+      wallet,
+      undefined,
+      undefined,
+      undefined,
+      sim,
+    );
+    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(wallet).toHaveBeenCalledTimes(1);
+    expect(submittedXdr).toBe(sim.envelopeXdr);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it("rejects submission when displayed operation does not correspond to the simulated envelope", async () => {
+    const { simulation, send } = setup();
+    simulation.mockReset();
+    simulation.mockResolvedValue(success(nativeToScVal(1n)));
+    const op1 = new Contract(TESTNET.router).call(
+      "settle_claim",
+      new Address(key.publicKey()).toScVal(),
+      nativeToScVal(1n, { type: "u64" }),
+    );
+    const op2 = new Contract(TESTNET.router).call(
+      "settle_claim",
+      new Address(key.publicKey()).toScVal(),
+      nativeToScVal(2n, { type: "u64" }),
+    );
+    const sim = await simulateOperation(key.publicKey(), op2);
+    const wallet = vi.fn(sign);
+    await expect(
+      submitOperation(key.publicKey(), op1, wallet, undefined, undefined, undefined, sim),
+    ).rejects.toThrow(
+      "Displayed operation does not correspond to the envelope sent to the wallet.",
+    );
+    expect(wallet).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("exposes actual assembled resource fee and network fee distinctly", async () => {
+    const { simulation } = setup();
+    simulation.mockReset();
+    const simSuccess: rpc.Api.SimulateTransactionSuccessResponse = {
+      id: "test",
+      latestLedger: 1,
+      events: [],
+      _parsed: true,
+      transactionData: new SorobanDataBuilder().setResourceFee(45000),
+      minResourceFee: "45000",
+      result: { auth: [], retval: nativeToScVal(1n) },
+    };
+    simulation.mockResolvedValue(simSuccess);
+    const op = new Contract(TESTNET.router).call(
+      "settle_claim",
+      new Address(key.publicKey()).toScVal(),
+      nativeToScVal(1n, { type: "u64" }),
+    );
+    const sim = await simulateOperation(key.publicKey(), op);
+    expect(sim.resourceFee).toBe(45000n);
+    expect(sim.totalFee).toBe(45100n);
+    expect(sim.networkFee).toBe(100n);
+    expect(sim.preparedTransaction.fee).toBe("45100");
   });
   it("does not broadcast after the wallet disconnects while signing", async () => {
     const { send } = setup();

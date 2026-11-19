@@ -58,6 +58,8 @@ export interface LiveQuote {
   requestedAmount: bigint;
   relayGas: bigint;
   estimatedRelayGas?: bigint;
+  resourceFee?: bigint;
+  networkFee?: bigint;
 }
 export interface LaneState {
   available: boolean;
@@ -656,6 +658,8 @@ export interface ReviewSnapshot {
   stage: "conversion" | "bridge";
   sourceId?: string;
   sourceAmount?: bigint;
+  resourceFee?: bigint;
+  networkFee?: bigint;
 }
 
 export interface SubmissionReconciliation {
@@ -684,6 +688,20 @@ export function validateReviewMatch(original: ReviewSnapshot, current: ReviewSna
     return false;
   }
   if (original.sourceAmount !== undefined && original.sourceAmount !== current.sourceAmount) {
+    return false;
+  }
+  if (
+    original.resourceFee !== undefined &&
+    current.resourceFee !== undefined &&
+    original.resourceFee !== current.resourceFee
+  ) {
+    return false;
+  }
+  if (
+    original.networkFee !== undefined &&
+    current.networkFee !== undefined &&
+    original.networkFee !== current.networkFee
+  ) {
     return false;
   }
   return true;
@@ -747,16 +765,42 @@ export async function verifyAccountSequence(
   }
 }
 
-export async function submitOperation(
+export interface SimulatedOperation {
+  resourceFee: bigint;
+  networkFee: bigint;
+  totalFee: bigint;
+  preparedTransaction: Transaction;
+  envelopeXdr: string;
+  sequence: string;
+}
+
+export function validateEnvelopeOperation(
+  expectedOperation: xdr.Operation,
+  preparedTransaction: Transaction,
+): boolean {
+  const envelope = preparedTransaction.toEnvelope();
+  if (envelope.type !== "envelopeTypeTx" || envelope.v1.tx.operations.length !== 1) return false;
+  const actual = envelope.v1.tx.operations[0];
+  if (
+    !actual ||
+    expectedOperation.body.type !== "invokeHostFunction" ||
+    actual.body.type !== "invokeHostFunction"
+  )
+    return false;
+  // Assembly adds the authorization entries returned by simulation. The reviewed call
+  // and operation source must stay identical; the full assembled envelope is frozen separately.
+  return (
+    actual.body.invokeHostFunctionOp.hostFunction.toXdr("base64") ===
+      expectedOperation.body.invokeHostFunctionOp.hostFunction.toXdr("base64") &&
+    actual.sourceAccount?.toXdr("base64") === expectedOperation.sourceAccount?.toXdr("base64")
+  );
+}
+
+export async function simulateOperation(
   sender: string,
   operation: xdr.Operation,
-  sign: WalletSigner,
-  progress?: (phase: TransactionPhase, hash?: string) => void,
-  approval?: WalletApprovalProvenance,
-  reconcile?: SubmissionReconciliation,
-): Promise<TransactionResult> {
+): Promise<SimulatedOperation> {
   const client = server();
-  progress?.("preparing");
   const network = await client.getNetwork();
   if (network.passphrase !== TESTNET.networkPassphrase)
     throw new Error("The RPC endpoint is not Stellar Testnet.");
@@ -777,6 +821,76 @@ export async function submitOperation(
     );
   }
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
+  const envelope = prepared.toEnvelope();
+  if (envelope.type !== "envelopeTypeTx" || envelope.v1.tx.ext.type !== "sorobanData")
+    throw new Error("The simulation did not assemble a Soroban envelope.");
+  const resourceFee = envelope.v1.tx.ext.sorobanData.resourceFee;
+  const totalFee = BigInt(prepared.fee);
+  const networkFee = totalFee - resourceFee;
+  if (networkFee < 0n) throw new Error("Invalid simulation fee data. Refresh the simulation.");
+  return {
+    resourceFee,
+    networkFee,
+    totalFee,
+    preparedTransaction: prepared,
+    envelopeXdr: prepared.toXdr(),
+    sequence: prepared.sequence,
+  };
+}
+
+export async function simulateBridgeOut(
+  sender: string,
+  quoted: LiveQuote,
+  recipient: string,
+): Promise<SimulatedOperation> {
+  validateRecipient(recipient);
+  const operation = bridgeOperation(sender, quoted, recipient);
+  return simulateOperation(sender, operation);
+}
+
+export async function submitOperation(
+  sender: string,
+  operation: xdr.Operation,
+  sign: WalletSigner,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
+  approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
+  simulated?: SimulatedOperation,
+): Promise<TransactionResult> {
+  const client = server();
+  progress?.("preparing");
+  const network = await client.getNetwork();
+  if (network.passphrase !== TESTNET.networkPassphrase)
+    throw new Error("The RPC endpoint is not Stellar Testnet.");
+  let prepared: Transaction;
+  if (simulated) {
+    if (!validateEnvelopeOperation(operation, simulated.preparedTransaction)) {
+      throw new Error(
+        "Displayed operation does not correspond to the envelope sent to the wallet.",
+      );
+    }
+    prepared = simulated.preparedTransaction;
+    const envelope = prepared.toEnvelope();
+    if (
+      envelope.type !== "envelopeTypeTx" ||
+      envelope.v1.tx.ext.type !== "sorobanData" ||
+      simulated.totalFee !== BigInt(prepared.fee) ||
+      simulated.resourceFee !== envelope.v1.tx.ext.sorobanData.resourceFee ||
+      simulated.networkFee !== simulated.totalFee - simulated.resourceFee
+    )
+      throw new Error(
+        "The displayed simulation fees changed. Review a fresh simulation before signing.",
+      );
+    if (
+      prepared.source !== sender ||
+      prepared.toXdr() !== simulated.envelopeXdr ||
+      prepared.sequence !== simulated.sequence
+    )
+      throw new Error("The reviewed simulation changed. Review a fresh simulation before signing.");
+  } else {
+    const sim = await simulateOperation(sender, operation);
+    prepared = sim.preparedTransaction;
+  }
   await verifyAccountSequence(client, sender, prepared.sequence);
   progress?.("signing");
   return signAndSubmit(prepared, sign, progress, approval, reconcile);
@@ -892,6 +1006,7 @@ export async function submitBridgeOut(
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
+  simulated?: SimulatedOperation,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
   const refreshed = await quoteTransfer(
@@ -917,6 +1032,7 @@ export async function submitBridgeOut(
     progress,
     approval,
     reconcile,
+    simulated,
   );
 }
 
