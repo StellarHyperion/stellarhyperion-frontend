@@ -269,6 +269,16 @@ export interface TradeQuote {
   conversion: Conversion | null;
 }
 
+export type ConversionPathIssue = "no-liquidity" | "malformed-path" | "unsupported" | "temporary";
+
+export function conversionPathIssue(error: unknown): ConversionPathIssue {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (message.includes("no liquid") || message.includes("too small")) return "no-liquidity";
+  if (message.includes("invalid") || message.includes("malformed")) return "malformed-path";
+  if (message.includes("unsupported") || message.includes("frozen") || message.includes("authorized")) return "unsupported";
+  return "temporary";
+}
+
 export async function quoteConversion(source: SourceAsset, amount: bigint): Promise<Conversion> {
   const asset = stellarAsset(source);
   if (source.trustline === "frozen")

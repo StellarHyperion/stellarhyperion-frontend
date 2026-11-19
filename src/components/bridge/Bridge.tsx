@@ -18,6 +18,7 @@ import { formatUnits, parseUnits } from "@hyperion/protocol";
 import { fetchClaims } from "../../api";
 import {
   TESTNET,
+  TESTNET_CONFIGURATION_FINGERPRINT,
   destinationFor,
   destinationDecimals,
   type BridgeRoute,
@@ -51,6 +52,7 @@ import {
   conversionExecutionIntent,
   conversionRoute,
   quoteTrade,
+  conversionPathIssue,
   spendableBalance,
   submitConversion,
   stellarAsset,
@@ -598,7 +600,7 @@ export function Bridge() {
   const laneKey = `${destination}:${route}:${refresh}`;
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
-  const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
+  const quoteKey = `${TESTNET_CONFIGURATION_FINGERPRINT}:${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
   const quote = quoted?.key === quoteKey && lane?.available ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
   const simKey = `${quoteKey}:${wallet.address}`;
@@ -1214,6 +1216,7 @@ export function Bridge() {
         {(error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
           <p role="alert" className={styles.error}>
             {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
+            {quoteError && conversionPathIssue(new Error(quoteError)) === "temporary" && " Refresh and try again."}
           </p>
         )}
         {insufficient && (
