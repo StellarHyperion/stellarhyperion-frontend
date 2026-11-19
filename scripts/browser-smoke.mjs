@@ -153,6 +153,20 @@ try {
     await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
     checkpointBeforeNavigation,
   );
+  const otherTab = await page.context().newPage();
+  await otherTab.goto(origin, { waitUntil: "domcontentloaded" });
+  await otherTab.evaluate(() => {
+    const checkpoint = JSON.parse(localStorage.getItem("hyperion.testnet.pending-transfer"));
+    localStorage.setItem(
+      "hyperion.testnet.pending-transfer",
+      JSON.stringify({ ...checkpoint, txHash: "f".repeat(64) }),
+    );
+  });
+  await page
+    .getByRole("region", { name: "Transfer recovery" })
+    .getByRole("link", { name: /f{12}\.\.\.f{8}/ })
+    .waitFor();
+  await otherTab.close();
   await page.evaluate(() => {
     localStorage.removeItem("hyperion.testnet.pending-transfer");
     window.dispatchEvent(new Event("hyperion:pending-transfer"));

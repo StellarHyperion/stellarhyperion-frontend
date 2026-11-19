@@ -75,6 +75,8 @@ import {
   saveCheckpoint,
   assertCheckpointStorage,
   useTransferCheckpoint,
+  getTransferCheckpoint,
+  checkpointIdentity,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
 import { useStellarWallet } from "../../wallets";
@@ -419,7 +421,15 @@ function PendingTransferCard({
     const controller = new AbortController();
     requestRef.current = controller;
     const owner = recoveryOwner;
-    const active = () => !controller.signal.aborted && ownerRef.current === owner;
+    const active = () => {
+      const saved = getTransferCheckpoint();
+      return (
+        !controller.signal.aborted &&
+        ownerRef.current === owner &&
+        saved !== null &&
+        checkpointIdentity(saved) === checkpointIdentity(checkpoint)
+      );
+    };
     setChecking(true);
     setError(null);
     try {
@@ -492,7 +502,15 @@ function PendingTransferCard({
     const controller = new AbortController();
     requestRef.current = controller;
     const owner = recoveryOwner;
-    const active = () => !controller.signal.aborted && ownerRef.current === owner;
+    const active = () => {
+      const saved = getTransferCheckpoint();
+      return (
+        !controller.signal.aborted &&
+        ownerRef.current === owner &&
+        saved !== null &&
+        checkpointIdentity(saved) === checkpointIdentity(checkpoint)
+      );
+    };
     setChecking(true);
     setError(null);
     try {
@@ -1163,13 +1181,18 @@ export function Bridge() {
     }
   };
   const reset = () => {
-    saveCheckpoint(null);
-    setResult(null);
-    setError(null);
-    setReviewed(null);
-    setAmount("");
-    setSimulatedState(null);
-    setRefresh((value) => value + 1);
+    if (!checkpoint) return;
+    try {
+      saveCheckpoint(null, checkpoint);
+      setResult(null);
+      setError(null);
+      setReviewed(null);
+      setAmount("");
+      setSimulatedState(null);
+      setRefresh((value) => value + 1);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    }
   };
   const insufficient = quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
   // Exceeds route liquidity even when the wallet balance is sufficient.
