@@ -6,6 +6,7 @@ import {
   conversionExecutionIntent,
   conversionRoute,
   conversionOperations,
+  revalidateConversion,
   issuerVerificationLabel,
   quoteTrade,
   searchAssets,
@@ -18,7 +19,7 @@ import {
   trustlineLabel,
 } from "../src/contracts/assets";
 import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
-import { TESTNET } from "../src/config/testnet";
+import { DESTINATIONS, TESTNET } from "../src/config/testnet";
 import { relayBudget } from "../src/lib/relay-budget";
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -111,6 +112,29 @@ describe("Real Stellar conversion transaction boundaries", () => {
     await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow("No liquid");
     answer([{ ...path, destination_asset_issuer: TESTNET.reader }]);
     await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow("No liquid");
+  });
+  it("rechecks live liquidity without changing reviewed conversion bounds", async () => {
+    const reviewed = { source: XLM, sourceMax: 10000000n, usdcAmount: 8000000n, path: [] };
+    answer([
+      {
+        ...path,
+        destination_amount: "0.8100000",
+        path: [
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "EUR",
+            asset_issuer: USDC.issuer,
+          },
+        ],
+      },
+    ]);
+    await expect(revalidateConversion(reviewed)).rejects.toThrow("conversion path changed");
+    answer([{ ...path, destination_amount: "0.8100000", path: [] }]);
+    expect(await revalidateConversion(reviewed)).toBe(reviewed);
+    answer([{ ...path, destination_amount: "0.8000000" }]);
+    await expect(revalidateConversion(reviewed)).rejects.toThrow("reviewed USDC minimum");
+    answer([]);
+    await expect(revalidateConversion(reviewed)).rejects.toThrow("No liquid");
   });
   it("keeps issuer identity and rejects invalid assets or oversized source amounts", async () => {
     expect(() => stellarAsset({ ...USDC, id: "USDC:different" })).toThrow();
@@ -361,6 +385,15 @@ describe("Real Stellar conversion transaction boundaries", () => {
     expect(suggestSourceSpend(precisionAsset)).toBe("0.0000001");
   });
 });
+describe("Independently verified testnet bridge lanes", () => {
+  it("exposes only the routes backed by checked-in delivery evidence", () => {
+    expect(Object.fromEntries(DESTINATIONS.map(({ key, routes }) => [key, routes]))).toEqual({
+      sepolia: [0, 1],
+      "base-sepolia": [0],
+      "arc-testnet": [0],
+    });
+  });
+});
 describe("Interrupted transfer recovery", () => {
   const checkpoint: TransferCheckpoint = {
     router: TESTNET.router,
@@ -394,6 +427,39 @@ describe("Live relay fee headroom", () => {
     expect(relayBudget(842780n, 10n)).toBe(927060n);
     expect(relayBudget(9007199254740993n)).toBe(9907919180215093n);
     expect(() => relayBudget(0n)).toThrow();
+  });
+});
+
+describe("Native reserve-aware balances", () => {
+  it("subtracts live subentry and sponsorship reserves before suggesting spendable XLM", async () => {
+    const payload = {
+      subentry_count: 20,
+      num_sponsoring: 2,
+      num_sponsored: 4,
+      balances: [{ asset_type: "native", balance: "12.0000000", selling_liabilities: "1.0000000" }],
+    };
+    const ledger = { _embedded: { records: [{ base_reserve_in_stroops: 5000000 }] } };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(payload)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(ledger)));
+    vi.stubGlobal("fetch", fetcher);
+    const native = (await accountAssets(TESTNET.reader))[0];
+    expect(native?.nativeMinimumReserve).toBe("10.0000000");
+    expect(native?.available).toBe("1.0000000");
+  });
+  it("does not invent native spendable funds when reserve metadata is absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ balances: [{ asset_type: "native", balance: "99.0000000" }] }),
+          ),
+        ),
+    );
+    expect((await accountAssets(TESTNET.reader))[0]?.available).toBe("0.0000000");
   });
 });
 

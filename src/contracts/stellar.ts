@@ -5,6 +5,7 @@ import {
   BASE_FEE,
   Contract,
   TransactionBuilder,
+  type FeeBumpTransaction,
   type Transaction,
   nativeToScVal,
   rpc,
@@ -29,6 +30,7 @@ import {
   type DestinationKey,
 } from "../config/testnet";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
+import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
@@ -56,6 +58,8 @@ export interface LiveQuote {
   requestedAmount: bigint;
   relayGas: bigint;
   estimatedRelayGas?: bigint;
+  resourceFee?: bigint;
+  networkFee?: bigint;
 }
 export interface LaneState {
   available: boolean;
@@ -71,6 +75,7 @@ export interface PendingClaim {
   token: string;
   amount: bigint;
   settled: boolean;
+  eligibility: ClaimPayoutEligibility;
   deployment: RouterDeploymentIdentity;
 }
 export interface RouterDeploymentIdentity {
@@ -93,6 +98,118 @@ export function claimMatchesDeployment(
     claim.deployment.router === deployment.router &&
     claim.deployment.wasmHash === deployment.wasmHash
   );
+}
+
+export const MAX_BATCH_CLAIMS = 20;
+
+export function supportsBatchClaimSettlement(methods: readonly xdr.ScSpecFunctionV0[]): boolean {
+  return methods.some((method) => {
+    const [sender, ids] = method.inputs;
+    return (
+      method.name.toString() === "settle_claims" &&
+      method.inputs.length === 2 &&
+      sender?.type.type === "scSpecTypeAddress" &&
+      ids?.type.type === "scSpecTypeVec" &&
+      ids.type.value.elementType.type === "scSpecTypeU64"
+    );
+  });
+}
+
+export type ClaimPayoutStatus = "eligible" | "ineligible" | "unknown";
+export interface ClaimPayoutEligibility {
+  status: ClaimPayoutStatus;
+  reason: string;
+  previewMethod: string | null;
+  trustline: "required" | "not-required" | "unknown";
+}
+
+const CLAIM_PREVIEW_METHODS = ["preview_settle_claim", "can_settle_claim"] as const;
+
+export function parseClaimPreview(value: unknown, method: string): ClaimPayoutEligibility {
+  if (typeof value === "boolean")
+    return {
+      status: value ? "eligible" : "ineligible",
+      reason: value
+        ? "The router preview allows settlement."
+        : "The router preview rejected settlement.",
+      previewMethod: method,
+      trustline: "unknown",
+    };
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return {
+      status: "unknown",
+      reason: "The router preview returned an unsupported response.",
+      previewMethod: method,
+      trustline: "unknown",
+    };
+  const record = value as Record<string, unknown>;
+  const eligible =
+    typeof record.eligible === "boolean"
+      ? record.eligible
+      : typeof record.can_settle === "boolean"
+        ? record.can_settle
+        : null;
+  const trustline =
+    record.trustline === true || record.trustline_required === true
+      ? "required"
+      : record.trustline === false || record.has_trustline === true
+        ? "not-required"
+        : "unknown";
+  return {
+    status: eligible === null ? "unknown" : eligible ? "eligible" : "ineligible",
+    reason:
+      typeof record.reason === "string"
+        ? record.reason
+        : eligible === true
+          ? "The router preview allows settlement."
+          : eligible === false
+            ? "The router preview rejected settlement."
+            : "The router preview did not report payout eligibility.",
+    previewMethod: method,
+    trustline,
+  };
+}
+
+async function claimPayoutEligibility(id: bigint, token: string): Promise<ClaimPayoutEligibility> {
+  if (token !== TESTNET.token)
+    return {
+      status: "ineligible",
+      reason: "This claim uses a token that is not the configured Stellar USDC asset.",
+      previewMethod: null,
+      trustline: "unknown",
+    };
+  let methods: Awaited<ReturnType<typeof contractMethods>>;
+  try {
+    methods = await contractMethods(TESTNET.router);
+  } catch {
+    return {
+      status: "unknown",
+      reason: "The router preview methods could not be checked.",
+      previewMethod: null,
+      trustline: "unknown",
+    };
+  }
+  const method = CLAIM_PREVIEW_METHODS.find((candidate) =>
+    methods.some((entry) => entry.name === candidate),
+  );
+  if (!method)
+    return {
+      status: "unknown",
+      reason: "This router does not expose a payout eligibility preview.",
+      previewMethod: null,
+      trustline: "unknown",
+    };
+  try {
+    const result = await view(TESTNET.router, method, [nativeToScVal(id, { type: "u64" })]);
+    return parseClaimPreview(result.value, method);
+  } catch {
+    return {
+      status: "unknown",
+      reason: "The router payout eligibility preview could not be completed.",
+      previewMethod: method,
+      trustline: "unknown",
+    };
+  }
 }
 
 function server() {
@@ -232,10 +349,10 @@ export async function readLane(
   route: BridgeRoute = 1,
 ): Promise<LaneState> {
   const destination = destinationFor(destinationKey);
-  if (route === 1 && destinationKey !== "sepolia")
+  if (!destination.routes.includes(route))
     return {
       available: false,
-      reason: "Axelar ITS is configured for Sepolia. Choose Circle CCTP for this network.",
+      reason: "This bridge does not have an independently verified lane to this testnet.",
       feeBps: null,
       ledger: 0,
       adapter: null,
@@ -532,16 +649,158 @@ export async function readTransaction(hash: string): Promise<TransactionResult |
   return { status: "pending", txHash: hash };
 }
 
-async function submitOperation(
+export interface ReviewSnapshot {
+  account: string;
+  recipient: string;
+  destination: DestinationKey;
+  route: BridgeRoute;
+  bridgeAmount: bigint;
+  stage: "conversion" | "bridge";
+  sourceId?: string;
+  sourceAmount?: bigint;
+  resourceFee?: bigint;
+  networkFee?: bigint;
+}
+
+export interface SubmissionReconciliation {
+  expectedAccount: string;
+  getCurrentAccount?: () => string | null;
+  isSuperseded?: () => boolean;
+  onAccountSwitch?: (
+    hash: string,
+    signedTx: Transaction | FeeBumpTransaction,
+  ) => void | Promise<void>;
+  validate?: (hash: string, signedTx: Transaction | FeeBumpTransaction) => void | Promise<void>;
+}
+
+export function validateReviewMatch(original: ReviewSnapshot, current: ReviewSnapshot): boolean {
+  if (
+    original.account !== current.account ||
+    original.recipient.trim().toLowerCase() !== current.recipient.trim().toLowerCase() ||
+    original.destination !== current.destination ||
+    original.route !== current.route ||
+    original.bridgeAmount !== current.bridgeAmount ||
+    original.stage !== current.stage
+  ) {
+    return false;
+  }
+  if (original.sourceId !== undefined && original.sourceId !== current.sourceId) {
+    return false;
+  }
+  if (original.sourceAmount !== undefined && original.sourceAmount !== current.sourceAmount) {
+    return false;
+  }
+  if (
+    original.resourceFee !== undefined &&
+    current.resourceFee !== undefined &&
+    original.resourceFee !== current.resourceFee
+  ) {
+    return false;
+  }
+  if (
+    original.networkFee !== undefined &&
+    current.networkFee !== undefined &&
+    original.networkFee !== current.networkFee
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function reconcileSignatureReturn(
+  original: ReviewSnapshot,
+  current: ReviewSnapshot | null,
+  currentAccount: string | null,
+  hash: string,
+): { valid: true } | { valid: false; reason: "superseded" | "account_switch" } {
+  if (!/^[0-9a-fA-F]{64}$/.test(hash)) {
+    return { valid: false, reason: "superseded" };
+  }
+  if (!current || !validateReviewMatch(original, current)) {
+    return { valid: false, reason: "superseded" };
+  }
+  if (currentAccount !== original.account) {
+    return { valid: false, reason: "account_switch" };
+  }
+  return { valid: true };
+}
+
+export interface SequenceDiagnostic {
+  valid: boolean;
+  expectedSequence: string;
+  ledgerSequence: string;
+  reason: string | null;
+}
+
+export function diagnoseSequence(
+  constructedSequence: string,
+  ledgerSequence: string,
+): SequenceDiagnostic {
+  const expectedLedgerSequence = (BigInt(constructedSequence) - 1n).toString();
+  if (ledgerSequence !== expectedLedgerSequence) {
+    return {
+      valid: false,
+      expectedSequence: expectedLedgerSequence,
+      ledgerSequence,
+      reason: `The account sequence changed from ${expectedLedgerSequence} to ${ledgerSequence} after construction. Review a fresh simulation before signing.`,
+    };
+  }
+  return {
+    valid: true,
+    expectedSequence: expectedLedgerSequence,
+    ledgerSequence,
+    reason: null,
+  };
+}
+
+export async function verifyAccountSequence(
+  client: rpc.Server,
+  accountAddress: string,
+  constructedSequence: string,
+): Promise<void> {
+  const latest = await client.getAccount(accountAddress);
+  const diagnostic = diagnoseSequence(constructedSequence, latest.sequenceNumber());
+  if (!diagnostic.valid) {
+    throw new Error(diagnostic.reason ?? "The account sequence changed after construction.");
+  }
+}
+
+export interface SimulatedOperation {
+  resourceFee: bigint;
+  networkFee: bigint;
+  totalFee: bigint;
+  preparedTransaction: Transaction;
+  envelopeXdr: string;
+  sequence: string;
+}
+
+export function validateEnvelopeOperation(
+  expectedOperation: xdr.Operation,
+  preparedTransaction: Transaction,
+): boolean {
+  const envelope = preparedTransaction.toEnvelope();
+  if (envelope.type !== "envelopeTypeTx" || envelope.v1.tx.operations.length !== 1) return false;
+  const actual = envelope.v1.tx.operations[0];
+  if (
+    !actual ||
+    expectedOperation.body.type !== "invokeHostFunction" ||
+    actual.body.type !== "invokeHostFunction"
+  )
+    return false;
+  // Assembly adds the authorization entries returned by simulation. The reviewed call
+  // and operation source must stay identical; the full assembled envelope is frozen separately.
+  return (
+    actual.body.invokeHostFunctionOp.hostFunction.toXdr("base64") ===
+      expectedOperation.body.invokeHostFunctionOp.hostFunction.toXdr("base64") &&
+    actual.sourceAccount?.toXdr("base64") === expectedOperation.sourceAccount?.toXdr("base64")
+  );
+}
+
+export async function simulateOperation(
   sender: string,
   operation: xdr.Operation,
-  sign: WalletSigner,
-  progress?: (phase: TransactionPhase, hash?: string) => void,
-  approval?: WalletApprovalProvenance,
-  signal?: AbortSignal,
-): Promise<TransactionResult> {
+): Promise<SimulatedOperation> {
   const client = server();
-  progress?.("preparing");
   const network = await client.getNetwork();
   if (network.passphrase !== TESTNET.networkPassphrase)
     throw new Error("The RPC endpoint is not Stellar Testnet.");
@@ -562,42 +821,109 @@ async function submitOperation(
     );
   }
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
+  const envelope = prepared.toEnvelope();
+  if (envelope.type !== "envelopeTypeTx" || envelope.v1.tx.ext.type !== "sorobanData")
+    throw new Error("The simulation did not assemble a Soroban envelope.");
+  const resourceFee = envelope.v1.tx.ext.sorobanData.resourceFee;
+  const totalFee = BigInt(prepared.fee);
+  const networkFee = totalFee - resourceFee;
+  if (networkFee < 0n) throw new Error("Invalid simulation fee data. Refresh the simulation.");
+  return {
+    resourceFee,
+    networkFee,
+    totalFee,
+    preparedTransaction: prepared,
+    envelopeXdr: prepared.toXdr(),
+    sequence: prepared.sequence,
+  };
+}
+
+export async function simulateBridgeOut(
+  sender: string,
+  quoted: LiveQuote,
+  recipient: string,
+): Promise<SimulatedOperation> {
+  validateRecipient(recipient);
+  const operation = bridgeOperation(sender, quoted, recipient);
+  return simulateOperation(sender, operation);
+}
+
+export async function submitOperation(
+  sender: string,
+  operation: xdr.Operation,
+  sign: WalletSigner,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
+  approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
+  simulated?: SimulatedOperation,
+  signal?: AbortSignal,
+): Promise<TransactionResult> {
+  const client = server();
+  progress?.("preparing");
+  const network = await client.getNetwork();
+  if (network.passphrase !== TESTNET.networkPassphrase)
+    throw new Error("The RPC endpoint is not Stellar Testnet.");
+  let prepared: Transaction;
+  if (simulated) {
+    if (!validateEnvelopeOperation(operation, simulated.preparedTransaction)) {
+      throw new Error(
+        "Displayed operation does not correspond to the envelope sent to the wallet.",
+      );
+    }
+    prepared = simulated.preparedTransaction;
+    const envelope = prepared.toEnvelope();
+    if (
+      envelope.type !== "envelopeTypeTx" ||
+      envelope.v1.tx.ext.type !== "sorobanData" ||
+      simulated.totalFee !== BigInt(prepared.fee) ||
+      simulated.resourceFee !== envelope.v1.tx.ext.sorobanData.resourceFee ||
+      simulated.networkFee !== simulated.totalFee - simulated.resourceFee
+    )
+      throw new Error(
+        "The displayed simulation fees changed. Review a fresh simulation before signing.",
+      );
+    if (
+      prepared.source !== sender ||
+      prepared.toXdr() !== simulated.envelopeXdr ||
+      prepared.sequence !== simulated.sequence
+    )
+      throw new Error("The reviewed simulation changed. Review a fresh simulation before signing.");
+  } else {
+    const sim = await simulateOperation(sender, operation);
+    prepared = sim.preparedTransaction;
+  }
+  await verifyAccountSequence(client, sender, prepared.sequence);
   progress?.("signing");
-  return signAndSubmit(prepared, sign, progress, approval, signal);
+  return signAndSubmit(prepared, sign, progress, approval, reconcile, signal);
 }
 
 export async function submitClassicOperations(
   sender: string,
-  operations: readonly xdr.Operation[],
+  operations: readonly xdr.Operation[] | (() => Promise<readonly xdr.Operation[]>),
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const client = server();
   if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
     throw new Error("The RPC endpoint is not Stellar Testnet.");
-  const builder = new TransactionBuilder(await client.getAccount(sender), {
+  const account = await client.getAccount(sender);
+  const builder = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: TESTNET.networkPassphrase,
   });
-  for (const operation of operations) builder.addOperation(operation);
-  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval, signal);
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    if (signal?.aborted) {
-      onAbort();
-      return;
-    }
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
+  const preparedOperations = typeof operations === "function" ? await operations() : operations;
+  for (const operation of preparedOperations) builder.addOperation(operation);
+  return signAndSubmit(
+    builder.setTimeout(180).build(),
+    sign,
+    progress,
+    approval,
+    reconcile,
+    signal,
+  );
 }
 
 async function signAndSubmit(
@@ -605,6 +931,7 @@ async function signAndSubmit(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const client = server();
@@ -621,7 +948,31 @@ async function signAndSubmit(
   if (toHex(signedTransaction.hash()) !== toHex(prepared.hash())) {
     throw new Error("The wallet returned a different transaction. Nothing was submitted.");
   }
+  if ("innerTransaction" in signedTransaction || signedTransaction.sequence !== prepared.sequence) {
+    throw new Error(
+      "The transaction sequence was modified. Stale sequence cannot be silently changed inside a reviewed signed envelope.",
+    );
+  }
   const hash = toHex(prepared.hash()).slice(2);
+  if (reconcile) {
+    if (reconcile.isSuperseded?.()) {
+      throw new Error("The review was superseded before signing completed. Nothing was submitted.");
+    }
+    const currentAccount = reconcile.getCurrentAccount
+      ? reconcile.getCurrentAccount()
+      : reconcile.expectedAccount;
+    if (currentAccount !== reconcile.expectedAccount) {
+      if (reconcile.onAccountSwitch) {
+        await reconcile.onAccountSwitch(hash, signedTransaction);
+      }
+      throw new Error(
+        "Wallet account switched. The transaction was preserved in recovery and not submitted.",
+      );
+    }
+    if (reconcile.validate) {
+      await reconcile.validate(hash, signedTransaction);
+    }
+  }
   progress?.("submitting", hash);
   try {
     const submitted = await client.sendTransaction(signedTransaction);
@@ -632,7 +983,10 @@ async function signAndSubmit(
     if (submitted.status === "TRY_AGAIN_LATER")
       throw new Error("The network is busy. Nothing was accepted; please try again.");
   } catch (error) {
-    if (error instanceof Error && /network rejected|Nothing was accepted/.test(error.message))
+    if (
+      error instanceof Error &&
+      /network rejected|Nothing was accepted|superseded|switched|sequence/i.test(error.message)
+    )
       throw error;
     // A network timeout after submission has an unknown outcome. Preserve the real hash for checking.
     return { status: "pending", txHash: hash };
@@ -640,13 +994,15 @@ async function signAndSubmit(
   progress?.("pending", hash);
   for (let attempt = 0; attempt < 30; attempt += 1) {
     if (signal?.aborted) return { status: "pending", txHash: hash };
-    await sleep(2000, signal);
+    await confirmationDelay(2000, signal);
+    if (signal?.aborted) return { status: "pending", txHash: hash };
     let result: TransactionResult | null;
     try {
       result = await readTransaction(hash);
     } catch {
       return { status: "pending", txHash: hash };
     }
+    if (signal?.aborted) return { status: "pending", txHash: hash };
     if (result && result.status !== "pending") {
       if (result.status === "confirmed") progress?.("confirmed", hash);
       return result;
@@ -662,6 +1018,8 @@ export async function submitBridgeOut(
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
+  simulated?: SimulatedOperation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
@@ -687,6 +1045,8 @@ export async function submitBridgeOut(
     sign,
     progress,
     approval,
+    reconcile,
+    simulated,
     signal,
   );
 }
@@ -703,8 +1063,43 @@ export async function getClaim(id: bigint): Promise<PendingClaim> {
     token: address(result.token),
     amount: integer(result.amount),
     settled: result.settled === true,
+    eligibility: await claimPayoutEligibility(id, address(result.token)),
     deployment,
   };
+}
+
+export async function getClaims(ids: readonly bigint[]): Promise<PendingClaim[]> {
+  if (ids.length === 0) throw new Error("Enter at least one claim number.");
+  if (ids.length > MAX_BATCH_CLAIMS)
+    throw new Error(`Review at most ${MAX_BATCH_CLAIMS} claims at a time.`);
+  const unique = new Set(ids.map(String));
+  if (unique.size !== ids.length) throw new Error("Each claim number can appear only once.");
+  return Promise.all(ids.map((id) => getClaim(id)));
+}
+
+export async function batchClaimSettlementSupport(): Promise<boolean> {
+  await verifyRouterDeployment();
+  const client = await ContractClient.from({
+    contractId: TESTNET.router,
+    rpcUrl: TESTNET.rpcUrl,
+    networkPassphrase: TESTNET.networkPassphrase,
+  });
+  return supportsBatchClaimSettlement(client.spec.funcs());
+}
+
+export function settleClaimsOperation(sender: string, ids: readonly bigint[]) {
+  if (ids.length < 2 || ids.length > MAX_BATCH_CLAIMS)
+    throw new Error(`Batch settlement requires two to ${MAX_BATCH_CLAIMS} claims.`);
+  if (
+    new Set(ids.map(String)).size !== ids.length ||
+    ids.some((id) => id <= 0n || id > (1n << 64n) - 1n)
+  )
+    throw new Error("Use distinct valid claim numbers.");
+  return new Contract(TESTNET.router).call(
+    "settle_claims",
+    new Address(sender).toScVal(),
+    nativeToScVal([...ids], { type: "u64" }),
+  );
 }
 
 export async function submitSettleClaim(
@@ -712,10 +1107,13 @@ export async function submitSettleClaim(
   id: bigint,
   sign: WalletSigner,
   approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
+  if (claim.eligibility.status === "ineligible")
+    throw new Error(`Claim payout is ineligible: ${claim.eligibility.reason}`);
   const deployment = await verifyRouterDeployment();
   if (deployment.wasmHash !== claim.deployment.wasmHash)
     throw new Error(
@@ -731,6 +1129,77 @@ export async function submitSettleClaim(
     sign,
     undefined,
     approval,
+    reconcile,
+    undefined,
     signal,
   );
+}
+
+export async function submitSettleClaims(
+  sender: string,
+  claims: readonly PendingClaim[],
+  sign: WalletSigner,
+  approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
+  signal?: AbortSignal,
+): Promise<TransactionResult> {
+  if (claims.length < 2) throw new Error("Batch settlement requires at least two claims.");
+  if (claims.length > MAX_BATCH_CLAIMS)
+    throw new Error(`Review at most ${MAX_BATCH_CLAIMS} claims at a time.`);
+  if (claims.some((claim) => claim.settled))
+    throw new Error("Remove already settled claims before signing the batch.");
+  const deployment = await verifyRouterDeployment();
+  if (claims.some((claim) => claim.deployment.wasmHash !== deployment.wasmHash))
+    throw new Error(
+      "Claim recovery is read-only: the verified router changed. Look up the claims again.",
+    );
+  if (!(await batchClaimSettlementSupport()))
+    throw new Error("This router supports single-claim settlement only.");
+  const current = await getClaims(claims.map((claim) => claim.id));
+  if (
+    current.some((claim, index) => {
+      const reviewed = claims[index];
+      return (
+        claim.eligibility.status === "ineligible" ||
+        !reviewed ||
+        claim.settled ||
+        claim.recipient !== reviewed.recipient ||
+        claim.token !== reviewed.token ||
+        claim.amount !== reviewed.amount ||
+        claim.deployment.router !== reviewed.deployment.router ||
+        claim.deployment.chain !== reviewed.deployment.chain ||
+        claim.deployment.wasmHash !== reviewed.deployment.wasmHash
+      );
+    })
+  )
+    throw new Error("The claims changed. Review them again before signing.");
+  return submitOperation(
+    sender,
+    settleClaimsOperation(
+      sender,
+      claims.map((claim) => claim.id),
+    ),
+    sign,
+    undefined,
+    approval,
+    reconcile,
+    undefined,
+    signal,
+  );
+}
+
+function confirmationDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
+  });
 }
