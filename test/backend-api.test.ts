@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cursorFreshness,
   fetchIndexerMetrics,
+  fetchClaims,
   fetchTransferByTx,
   fetchTransfers,
   type FormattedTransfer,
@@ -42,7 +43,18 @@ describe("Real indexer client", () => {
       "https://indexer.example/v1/transfers?search=hash+%26+recipient&offset=40",
     );
   });
-
+  it("lists claims with explicit chain and settlement filters", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const payload = { claims: [], count: 0, limit: 20, offset: 0 };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)));
+    vi.stubGlobal("fetch", fetcher);
+    expect(await fetchClaims({ chain: "stellar-testnet", settled: "false", limit: "20" })).toEqual(
+      payload,
+    );
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      "https://indexer.example/v1/claims?chain=stellar-testnet&settled=false&limit=20",
+    );
+  });
   it("preserves optional scoped coverage metadata without inventing it", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
     const payload = {
