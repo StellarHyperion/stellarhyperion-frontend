@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Account, Asset, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { TESTNET } from "../src/config/testnet";
-import { createSigningCoordinator, walletAddress, walletSign } from "../src/wallets/stellar/sdk";
+import {
+  createGenerationTracker,
+  createSigningCoordinator,
+  walletAddress,
+  walletSign,
+} from "../src/wallets/stellar/sdk";
 
 const api = vi.hoisted(() => ({
   freighter: {
@@ -183,5 +188,68 @@ describe("Direct Stellar wallet adapters", () => {
     await expect(walletSign("lobstr", original, signer.publicKey())).rejects.toThrow(
       "did not sign",
     );
+  });
+});
+
+describe("Connection generation tracking", () => {
+  it("starts at zero and advances monotonically", () => {
+    const tracker = createGenerationTracker();
+    expect(tracker.value()).toBe(0);
+    expect(tracker.advance()).toBe(1);
+    expect(tracker.advance()).toBe(2);
+    expect(tracker.value()).toBe(2);
+  });
+
+  it("lets a caller detect that its captured generation is no longer current", () => {
+    const tracker = createGenerationTracker();
+    const issued = tracker.value();
+    expect(tracker.value()).toBe(issued);
+    tracker.advance();
+    expect(tracker.value()).not.toBe(issued);
+  });
+
+  it("discards a late wallet address result once the connection has moved on", async () => {
+    let settleFirstRequest!: (address: string) => void;
+    api.freighter.requestAccess.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settleFirstRequest = (address) => {
+            resolve({ address });
+          };
+        }),
+    );
+    const tracker = createGenerationTracker();
+    const issuedGeneration = tracker.value();
+    const firstRequest = walletAddress("freighter").then((value) => ({
+      value,
+      // Mirrors the check a caller (e.g. the wallet context's signTransaction) makes once
+      // its awaited call resolves: has the connection generation moved on since this call
+      // was issued?
+      stale: tracker.value() !== issuedGeneration,
+    }));
+
+    // Let walletAddress's own `isConnected()` await run before Freighter's request mock is
+    // actually invoked, so `settleFirstRequest` is assigned before we use it below.
+    await vi.waitFor(() => {
+      if (typeof settleFirstRequest !== "function") throw new Error("not yet called");
+    });
+
+    // The user disconnects/reconnects before Freighter's first request settles.
+    tracker.advance();
+    settleFirstRequest(signer.publicKey());
+
+    const { value, stale } = await firstRequest;
+    expect(value).toBe(signer.publicKey());
+    expect(stale).toBe(true);
+  });
+
+  it("does not flag a result as stale when the generation has not moved on", async () => {
+    const tracker = createGenerationTracker();
+    const issuedGeneration = tracker.value();
+    const result = await walletAddress("freighter", false).then((value) => ({
+      value,
+      stale: tracker.value() !== issuedGeneration,
+    }));
+    expect(result.stale).toBe(false);
   });
 });

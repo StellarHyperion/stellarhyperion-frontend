@@ -16,10 +16,11 @@ import { TESTNET } from "../../config/testnet";
 import { Dialog } from "../../components/common/Dialog";
 import {
   STELLAR_WALLETS,
+  createGenerationTracker,
+  createSigningCoordinator,
   isWalletId,
   walletAddress,
   walletSign,
-  createSigningCoordinator,
   type StellarWalletId,
   type PendingSigningRequest,
 } from "./sdk";
@@ -56,6 +57,12 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const coordinator = useRef(createSigningCoordinator(setPendingSigningRequest));
   const pending = useRef<((address: string | null) => void) | null>(null);
   const attempt = useRef(0);
+  // Identifies the currently bound address/wallet pair. Advances whenever the active
+  // connection changes (silent restore, explicit connect, switch, or disconnect). A signing
+  // request captures this generation before it asks the wallet to sign, and refuses to hand
+  // back the result if the generation has since moved on - so a slow wallet response can
+  // never be applied to, or silently resubmitted under, a connection it was not issued for.
+  const connectionGeneration = useRef(createGenerationTracker());
 
   useEffect(() => {
     let active = true;
@@ -68,6 +75,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
           if (active && attempt.current === version) {
             setAddress(value);
             setWalletId(saved);
+            connectionGeneration.current.advance();
           }
         })
         .catch(() => {
@@ -109,6 +117,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       if (attempt.current !== version) return;
       setAddress(value);
       setWalletId(id);
+      connectionGeneration.current.advance();
       saveWallet(id);
       pending.current(value);
       pending.current = null;
@@ -124,6 +133,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(() => {
     closePicker();
+    connectionGeneration.current.advance();
     setAddress(null);
     setWalletId(null);
     saveWallet(null);
@@ -144,13 +154,23 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
       if (opts?.approval && opts.approval.account !== address)
         throw new Error("The wallet account changed. Review the transaction again.");
-      return coordinator.current.run(
+      const generation = connectionGeneration.current.value();
+      const result = await coordinator.current.run(
         {
           operation: opts?.approval?.operation ?? opts?.operation ?? "transaction",
           account: address,
         },
         () => walletSign(walletId, transaction, address, opts?.approval),
       );
+      // The wallet took long enough to respond that the user disconnected or switched
+      // accounts in the meantime. Never hand back a signature bound to a connection that is
+      // no longer current - the caller must not treat it as valid, and it must never be
+      // auto-resubmitted.
+      if (connectionGeneration.current.value() !== generation)
+        throw new Error(
+          "Your wallet connection changed before signing finished. Review and sign again.",
+        );
+      return result;
     },
     [address, walletId],
   );
