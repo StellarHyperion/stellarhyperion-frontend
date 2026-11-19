@@ -1,5 +1,6 @@
 import { Asset, BASE_FEE, Operation, StrKey, type xdr } from "@stellar/stellar-sdk";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
+import type { SourceAsset as _Unused } from "./assets";
 import {
   TESTNET,
   cachedPublicAssetMetadata,

@@ -181,7 +181,14 @@ export function readCachedAssetMetadata(
   };
 }
 
-export function cachedPublicAssetMetadata(query: string, now = Date.now()): PublicAssetMetadata[] {
+export function cachedPublicAssetMetadata(
+  query: string,
+  now = Date.now(),
+  offset = 0,
+  limit = 40,
+): PublicAssetMetadata[] {
+  const boundedOffset = Number.isSafeInteger(offset) && offset > 0 ? offset : 0;
+  const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 40) : 40;
   const keys = new Set(assetMetadataMemory.keys());
   try {
     for (const key of metadataIndex()) keys.add(key);
@@ -207,9 +214,17 @@ export function cachedPublicAssetMetadata(query: string, now = Date.now()): Publ
     } catch {
       /* Malformed metadata never changes transfer configuration. */
     }
-    if (matches.length >= 40) break;
+    if (matches.length >= boundedOffset + boundedLimit) break;
   }
-  return matches;
+  const seen = new Set<string>();
+  const unique: PublicAssetMetadata[] = [];
+  for (const match of matches) {
+    const identity = `${match.code}:${match.issuer}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    unique.push(match);
+  }
+  return unique.slice(boundedOffset, boundedOffset + boundedLimit);
 }
 export type BridgeRoute = 0 | 1;
 const cctpDestinations = new Set(

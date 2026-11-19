@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Account, Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
+import { searchAssets as searchAssetsForDedupe } from "../src/contracts/assets";
 import {
   quoteConversion,
   accountAssets,
@@ -317,6 +318,19 @@ describe("Real Stellar conversion transaction boundaries", () => {
     if (!first) throw new Error("Missing searched asset.");
     expect(issuerVerificationLabel(first)).toContain("verify before signing");
     expect(trustlineLabel(first)).toBe("Trustline not checked for this asset");
+  });
+
+  it("shows an asset returned in several Horizon records once", async () => {
+    answer([
+      { asset_code: USDC.code, asset_issuer: USDC.issuer },
+      { asset_code: USDC.code, asset_issuer: USDC.issuer },
+      { asset_code: "USDC", asset_issuer: TESTNET.reader },
+    ]);
+    const assets = await searchAssetsForDedupe("USDC");
+    expect(assets.map((asset) => asset.id)).toEqual([
+      `${USDC.code}:${USDC.issuer}`,
+      `USDC:${TESTNET.reader}`,
+    ]);
   });
   it("records an authorized wallet trustline as present without calling it configured", async () => {
     const request = vi.fn().mockResolvedValue(
