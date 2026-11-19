@@ -66,6 +66,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [pendingSigningRequest, setPendingSigningRequest] = useState<PendingSigningRequest | null>(
     null,
   );
+  // Tracks (at most) one outstanding signing request. It can be force-settled from here on
+  // disconnect or explicit cancellation, so a vanished wallet extension/popup can never leave
+  // this locked forever.
   const coordinator = useRef(createSigningCoordinator(setPendingSigningRequest));
   const pending = useRef<((address: string | null) => void) | null>(null);
   const attempt = useRef(0);
@@ -152,6 +155,13 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(() => {
     closePicker();
+    // A pending approval must never be left to resolve against a wallet we've already walked
+    // away from: settle it to an explicit failure instead of letting it hang or complete silently.
+    coordinator.current.abandon(
+      new Error(
+        "Wallet disconnected before the signature completed. Close any old wallet prompt, reconnect and review the transfer.",
+      ),
+    );
     setAddress(null);
     setWalletId(null);
     const storageError = saveWalletPreference(null);
@@ -159,6 +169,14 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     if (!storageError) setRememberedWallet(null);
     return Promise.resolve();
   }, [closePicker]);
+
+  const cancelSignature = useCallback(() => {
+    coordinator.current.abandon(
+      new Error(
+        "Stopped waiting for this signature. Close the wallet prompt and review before trying again.",
+      ),
+    );
+  }, []);
 
   const clearRememberedWallet = useCallback(() => {
     // Clear only the preference. An explicit connection or signed checkpoint stays intact.
@@ -182,12 +200,17 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
       if (opts?.approval && opts.approval.account !== address)
         throw new Error("The wallet account changed. Review the transaction again.");
+      // Only one outstanding approval at a time: a wallet extension popup generally can't field a
+      // second concurrent request, and serializing them (via the coordinator) keeps "which
+      // request failed" unambiguous. The coordinator also force-settles this to an explicit
+      // rejection on disconnect or explicit cancellation, so a vanished wallet/popup can never
+      // leave it locked forever, and never resubmits a late response.
       return coordinator.current.run(
         {
           operation: opts?.approval?.operation ?? opts?.operation ?? "transaction",
           account: address,
         },
-        () => walletSign(walletId, transaction, address, opts?.approval),
+        (signal) => walletSign(walletId, transaction, address, opts?.approval, signal),
       );
     },
     [address, walletId],
@@ -200,6 +223,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       walletId,
       isConnected: address !== null,
       isConnecting,
+      isSigning: pendingSigningRequest !== null,
       error,
       rememberedWallet,
       preferenceError,
@@ -208,6 +232,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       connect,
       disconnect,
       signTransaction,
+      cancelSignature,
     }),
     [
       address,
@@ -221,6 +246,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       connect,
       disconnect,
       signTransaction,
+      cancelSignature,
     ],
   );
   return (
