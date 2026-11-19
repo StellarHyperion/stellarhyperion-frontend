@@ -3,6 +3,10 @@ import { StrKey } from "@stellar/stellar-sdk";
 import { TESTNET, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
 
 export interface TransferCheckpoint {
+  /** Versioned storage format. Legacy records migrate to version 1 on read. */
+  schemaVersion?: 1;
+  /** Monotonic revision used to reject stale tab writers. */
+  revision?: number;
   router: string;
   account: string;
   recipient: string;
@@ -36,6 +40,8 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as {
+      schemaVersion?: number;
+      revision?: number;
       router: string;
       account: string;
       recipient: string;
@@ -45,6 +51,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       stage: string;
       txHash: string;
     };
+    if (value.schemaVersion !== undefined && value.schemaVersion !== 1) return null;
     if (
       value.router !== TESTNET.router ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
@@ -60,6 +67,15 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     destinationFor(value.destination);
     return {
       ...value,
+      ...(value.schemaVersion === undefined ? {} : { schemaVersion: 1 as const }),
+      ...(value.revision === undefined
+        ? {}
+        : {
+            revision:
+              Number.isSafeInteger(value.revision) && (value.revision ?? 0) > 0
+                ? value.revision
+                : 1,
+          }),
       destination: destinationFor(value.destination).key,
       route: value.route,
       stage: value.stage,
@@ -103,10 +119,13 @@ export function saveCheckpoint(value: TransferCheckpoint | null) {
     throw new Error(
       "A previous transaction remains pending. Check its outcome before submitting another.",
     );
-  if (value) memoryCheckpoint = JSON.stringify(value);
+  const next = value
+    ? { ...value, schemaVersion: 1 as const, revision: (existing?.revision ?? 0) + 1 }
+    : null;
+  if (next) memoryCheckpoint = JSON.stringify(next);
   try {
     if (typeof localStorage !== "undefined") {
-      if (value) localStorage.setItem(key, JSON.stringify(value));
+      if (next) localStorage.setItem(key, JSON.stringify(next));
       else localStorage.removeItem(key);
     }
     checkpointPersistenceFailed = false;
@@ -114,7 +133,7 @@ export function saveCheckpoint(value: TransferCheckpoint | null) {
     checkpointPersistenceFailed = true;
     throw new Error("Browser storage is unavailable. The next transaction was not submitted.");
   }
-  if (!value) memoryCheckpoint = null;
+  if (!next) memoryCheckpoint = null;
   if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
     try {
       window.dispatchEvent(new Event(event));
