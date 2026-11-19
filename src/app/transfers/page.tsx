@@ -5,6 +5,7 @@ import {
   fetchIndexerMetrics,
   fetchTransfers,
   cursorFreshness,
+  filterTransfers,
   type IndexerMetrics,
   type TransfersResponse,
 } from "../../api";
@@ -71,9 +72,11 @@ export default function TransfersPage() {
 }
 function TransfersPageContent({ address }: { address?: string | null }) {
   const [search, setSearch] = useState("");
+  const [asset, setAsset] = useState("");
+  const [deployment, setDeployment] = useState("");
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
-  const scope = JSON.stringify([address ?? null, search, offset]);
+  const scope = JSON.stringify([address ?? null, search, asset, deployment, offset]);
   const [snapshot, setSnapshot] = useState<{
     scope: string;
     response: TransfersResponse | null;
@@ -83,12 +86,17 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   } | null>(null);
   const current = snapshot?.scope === scope ? snapshot : null;
   const response = current?.response ?? null;
-  const transfers = response?.transfers ?? [];
+  const transfers = filterTransfers(response?.transfers ?? [], { asset, deployment });
   const metrics = current?.metrics ?? null;
   const metricsError = current?.metricsError ?? null;
   const error = current?.error ?? null;
   const pending = loading || current === null;
   const requestGuard = useRef(new ActivityRequestGuard());
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setAsset(params.get("asset") ?? "");
+    setDeployment(params.get("deployment") ?? "");
+  }, []);
   useEffect(() => {
     const guard = requestGuard.current;
     guard.setIdentity(address ?? null);
@@ -128,7 +136,16 @@ function TransfersPageContent({ address }: { address?: string | null }) {
       clearTimeout(delay);
       clearInterval(timer);
     };
-  }, [address, offset, search, scope]);
+  }, [address, offset, search, asset, deployment, scope]);
+  const updateFilter = (name: "asset" | "deployment", value: string) => {
+    const params = new URLSearchParams(window.location.search);
+    if (value.trim()) params.set(name, value.trim());
+    else params.delete(name);
+    window.history.replaceState(null, "", `${window.location.pathname}?${params}`);
+    if (name === "asset") setAsset(value);
+    else setDeployment(value);
+    setOffset(0);
+  };
   return (
     <Column>
       <h1 className="display">Transfer history</h1>
@@ -154,7 +171,30 @@ function TransfersPageContent({ address }: { address?: string | null }) {
           setOffset(0);
         }}
       />
+      <div aria-label="Transfer identity filters">
+        <label>
+          Asset identity
+          <input
+            aria-label="Filter by exact asset identity"
+            placeholder="Issuer or token address"
+            value={asset}
+            onChange={(event) => updateFilter("asset", event.target.value)}
+          />
+        </label>
+        <label>
+          Deployment revision
+          <input
+            aria-label="Filter by deployment revision"
+            placeholder="Router or revision"
+            value={deployment}
+            onChange={(event) => updateFilter("deployment", event.target.value)}
+          />
+        </label>
+      </div>
       {error && <p role="alert">{error}</p>}
+      {!error && response && (asset || deployment) && transfers.length === 0 && (
+        <p role="alert">No indexed transfer matches the selected asset or deployment identity.</p>
+      )}
       {pending && transfers.length === 0 ? (
         <p role="status">Loading indexed transfers...</p>
       ) : (

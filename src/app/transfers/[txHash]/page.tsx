@@ -19,6 +19,11 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
   const [loading, setLoading] = useState(true);
   const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
+    if (!/^[0-9a-f]{64}$/i.test(txHash)) {
+      setError("This is not a valid Stellar transaction hash.");
+      setLoading(false);
+      return;
+    }
     const guard = requestGuard.current;
     guard.setIdentity(txHash);
     guard.invalidate();

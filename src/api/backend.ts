@@ -27,6 +27,9 @@ export interface FormattedTransfer {
     readonly nonce: string;
     readonly sender: string;
     readonly token: string;
+    /** Optional deployment identity supplied by newer indexer contracts. */
+    readonly router?: string | null;
+    readonly revision?: string | null;
     readonly symbol?: string | null;
     readonly decimals?: number | null;
     readonly grossAmount: string;
@@ -159,6 +162,32 @@ export interface TransfersQuery {
   readonly limit?: string;
   readonly offset?: string;
   readonly search?: string;
+}
+
+export interface TransferFilters {
+  readonly asset?: string;
+  readonly deployment?: string;
+}
+
+export function filterTransfers(
+  transfers: readonly FormattedTransfer[],
+  filters: TransferFilters,
+): readonly FormattedTransfer[] {
+  const asset = filters.asset?.trim().toLowerCase();
+  const deployment = filters.deployment?.trim().toLowerCase();
+  return transfers.filter((transfer) => {
+    const assetMatches =
+      !asset ||
+      [transfer.origin.token, transfer.destination.token]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => value.toLowerCase() === asset);
+    const deploymentMatches =
+      !deployment ||
+      [transfer.origin.router, transfer.origin.revision]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => value.toLowerCase() === deployment);
+    return assetMatches && deploymentMatches;
+  });
 }
 
 export function getRouteName(route: number): string {
