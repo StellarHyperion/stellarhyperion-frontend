@@ -31,6 +31,7 @@ import {
 } from "../config/testnet";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
+import { isFreshFeeObservation } from "../lib/relay-budget";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
@@ -60,6 +61,9 @@ export interface LiveQuote {
   estimatedRelayGas?: bigint;
   resourceFee?: bigint;
   networkFee?: bigint;
+  observedAt?: string;
+  validUntil?: string;
+  provider?: string;
 }
 export interface LaneState {
   available: boolean;
@@ -577,8 +581,11 @@ export async function quoteTransfer(
   });
   if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");
   const fee: unknown = await feeResponse.json();
-  const relayGas = integer(object(fee).amount);
-  const estimatedRelayGas = integer(object(fee).estimatedAmount ?? relayGas);
+  const feeObject = object(fee);
+  if (typeof feeObject.validUntil !== "string" || !isFreshFeeObservation(feeObject.validUntil))
+    throw new Error("The live fee estimate expired. Refresh before continuing.");
+  const relayGas = integer(feeObject.amount);
+  const estimatedRelayGas = integer(feeObject.estimatedAmount ?? relayGas);
   if (estimatedRelayGas <= 0n || estimatedRelayGas > relayGas)
     throw new Error("Invalid live fee estimate.");
   if (relayGas <= 0n || relayGas > I128_MAX) throw new Error("Invalid relay gas estimate.");
@@ -597,6 +604,9 @@ export async function quoteTransfer(
     destinationAmount: integer(quote.destination_amount) - (route === 0 ? relayGas / 10n : 0n),
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
+    ...(typeof feeObject.observedAt === "string" ? { observedAt: feeObject.observedAt } : {}),
+    validUntil: feeObject.validUntil,
+    ...(typeof feeObject.provider === "string" ? { provider: feeObject.provider } : {}),
   };
 }
 

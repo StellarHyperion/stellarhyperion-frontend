@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { relayBudget } from "../../../lib/relay-budget";
+import { feeObservation, relayBudget } from "../../../lib/relay-budget";
 // The fee API expects a method in the JSON body. Its /gmp/estimateITSFee path returns help text.
 export async function GET() {
   try {
@@ -24,6 +24,8 @@ export async function GET() {
         estimatedAmount: value,
         token: "XLM",
         decimals: 7,
+        provider: "Axelar ITS",
+        ...feeObservation(),
       },
       { headers: { "Cache-Control": "no-store" } },
     );
