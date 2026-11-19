@@ -431,7 +431,7 @@ export function classifySubmissionFailure(
 
 async function submissionStage<T>(
   stage: SubmissionFailureStage,
-  action: () => Promise<T>,
+  action: () => T | Promise<T>,
 ): Promise<T> {
   try {
     return await action();
@@ -993,7 +993,7 @@ export async function simulateOperation(
         : "Contract state needs restoration. Ask the operator to restore it.",
     );
   }
-  const prepared = await submissionStage("simulation", async () =>
+  const prepared = await submissionStage("simulation", () =>
     rpc.assembleTransaction(transaction, simulation).build(),
   );
   const envelope = prepared.toEnvelope();
