@@ -54,6 +54,10 @@ The backend uses a server-side PostgreSQL connection and a scheduled indexer. Da
 
 Vercel's installed Git integration publishes `main` after pushes. GitHub Actions runs quality checks; the legacy token-based deployment jobs were removed to avoid duplicate deployments and expired deployment credentials.
 
+## Public asset metadata
+
+Asset discovery caches only public code, issuer, Stellar precision and deployment identity, with a five-minute freshness window and at most 64 entries in memory and browser storage. Keys separate networks, deployment revisions and same-symbol issuers. During a Horizon outage, the picker can show cached identities with an explicit cached or stale source label. Balances, authorization, conversion prices, recipients and signed amounts are never taken from this cache; signing still requires fresh account and quote checks. Storage failure leaves safely available discovery reads usable and does not clear transaction recovery checkpoints.
+
 ## Verification
 
 `npm run check` runs formatting, interface rules, contrast checks, unit tests, lint, types and the production build. Start the app and run `npm run test:browser` for the real wallet picker, theme persistence, native selectors and mobile layout. Chromium must be installed with `npx playwright install chromium`.
@@ -61,6 +65,8 @@ Vercel's installed Git integration publishes `main` after pushes. GitHub Actions
 Set `HYPERION_BROWSER=firefox` to check Firefox, or `HYPERION_BROWSER_EXECUTABLE` to use a specific installed browser executable.
 
 Live transaction tests require explicit opt-in and real named CLI wallets. `test/live-transfer.test.ts` retains the original ITS acceptance. `test/live-routes.test.ts` verifies conversion or CCTP through actual destination payment, preserving its proof file across interrupted runs. Normal tests skip both live suites.
+
+The ITS suite keeps its default proof at `~/.hyperion-testnet-proofs/its-transfer.json` in a private directory owned by the current user. That stable path preserves recovery across reruns. Set `HYPERION_TESTNET_PROOF` to resume another saved proof. Proof files use owner-only permissions and remain available after interruption.
 
 For the route suite, set `HYPERION_LIVE_ROUTES=1`, `HYPERION_ROUTE_MODE=convert` or `cctp`, `HYPERION_ROUTE_IDENTITY`, `HYPERION_ROUTE_PROOF`, `HYPERION_ROUTE_DESTINATION`, `HYPERION_TESTNET_APP_URL`, `HYPERION_TESTNET_RECIPIENT` and `NEXT_PUBLIC_HYPERION_API_URL`. Conversion spends at most 1 testnet XLM plus fees; CCTP spends 0.3 testnet USDC. Never delete a pending proof to retry a transfer.
 

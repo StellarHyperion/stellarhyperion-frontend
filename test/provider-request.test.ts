@@ -10,7 +10,9 @@ describe("provider request deadlines", () => {
         new Promise<Response>((_, reject) => {
           init?.signal?.addEventListener(
             "abort",
-            () => reject(new DOMException("aborted", "AbortError")),
+            () => {
+              reject(new DOMException("aborted", "AbortError"));
+            },
             { once: true },
           );
         }),
