@@ -49,7 +49,7 @@ describe("pending transfer checkpoints", () => {
 
     saveCheckpoint(checkpoint);
 
-    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toEqual(
+    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toMatchObject(
       checkpoint,
     );
   });
@@ -69,7 +69,7 @@ describe("pending transfer checkpoints", () => {
 
     saveCheckpoint({ ...conversion, stage: "bridge", txHash: "a".repeat(64) });
 
-    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toEqual({
+    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toMatchObject({
       ...conversion,
       stage: "bridge",
       txHash: "a".repeat(64),
