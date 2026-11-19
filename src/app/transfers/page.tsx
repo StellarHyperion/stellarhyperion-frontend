@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { Column } from "../../components/chrome";
 import {
   fetchIndexerMetrics,
@@ -94,8 +94,10 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setAsset(params.get("asset") ?? "");
-    setDeployment(params.get("deployment") ?? "");
+    startTransition(() => {
+      setAsset(params.get("asset") ?? "");
+      setDeployment(params.get("deployment") ?? "");
+    });
   }, []);
   useEffect(() => {
     const guard = requestGuard.current;
@@ -178,7 +180,9 @@ function TransfersPageContent({ address }: { address?: string | null }) {
             aria-label="Filter by exact asset identity"
             placeholder="Issuer or token address"
             value={asset}
-            onChange={(event) => updateFilter("asset", event.target.value)}
+            onChange={(event) => {
+              updateFilter("asset", event.target.value);
+            }}
           />
         </label>
         <label>
@@ -187,7 +191,9 @@ function TransfersPageContent({ address }: { address?: string | null }) {
             aria-label="Filter by deployment revision"
             placeholder="Router or revision"
             value={deployment}
-            onChange={(event) => updateFilter("deployment", event.target.value)}
+            onChange={(event) => {
+              updateFilter("deployment", event.target.value);
+            }}
           />
         </label>
       </div>

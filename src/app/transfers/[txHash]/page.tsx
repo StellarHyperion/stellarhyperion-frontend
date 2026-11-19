@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { use, useEffect, useRef, useState } from "react";
+import { startTransition, use, useEffect, useRef, useState } from "react";
 import { Column } from "../../../components/chrome";
 import { fetchTransferByTx, getRouteName, type FormattedTransfer } from "../../../api";
 import { readTransaction, errorMessage, type TransactionResult } from "../../../contracts";
@@ -20,8 +20,10 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
   const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
     if (!/^[0-9a-f]{64}$/i.test(txHash)) {
-      setError("This is not a valid Stellar transaction hash.");
-      setLoading(false);
+      startTransition(() => {
+        setError("This is not a valid Stellar transaction hash.");
+        setLoading(false);
+      });
       return;
     }
     const guard = requestGuard.current;
