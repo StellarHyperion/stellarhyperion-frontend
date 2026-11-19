@@ -185,6 +185,37 @@
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
+.copyAddress {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.copyAddress code {
+  min-width: 0;
+  font: inherit;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.copyAddress button {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 6px;
+  padding: 3px;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.copyAddress button:hover {
+  color: var(--text-primary);
+}
+.copyAddress > span {
+  flex-basis: 100%;
+}
 .networks {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

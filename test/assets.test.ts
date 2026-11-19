@@ -6,6 +6,7 @@ import {
   conversionExecutionIntent,
   conversionRoute,
   conversionOperations,
+  isCanonicalUsdc,
   revalidateConversion,
   issuerVerificationLabel,
   quoteTrade,
@@ -19,7 +20,12 @@ import {
   trustlineLabel,
 } from "../src/contracts/assets";
 import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
-import { DESTINATIONS, TESTNET } from "../src/config/testnet";
+import {
+  DESTINATIONS,
+  deploymentIdentityMismatch,
+  STELLAR_DEPLOYMENT,
+  TESTNET,
+} from "../src/config/testnet";
 import { relayBudget } from "../src/lib/relay-budget";
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -139,6 +145,21 @@ describe("Real Stellar conversion transaction boundaries", () => {
   it("keeps issuer identity and rejects invalid assets or oversized source amounts", async () => {
     expect(() => stellarAsset({ ...USDC, id: "USDC:different" })).toThrow();
     expect(() => stellarAsset({ ...USDC, issuer: "invalid" })).toThrow();
+    expect(isCanonicalUsdc(USDC)).toBe(true);
+    const sameCodeDifferentIssuer = {
+      ...USDC,
+      id: `USDC:${TESTNET.reader}`,
+      issuer: TESTNET.reader,
+      verification: "horizon-search" as const,
+      trustline: "not-checked" as const,
+    };
+    expect(isCanonicalUsdc(sameCodeDifferentIssuer)).toBe(false);
+    const request = answer([path]);
+    const conversion = await quoteConversion(sameCodeDifferentIssuer, 10000000n);
+    const params = new URL(String(request.mock.calls[0]?.[0])).searchParams;
+    expect(params.get("source_asset_issuer")).toBe(TESTNET.reader);
+    expect(params.get("destination_assets")).toBe(USDC.id);
+    expect(conversion.source).toEqual(sameCodeDifferentIssuer);
     const fetcher = answer([]);
     await expect(quoteConversion(XLM, 1n << 63n)).rejects.toThrow("limit");
     await expect(searchAssets("not a valid asset code")).rejects.toThrow("Search by");
@@ -386,6 +407,19 @@ describe("Real Stellar conversion transaction boundaries", () => {
   });
 });
 describe("Independently verified testnet bridge lanes", () => {
+  it("binds the configured Stellar asset identity to the checked-in deployment", () => {
+    expect(STELLAR_DEPLOYMENT).toMatchObject({
+      usdcCode: USDC.code,
+      usdcIssuer: USDC.issuer,
+      usdcToken: TESTNET.token,
+    });
+    expect(deploymentIdentityMismatch(STELLAR_DEPLOYMENT.router, STELLAR_DEPLOYMENT.usdcToken))
+      .toBeNull();
+    expect(deploymentIdentityMismatch("different-router", STELLAR_DEPLOYMENT.usdcToken))
+      .toContain("router");
+    expect(deploymentIdentityMismatch(STELLAR_DEPLOYMENT.router, "different-token"))
+      .toContain("USDC token contract");
+  });
   it("exposes only the routes backed by checked-in delivery evidence", () => {
     expect(Object.fromEntries(DESTINATIONS.map(({ key, routes }) => [key, routes]))).toEqual({
       sepolia: [0, 1],

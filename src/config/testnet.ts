@@ -19,11 +19,21 @@ export const TESTNET = {
 export const STELLAR_DEPLOYMENT = {
   chain: "stellar-testnet",
   router: stellar.router,
+  usdcToken: stellar.tokens.USDC.sacId,
+  usdcCode: stellar.tokens.USDC.code,
+  usdcIssuer: stellar.tokens.USDC.issuer,
   networkPassphrase: stellar.networkPassphrase,
   wasmHash: stellar.wasmHashes.router,
   commit: stellar.commit,
   deployedLedger: stellar.deployedAt.ledger,
 } as const;
+export function deploymentIdentityMismatch(router: string, token: string): string | null {
+  if (router !== STELLAR_DEPLOYMENT.router)
+    return "The configured Stellar router does not match the verified testnet deployment.";
+  if (token !== STELLAR_DEPLOYMENT.usdcToken)
+    return "The configured Stellar USDC token contract does not match the verified testnet deployment.";
+  return null;
+}
 export type BridgeRoute = 0 | 1;
 const cctpDestinations = new Set(
   stellar.activation.cctp.status === "active" && stellar.activation.cctp.acceptance === "delivered"

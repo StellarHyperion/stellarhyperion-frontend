@@ -173,6 +173,46 @@
   color: var(--text-secondary);
   line-height: 1.5;
 }
+.identityDetails {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  line-height: 1.55;
+}
+.identityDetails summary {
+  width: fit-content;
+  cursor: pointer;
+}
+.identityDetails > p {
+  margin: 0;
+}
+.identityDetails dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+.identityDetails dl div {
+  display: grid;
+  gap: 3px;
+}
+.identityDetails dt {
+  font-family: var(--face-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.identityDetails dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.identityDetails dd [class*="copyAddress"] {
+  display: flex;
+}
+.identityDetails dd [role="alert"] {
+  color: var(--status-error, #e06a63);
+}
 .connector {
   display: grid;
   place-items: center;

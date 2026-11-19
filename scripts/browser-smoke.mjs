@@ -18,10 +18,41 @@ const browser = await { chromium, firefox }[engine].launch(
 );
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  await page.addInitScript(() => {
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (value) => (copied = value) },
+    });
+    Object.defineProperty(window, "__hyperionCopiedAddress", { get: () => copied });
+  });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+  const identityDetails = page
+    .locator("details")
+    .filter({ hasText: "Inspect canonical USDC identity" });
+  await identityDetails.locator("summary").click();
+  const canonicalIssuer = deployment.networks["stellar-testnet"].tokens.USDC.issuer;
+  assert.ok((await identityDetails.innerText()).includes(canonicalIssuer));
+  assert.ok(
+    (await identityDetails.innerText()).includes(
+      deployment.networks["stellar-testnet"].tokens.USDC.sacId,
+    ),
+  );
+  await identityDetails
+    .getByRole("button", { name: "Copy canonical USDC issuer" })
+    .click();
+  await identityDetails.getByRole("status").filter({ hasText: "Copied" }).waitFor();
+  assert.equal(await page.evaluate(() => window.__hyperionCopiedAddress), canonicalIssuer);
+  assert.ok((await identityDetails.innerText()).includes("Axelar ITS USDC representation"));
+  await page.getByRole("button", { name: "Choose destination network and token" }).click();
+  const representationDialog = page.getByRole("dialog", { name: "Choose a destination" });
+  await representationDialog
+    .getByRole("button", { name: /Circle CCTP delivers native USDC/ })
+    .click();
+  assert.ok((await identityDetails.innerText()).includes("Circle CCTP native USDC"));
 
   // Opening a shared link loads bounded form state without any submission intent.
   const recipient = "0x" + "a".repeat(40);

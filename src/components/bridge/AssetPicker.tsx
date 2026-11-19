@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, Check, ChevronRight, Search } from "lucide-react";
+import { ArrowUpRight, Check, ChevronRight, Copy, Search } from "lucide-react";
 import { parseUnits } from "@hyperion/protocol";
 import { DESTINATIONS, type BridgeRoute, type DestinationKey } from "../../config/testnet";
 import {
@@ -19,6 +19,31 @@ export function AssetIcon({ code, network = false }: { code: string; network?: b
   return (
     <span className={styles.assetIcon} data-asset={code} data-network={network} aria-hidden="true">
       {code === "USDC" ? "$" : code === "XLM" ? "S" : code.slice(0, 2)}
+    </span>
+  );
+}
+export function CopyableAddress({ value, label }: { value: string; label: string }) {
+  const [copyError, setCopyError] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    setCopied(false);
+    setCopyError(false);
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+    } catch {
+      setCopyError(true);
+    }
+  };
+  return (
+    <span className={styles.copyAddress}>
+      <code>{value}</code>
+      <button type="button" aria-label={`Copy ${label}`} onClick={() => void copy()}>
+        <Copy size={13} aria-hidden="true" />
+      </button>
+      {copied && <span role="status">Copied</span>}
+      {copyError && <span role="alert">Copy failed; select the address to copy it.</span>}
     </span>
   );
 }
@@ -140,7 +165,13 @@ export function SourceAssetPicker({
                 <dl>
                   <div>
                     <dt>Issuer</dt>
-                    <dd>{currentAsset.issuer ?? "None. This is native XLM."}</dd>
+                    <dd>
+                      {currentAsset.issuer ? (
+                        <CopyableAddress value={currentAsset.issuer} label="asset issuer" />
+                      ) : (
+                        "None. This is native XLM."
+                      )}
+                    </dd>
                   </div>
                   <div>
                     <dt>Issuer source</dt>
@@ -233,7 +264,7 @@ export function DestinationPicker({
         <AssetIcon code="USDC" />
         <span>
           <strong>USDC</strong>
-          <small>Native USDC via Circle CCTP</small>
+          <small>Circle CCTP delivers native USDC, distinct from ITS</small>
         </span>
         <ArrowUpRight size={18} aria-hidden="true" />
       </button>
@@ -252,7 +283,7 @@ export function DestinationPicker({
           <strong>USDC (ITS)</strong>
           <small>
             {chain === "sepolia"
-              ? "Stellar USDC representation via Axelar ITS"
+              ? "Axelar ITS representation, distinct from native Circle USDC"
               : "Axelar ITS is configured for Sepolia"}
           </small>
         </span>
