@@ -998,24 +998,16 @@ describe("Source identity and explorer access", () => {
   });
 });
 describe("Concurrent and repeated submission boundaries", () => {
-  it("requires a fresh explicit wallet approval rather than reusing an earlier ambiguous signature", async () => {
+  it("retains the signed public hash without automatically requesting another approval after timeout", async () => {
     const { send } = repeatableSetup();
-    send.mockImplementationOnce(() => Promise.reject(new Error("timeout")));
-    const first = await submitSettleClaim(key.publicKey(), 1n, sign);
+    send.mockRejectedValueOnce(new Error("timeout"));
+    const wallet = vi.fn(sign);
+    const first = await submitSettleClaim(key.publicKey(), 1n, wallet);
     expect(first.status).toBe("pending");
-    // A caller retrying after an ambiguous outcome must trigger a brand new wallet request; the
-    // function never resubmits the earlier signed envelope on its own.
-    const retryWallet = vi.fn(sign);
-    send.mockResolvedValueOnce({
-      status: "ERROR",
-      hash: "c".repeat(64),
-      latestLedger: 1,
-      latestLedgerCloseTime: 1,
-    });
-    await expect(submitSettleClaim(key.publicKey(), 1n, retryWallet)).rejects.toThrow(
-      "network rejected",
-    );
-    expect(retryWallet).toHaveBeenCalledTimes(1);
+    expect(first.txHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(wallet).toHaveBeenCalledTimes(1);
+    // Recovery must inspect this hash before any new approval or submission.
   });
   it("keeps two overlapping submissions independent, each with its own explicit wallet approval", async () => {
     const { send } = repeatableSetup();

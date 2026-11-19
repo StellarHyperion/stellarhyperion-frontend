@@ -1,6 +1,4 @@
 import { existsSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cursorFreshness,
@@ -11,6 +9,15 @@ import {
   type FormattedTransfer,
 } from "../src/api/backend";
 import { getEvidenceTimeline, hasVerifiedDestinationEvidence } from "../src/lib/evidence";
+import {
+  assertIndexedAcceptance,
+  assertPaymentReceipt,
+  assertSignedSource,
+} from "./support/acceptance";
+import { defaultProofFile } from "./support/proof-file";
+import { readTransaction } from "../src/contracts/stellar";
+import { TESTNET } from "../src/config/testnet";
+import { createPublicClient, http } from "viem";
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -44,7 +51,7 @@ const destination = (
   recipient: `0x${"1".repeat(40)}`,
   delivered: true,
   block: "200",
-  txHash: "b".repeat(64),
+  txHash: "0x" + "b".repeat(64),
   deliveredAt: "2026-10-29T00:05:00.000Z",
   ...overrides,
 });
@@ -77,26 +84,22 @@ function record(
  * its own, every reported amount is an exact integer (never a float or scientific-notation string),
  * and destination evidence always names the issuer-specific token that actually paid out.
  */
-function assertAcceptedProofSchema(transfer: FormattedTransfer | null, sourceHash?: string): void {
-  if (!transfer)
-    throw new Error("The indexer has not recorded this signed source transaction yet.");
-  if (sourceHash && transfer.origin.txHash !== sourceHash)
-    throw new Error("The indexed origin hash does not match the real signed source transaction.");
-  if (!/^[0-9a-f]{64}$/i.test(transfer.origin.txHash))
-    throw new Error("The origin transaction hash is not a real Stellar transaction hash.");
-  for (const amount of [
-    transfer.origin.grossAmount,
-    transfer.origin.fee,
-    transfer.origin.netAmount,
-  ])
-    if (!/^\d+$/.test(amount))
-      throw new Error("Origin amounts must be exact integers, never fabricated or rounded.");
-  if (!transfer.destination.delivered || !transfer.destination.txHash)
-    throw new Error("Source confirmation alone cannot satisfy cross-chain acceptance.");
-  if (transfer.destination.amount != null && !/^\d+$/.test(transfer.destination.amount))
-    throw new Error("The destination amount must be an exact integer.");
-  if (!transfer.destination.token)
-    throw new Error("Destination evidence is missing issuer-specific token identity.");
+function assertAcceptedProofSchema(
+  transfer: FormattedTransfer | null,
+  sourceHash = "a".repeat(64),
+): void {
+  assertIndexedAcceptance(transfer, {
+    sourceHash,
+    sender: "GABC",
+    sourceToken: TESTNET_USDC,
+    grossAmount: "1000000",
+    fee: "3000",
+    destination: "sepolia",
+    recipient: `0x${"1".repeat(40)}`,
+    destinationToken: "0xFd5a146686d16060ef9c595B37C30b248402304c",
+    destinationAmount: "997000",
+    route: 1,
+  });
 }
 describe("Real indexer client", () => {
   it("does not manufacture records when no indexer is configured", async () => {
@@ -278,10 +281,10 @@ describe("Public acceptance proof schema", () => {
   it("rejects amounts that are not exact integers", () => {
     expect(() => {
       assertAcceptedProofSchema(record({ grossAmount: "1.5" }));
-    }).toThrow("exact integers");
+    }).toThrow("exact integer");
     expect(() => {
       assertAcceptedProofSchema(record({ fee: "3e3" }));
-    }).toThrow("exact integers");
+    }).toThrow("exact integer");
     expect(() => {
       assertAcceptedProofSchema(record({}, { amount: "997000.0" }));
     }).toThrow("exact integer");
@@ -307,21 +310,55 @@ describe("Public acceptance proof schema", () => {
   // Explicit opt-in only: reads the real indexer configured by NEXT_PUBLIC_HYPERION_API_URL and
   // checks the proof file a prior live-transfer run saved. Normal checks never need credentials
   // or reach a real indexer, and this suite is skipped unless the live gate is set.
-  const liveEnabled = process.env.HYPERION_LIVE_TESTNET === "1";
+  const liveEnabled = process.env.HYPERION_LIVE_PROOF === "1";
   it.skipIf(!liveEnabled)(
     "validates real indexed evidence for a real signed transfer against the public proof schema",
     async () => {
-      const file =
-        process.env.HYPERION_TESTNET_PROOF ?? join(tmpdir(), "hyperion-live-transfer.json");
+      const file = process.env.HYPERION_TESTNET_PROOF ?? defaultProofFile();
       if (!existsSync(file))
         throw new Error(
           "Run the live transfer suite first (HYPERION_LIVE_TESTNET=1) so a real source hash is recorded.",
         );
-      const proof = JSON.parse(readFileSync(file, "utf8")) as { sourceHash?: string };
+      const proof = JSON.parse(readFileSync(file, "utf8")) as {
+        sourceHash?: string;
+        sourceEnvelope?: string;
+        sender: string;
+        recipient: string;
+        grossAmount: string;
+        fee: string;
+        destinationAmount: string;
+      };
       if (!proof.sourceHash)
         throw new Error("The saved proof has no signed source transaction hash yet.");
       const transfer = await fetchTransferByTx(proof.sourceHash);
-      assertAcceptedProofSchema(transfer, proof.sourceHash);
+      if (!proof.sourceEnvelope)
+        throw new Error(
+          "The proof is missing its public signed source envelope; retain the unresolved hash.",
+        );
+      assertSignedSource(proof.sourceEnvelope, proof.sender, proof.sourceHash);
+      expect((await readTransaction(proof.sourceHash))?.status).toBe("confirmed");
+      const intent = {
+        sourceHash: proof.sourceHash,
+        sender: proof.sender,
+        sourceToken: TESTNET.token,
+        grossAmount: proof.grossAmount,
+        fee: proof.fee,
+        destination: "sepolia",
+        recipient: proof.recipient,
+        destinationToken: "0xFd5a146686d16060ef9c595B37C30b248402304c",
+        destinationAmount: proof.destinationAmount,
+        route: 1,
+      };
+      assertIndexedAcceptance(transfer, intent);
+      const remote = createPublicClient({
+        transport: http("https://ethereum-sepolia-rpc.publicnode.com", { timeout: 15000 }),
+      });
+      expect(await remote.getChainId()).toBe(11155111);
+      assertPaymentReceipt(
+        await remote.getTransactionReceipt({ hash: transfer.destination.txHash as `0x${string}` }),
+        transfer,
+        intent,
+      );
     },
     30_000,
   );

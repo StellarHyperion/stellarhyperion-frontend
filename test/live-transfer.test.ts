@@ -1,7 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { createPublicClient, http, parseAbi } from "viem";
 import { fetchTransferByTx } from "../src/api/backend";
@@ -15,6 +13,13 @@ import {
   validateRecipient,
 } from "../src/contracts/stellar";
 import { TESTNET } from "../src/config/testnet";
+import { TransactionBuilder } from "@stellar/stellar-sdk";
+import {
+  assertIndexedAcceptance,
+  assertPaymentReceipt,
+  assertSignedSource,
+} from "./support/acceptance";
+import { defaultProofFile, lockProof, saveProof } from "./support/proof-file";
 
 interface Proof {
   network: "stellar-testnet";
@@ -27,22 +32,9 @@ interface Proof {
   balanceBefore?: string;
   recipientBalanceBefore?: string;
   sourceHash?: string;
+  sourceEnvelope?: string;
   destinationHash?: string;
   status: string;
-}
-
-function defaultProofFile(): string {
-  const directory = join(homedir(), ".hyperion-testnet-proofs");
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const info = lstatSync(directory);
-  if (
-    !info.isDirectory() ||
-    (info.mode & 0o077) !== 0 ||
-    (process.getuid && info.uid !== process.getuid())
-  ) {
-    throw new Error("The live-transfer proof directory must be private and owned by this user.");
-  }
-  return join(directory, "its-transfer.json");
 }
 
 // Explicit opt-in only: this test signs and spends 0.1 testnet USDC plus testnet XLM fees.
@@ -64,6 +56,7 @@ it.skipIf(!enabled)(
     // Retain the proof on interruption; set this path explicitly to resume without resending.
     console.log(`Live transfer proof: ${file}`);
     const amount = parseSendAmount("0.1");
+    const releaseProof = lockProof(file);
     const proof = existsSync(file)
       ? (JSON.parse(readFileSync(file, "utf8")) as Proof)
       : {
@@ -80,7 +73,7 @@ it.skipIf(!enabled)(
     expect(proof.recipient).toBe(recipient);
     expect(proof.grossAmount).toBe(String(amount));
     const save = () => {
-      writeFileSync(file, `${JSON.stringify(proof, null, 2)}\n`, { mode: 0o600 });
+      saveProof(file, proof);
     };
     const remote = createPublicClient({
       transport: http("https://ethereum-sepolia-rpc.publicnode.com", { timeout: 15_000 }),
@@ -116,14 +109,22 @@ it.skipIf(!enabled)(
           sender,
           quote,
           recipient,
-          (value) =>
-            Promise.resolve({
-              signedTxXdr: execFileSync(
-                "stellar",
-                ["tx", "sign", "--sign-with-key", identity, "--network", "testnet"],
-                { input: value, encoding: "utf8" },
-              ).trim(),
-            }),
+          (value) => {
+            const signedTxXdr = execFileSync(
+              "stellar",
+              ["tx", "sign", "--sign-with-key", identity, "--network", "testnet"],
+              { input: value, encoding: "utf8" },
+            ).trim();
+            const hash = TransactionBuilder.fromXdr(signedTxXdr, TESTNET.networkPassphrase)
+              .hash()
+              .toString("hex");
+            assertSignedSource(signedTxXdr, sender, hash);
+            proof.sourceEnvelope = signedTxXdr;
+            proof.sourceHash = hash;
+            proof.status = "signed";
+            save();
+            return Promise.resolve({ signedTxXdr });
+          },
           (phase, hash) => {
             proof.status = phase;
             if (hash) proof.sourceHash = hash;
@@ -136,6 +137,11 @@ it.skipIf(!enabled)(
       }
       // A saved source hash is checked on restart; the test never blindly sends twice.
       const hash = proof.sourceHash;
+      if (!proof.sourceEnvelope || !hash)
+        throw new Error(
+          "The saved proof needs its public signed source envelope; retain the hash for manual recovery.",
+        );
+      assertSignedSource(proof.sourceEnvelope, sender, hash);
       if (!hash) throw new Error("No submitted source transaction was recorded.");
       let source = await readTransaction(hash);
       for (let attempt = 0; attempt < 30 && source?.status === "pending"; attempt += 1) {
@@ -152,6 +158,19 @@ it.skipIf(!enabled)(
       while (Date.now() < deadline) {
         const indexed = await fetchTransferByTx(hash);
         if (indexed?.stage === "delivered" && indexed.destination.txHash) {
+          const intent = {
+            sourceHash: hash,
+            sender,
+            sourceToken: TESTNET.token,
+            grossAmount: String(amount),
+            fee: proof.fee ?? "",
+            destination: "sepolia",
+            recipient,
+            destinationToken: receivedToken,
+            destinationAmount: proof.destinationAmount,
+            route: 1,
+          };
+          assertIndexedAcceptance(indexed, intent);
           expect(indexed.origin.txHash).toBe(hash);
           expect(indexed.origin.sender).toBe(sender);
           expect(indexed.origin.grossAmount).toBe(String(amount));
@@ -159,7 +178,7 @@ it.skipIf(!enabled)(
           expect(indexed.destination.delivered).toBe(true);
           const destinationHash = indexed.destination.txHash as `0x${string}`;
           const receipt = await remote.getTransactionReceipt({ hash: destinationHash });
-          expect(receipt.status).toBe("success");
+          assertPaymentReceipt(receipt, indexed, intent);
           expect(await recipientBalance()).toBeGreaterThanOrEqual(
             BigInt(proof.recipientBalanceBefore) + BigInt(proof.destinationAmount),
           );
@@ -176,6 +195,7 @@ it.skipIf(!enabled)(
       );
     } finally {
       globalThis.fetch = originalFetch;
+      releaseProof();
     }
   },
   15 * 60_000,

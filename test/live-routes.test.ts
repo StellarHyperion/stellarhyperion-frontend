@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { createPublicClient, http, parseAbi } from "viem";
 import { destinationFor, TESTNET, type BridgeRoute } from "../src/config/testnet";
@@ -14,6 +14,13 @@ import {
 } from "../src/contracts/stellar";
 import { accountAssets, quoteTrade, submitConversion, USDC, XLM } from "../src/contracts/assets";
 import { fetchTransferByTx } from "../src/api/backend";
+import { TransactionBuilder } from "@stellar/stellar-sdk";
+import {
+  assertIndexedAcceptance,
+  assertPaymentReceipt,
+  assertSignedSource,
+} from "./support/acceptance";
+import { lockProof, saveProof } from "./support/proof-file";
 
 interface Proof {
   router: string;
@@ -26,6 +33,9 @@ interface Proof {
   bridgeAmount?: string;
   conversionHash?: string;
   sourceHash?: string;
+  sourceEnvelope?: string;
+  grossAmount?: string;
+  fee?: string;
   destinationHash?: string;
   destinationToken?: string;
   destinationAmount?: string;
@@ -61,6 +71,7 @@ it.skipIf(process.env.HYPERION_LIVE_ROUTES !== "1")(
     const sender = execFileSync("stellar", ["keys", "address", identity], {
       encoding: "utf8",
     }).trim();
+    const releaseProof = lockProof(file);
     const proof: Proof = existsSync(file)
       ? (JSON.parse(readFileSync(file, "utf8")) as Proof)
       : {
@@ -85,7 +96,7 @@ it.skipIf(process.env.HYPERION_LIVE_ROUTES !== "1")(
         "The saved proof belongs to a different transfer. Never overwrite a pending transfer.",
       );
     const save = () => {
-      writeFileSync(file, JSON.stringify(proof, null, 2) + "\n");
+      saveProof(file, proof);
     };
     const sign: WalletSigner = (value) =>
       Promise.resolve({
@@ -107,6 +118,12 @@ it.skipIf(process.env.HYPERION_LIVE_ROUTES !== "1")(
       if (!lane.destinationToken) throw new Error("No verified destination token.");
       const token = lane.destinationToken as `0x${string}`;
       const client = createPublicClient({ transport: http(destination.rpcUrl) });
+      expect(await client.getChainId()).toBe(destination.chainId);
+      if (
+        proof.destinationToken !== undefined &&
+        proof.destinationToken.toLowerCase() !== token.toLowerCase()
+      )
+        throw new Error("The destination token changed; retain the signed proof for recovery.");
       const balance = () =>
         client.readContract({
           address: token,
@@ -157,13 +174,33 @@ it.skipIf(process.env.HYPERION_LIVE_ROUTES !== "1")(
           const quote = await quoteTransfer(destination.key, BigInt(proof.bridgeAmount), route);
           expect(await readBalance(sender)).toBeGreaterThanOrEqual(quote.grossAmount);
           proof.destinationAmount = String(quote.destinationAmount);
+          proof.grossAmount = String(quote.grossAmount);
+          proof.fee = String(quote.fee);
           save();
           try {
-            const result = await submitBridgeOut(sender, quote, recipient, sign, (phase, hash) => {
-              proof.status = phase;
-              if (hash) proof.sourceHash = hash;
+            const bridgeSign: WalletSigner = async (value) => {
+              const result = await sign(value);
+              const hash = TransactionBuilder.fromXdr(result.signedTxXdr, TESTNET.networkPassphrase)
+                .hash()
+                .toString("hex");
+              assertSignedSource(result.signedTxXdr, sender, hash);
+              proof.sourceEnvelope = result.signedTxXdr;
+              proof.sourceHash = hash;
+              proof.status = "signed";
               save();
-            });
+              return result;
+            };
+            const result = await submitBridgeOut(
+              sender,
+              quote,
+              recipient,
+              bridgeSign,
+              (phase, hash) => {
+                proof.status = phase;
+                if (hash) proof.sourceHash = hash;
+                save();
+              },
+            );
             proof.sourceHash = result.txHash;
             proof.status = result.status;
             save();
@@ -179,6 +216,11 @@ it.skipIf(process.env.HYPERION_LIVE_ROUTES !== "1")(
         }
       }
       if (!proof.sourceHash) throw new Error("No real source transaction was recorded.");
+      if (!proof.sourceEnvelope || !proof.grossAmount || !proof.fee || !proof.destinationAmount)
+        throw new Error(
+          "The saved proof lacks signed source or exact quote evidence; retain its hash for manual recovery.",
+        );
+      assertSignedSource(proof.sourceEnvelope, sender, proof.sourceHash);
       let source = await readTransaction(proof.sourceHash);
       for (let attempt = 0; attempt < 40 && source?.status === "pending"; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -191,10 +233,23 @@ it.skipIf(process.env.HYPERION_LIVE_ROUTES !== "1")(
       for (let attempt = 0; attempt < 240; attempt++) {
         const indexed = await fetchTransferByTx(proof.sourceHash);
         if (indexed?.stage === "delivered" && indexed.destination.txHash) {
+          const intent = {
+            sourceHash: proof.sourceHash,
+            sender,
+            sourceToken: TESTNET.token,
+            grossAmount: proof.grossAmount,
+            fee: proof.fee,
+            destination: destination.key,
+            recipient,
+            destinationToken: token,
+            destinationAmount: proof.destinationAmount,
+            route,
+          };
+          assertIndexedAcceptance(indexed, intent);
           const receipt = await client.getTransactionReceipt({
             hash: indexed.destination.txHash as `0x${string}`,
           });
-          expect(receipt.status).toBe("success");
+          assertPaymentReceipt(receipt, indexed, intent);
           expect(await balance()).toBeGreaterThanOrEqual(
             BigInt(proof.recipientBefore) + BigInt(proof.destinationAmount ?? "0"),
           );
@@ -212,6 +267,7 @@ it.skipIf(process.env.HYPERION_LIVE_ROUTES !== "1")(
       ).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
+      releaseProof();
     }
   },
 );
