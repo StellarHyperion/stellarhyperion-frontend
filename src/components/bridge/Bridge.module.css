@@ -215,6 +215,10 @@
 .identityDetails dd [role="alert"] {
   color: var(--state-failed);
 }
+.identityNotice {
+  display: block;
+  margin-block-start: var(--space-2);
+}
 .connector {
   display: grid;
   place-items: center;
