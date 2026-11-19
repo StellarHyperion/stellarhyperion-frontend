@@ -141,9 +141,9 @@ export function Header({ network }: { readonly network: string }): ReactElement 
               Activity
             </Link>
             {pendingCheckpoint && (
-              <Link className={styles.navLink} href="/#pending-recovery">
+              <a className={styles.navLink} href="/#pending-recovery">
                 Recovery
-              </Link>
+              </a>
             )}
           </nav>
         </div>
