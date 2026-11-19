@@ -21,6 +21,8 @@ The interface reads the active router, adapter configuration, destination contra
 
 Conversion and bridging are separate signed transactions. The conversion uses a strict-receive path payment with an exact source spending cap and 0.5% price tolerance. It can create the canonical USDC trustline in the same transaction. If the bridge cannot proceed, the converted USDC remains in the user's wallet. The app saves the actual signed hash before broadcast; after an interruption, it checks the recorded transaction before offering a fresh bridge review. Unknown outcomes never trigger an automatic resend.
 
+Recovery first checks bounded Stellar RPC evidence, then falls back to Horizon when the RPC history is absent or unavailable. Every accepted result must establish the Testnet network, signed hash, account and matching operations. Conversion success also requires a matching canonical USDC payment result. Continuing requires the same wallet, a current authorized spendable USDC balance, a fresh quote and simulation, and explicit approval. Historical failure is distinct from missing, malformed or conflicting evidence, which leaves the checkpoint unknown and intact. Source confirmation does not establish destination delivery.
+
 ## Run
 
 Node 22.13 or newer is required.
@@ -63,6 +65,8 @@ Vercel's installed Git integration publishes `main` after pushes. GitHub Actions
 Set `HYPERION_BROWSER=firefox` to check Firefox, or `HYPERION_BROWSER_EXECUTABLE` to use a specific installed browser executable.
 
 Live transaction tests require explicit opt-in and real named CLI wallets. `test/live-transfer.test.ts` retains the original ITS acceptance. `test/live-routes.test.ts` verifies conversion or CCTP through actual destination payment, preserving its proof file across interrupted runs. Normal tests skip both live suites.
+
+The ITS suite keeps its default proof at `~/.hyperion-testnet-proofs/its-transfer.json` in a private directory owned by the current user. That stable path preserves recovery across reruns. Set `HYPERION_TESTNET_PROOF` to resume another saved proof. Proof files use owner-only permissions and remain available after interruption.
 
 For the route suite, set `HYPERION_LIVE_ROUTES=1`, `HYPERION_ROUTE_MODE=convert` or `cctp`, `HYPERION_ROUTE_IDENTITY`, `HYPERION_ROUTE_PROOF`, `HYPERION_ROUTE_DESTINATION`, `HYPERION_TESTNET_APP_URL`, `HYPERION_TESTNET_RECIPIENT` and `NEXT_PUBLIC_HYPERION_API_URL`. Conversion spends at most 1 testnet XLM plus fees; CCTP spends 0.3 testnet USDC. Never delete a pending proof to retry a transfer.
 

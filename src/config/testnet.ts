@@ -14,7 +14,10 @@ export const TESTNET = {
     "https://soroban-testnet.stellar.org",
   ),
   networkPassphrase: "Test SDF Network ; September 2015",
-  horizonUrl: "https://horizon-testnet.stellar.org",
+  horizonUrl: configured(
+    process.env.NEXT_PUBLIC_STELLAR_HORIZON_URL,
+    "https://horizon-testnet.stellar.org",
+  ),
 } as const;
 export const STELLAR_DEPLOYMENT = {
   chain: "stellar-testnet",
@@ -25,6 +28,16 @@ export const STELLAR_DEPLOYMENT = {
   deployedLedger: stellar.deployedAt.ledger,
 } as const;
 export type BridgeRoute = 0 | 1;
+const cctpDestinations = new Set(
+  stellar.activation.cctp.status === "active" && stellar.activation.cctp.acceptance === "delivered"
+    ? stellar.activation.cctp.destinations
+    : [],
+);
+const itsDestinations = new Set(
+  stellar.activation.status === "active" && stellar.activation.acceptance === "delivered"
+    ? [stellar.peerChain]
+    : [],
+);
 export const CIRCLE_STELLAR = {
   messenger: "CDNG7HXAPBWICI2E3AUBP3YZWZELJLYSB6F5CC7WLDTLTHVM74SLRTHP",
   transmitter: "CBJ6MTCKKZG73PMDZCJMSFRD7DQEMI4FKDH7CGDSV4W6FHCRBCQAVVJY",
@@ -44,6 +57,10 @@ export const DESTINATIONS = (["sepolia", "base-sepolia", "arc-testnet"] as const
     chainId: chain.chainId,
     rpcUrl: chain.defaultRpcUrl,
     its: contracts.axelar?.interchainTokenService as `0x${string}`,
+    routes: [
+      ...(cctpDestinations.has(key) ? ([0] as const) : []),
+      ...(itsDestinations.has(key) ? ([1] as const) : []),
+    ],
     cctpDomain: chain.cctpDomain,
     usdc: asset.address,
     messenger: contracts.cctp.tokenMessengerV2,

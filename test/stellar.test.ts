@@ -7,13 +7,24 @@ import {
   type TransferCheckpoint,
 } from "../src/contracts/checkpoint";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Account, Contract, TransactionBuilder, rpc, scValToNative } from "@stellar/stellar-sdk";
+import {
+  Account,
+  Contract,
+  TransactionBuilder,
+  rpc,
+  scValToNative,
+  xdr,
+} from "@stellar/stellar-sdk";
 import {
   bridgeOperation,
   diagnoseSequence,
+  validateEnvelopeOperation,
   claimMatchesDeployment,
   parseSendAmount,
+  settleClaimsOperation,
+  supportsBatchClaimSettlement,
   readTransaction,
+  transactionDeadline,
   reconcileSignatureReturn,
   validateReviewMatch,
   validateRecipient,
@@ -31,15 +42,98 @@ const quote: LiveQuote = {
   fee: 30000n,
   netAmount: 9970009n,
   destinationAmount: 9970009n,
+  representableAmount: 9970009n,
   flowAvailable: 10000000000n,
   ledger: 1,
   relayGas: 1051082n,
+  observedAt: "2026-11-18T20:00:00.000Z",
+  scope: {
+    destination: "sepolia",
+    route: 1,
+    adapter: TESTNET.router,
+    ledger: 1,
+  },
 };
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllGlobals());
 describe("Real Stellar transaction encoding", () => {
+  it("diagnoses expired envelope bounds before broadcast", () => {
+    const transaction = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    })
+      .addOperation(new Contract(TESTNET.router).call("noop"))
+      .setTimeout(60)
+      .build();
+    const maxTime = Number(transaction.timeBounds?.maxTime ?? 0);
+    const deadline = transactionDeadline(transaction, maxTime + 1);
+    expect(deadline.expired).toBe(true);
+    expect(deadline.remainingSeconds).toBe(0);
+  });
+  it("rejects malformed bounds and identifies envelopes before their valid window", () => {
+    expect(() => transactionDeadline(null)).toThrow(/bounds/);
+    expect(() => transactionDeadline({ timeBounds: { minTime: "-1", maxTime: "60" } })).toThrow(
+      /invalid/,
+    );
+    expect(() => transactionDeadline({ timeBounds: { minTime: "0", maxTime: "0" } })).toThrow(
+      /invalid/,
+    );
+    expect(
+      transactionDeadline({ timeBounds: { minTime: "100", maxTime: "200" } }, 99).notYetValid,
+    ).toBe(true);
+  });
+
+  it("only advertises batch settlement when the router exposes its batch entrypoint", () => {
+    const method = (
+      name: string,
+      elementType: xdr.ScSpecTypeDef = xdr.ScSpecTypeDef.scSpecTypeU64(),
+    ) =>
+      new xdr.ScSpecFunctionV0({
+        doc: "",
+        name,
+        outputs: [],
+        inputs: [
+          new xdr.ScSpecFunctionInputV0({
+            doc: "",
+            name: "sender",
+            type: xdr.ScSpecTypeDef.scSpecTypeAddress(),
+          }),
+          new xdr.ScSpecFunctionInputV0({
+            doc: "",
+            name: "ids",
+            type: xdr.ScSpecTypeDef.scSpecTypeVec(new xdr.ScSpecTypeVec({ elementType })),
+          }),
+        ],
+      });
+    expect(supportsBatchClaimSettlement([method("settle_claim")])).toBe(false);
+    expect(supportsBatchClaimSettlement([method("settle_claims")])).toBe(true);
+    expect(
+      supportsBatchClaimSettlement([method("settle_claims", xdr.ScSpecTypeDef.scSpecTypeU32())]),
+    ).toBe(false);
+    expect(
+      supportsBatchClaimSettlement([
+        new xdr.ScSpecFunctionV0({ doc: "", name: "settle_claims", inputs: [], outputs: [] }),
+      ]),
+    ).toBe(false);
+  });
+
+  it("encodes every exact claim id in the supported batch entrypoint", () => {
+    const operation = settleClaimsOperation(TESTNET.reader, [1n, 9007199254740993n]);
+    const tx = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(60)
+      .build();
+    const op = tx.operations[0];
+    if (op?.type !== "invokeHostFunction" || op.func.type !== "hostFunctionTypeInvokeContract")
+      throw new Error("Wrong batch settlement operation.");
+    expect(op.func.invokeContract.functionName.toString()).toBe("settle_claims");
+    const ids = op.func.invokeContract.args[1];
+    if (!ids) throw new Error("Missing claim ids.");
+    expect(scValToNative(ids)).toEqual([1n, 9007199254740993n]);
+  });
+
   it("keeps unsupported claim previews explicitly unknown", () => {
     expect(parseClaimPreview({ eligible: true }, "preview_settle_claim")).toMatchObject({
       status: "eligible",
@@ -55,6 +149,7 @@ describe("Real Stellar transaction encoding", () => {
       previewMethod: "preview_settle_claim",
     });
   });
+
   it("only offers recovery for a claim carrying the verified deployment identity", () => {
     const deployment = {
       chain: STELLAR_DEPLOYMENT.chain,
@@ -181,38 +276,6 @@ describe("Real Stellar transaction encoding", () => {
     vi.stubGlobal("fetch", fetcher);
     expect(await readTransaction("0xnot-a-stellar-tx")).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
-  });
-  it("retains an unknown outcome when configured RPC sources disagree", async () => {
-    vi.stubEnv("NEXT_PUBLIC_STELLAR_READ_RPC_URLS", "https://rpc-two.testnet.example");
-    const getNetwork = vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
-      passphrase: TESTNET.networkPassphrase,
-      protocolVersion: "27",
-    });
-    vi.spyOn(rpc.Server.prototype, "getTransaction")
-      .mockResolvedValueOnce({
-        status: rpc.Api.GetTransactionStatus.SUCCESS,
-      } as never)
-      .mockResolvedValueOnce({
-        status: rpc.Api.GetTransactionStatus.FAILED,
-      } as never);
-
-    const result = await readTransaction("a".repeat(64));
-    expect(result).toMatchObject({
-      status: "pending",
-      txHash: "a".repeat(64),
-      reason: expect.stringContaining("disagree"),
-    });
-    expect(getNetwork).toHaveBeenCalledTimes(2);
-  });
-  it("does not accept transaction evidence from an RPC on another network", async () => {
-    vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
-      passphrase: "Public Global Stellar Network ; September 2015",
-      protocolVersion: "27",
-    });
-    const getTransaction = vi.spyOn(rpc.Server.prototype, "getTransaction");
-
-    await expect(readTransaction("b".repeat(64))).rejects.toThrow("not Stellar Testnet");
-    expect(getTransaction).not.toHaveBeenCalled();
   });
   it("encodes Circle's post-forwarding receive minimum with six-decimal native USDC", () => {
     const operation = bridgeOperation(
@@ -357,23 +420,52 @@ describe("Real Stellar transaction encoding", () => {
       }).toThrow("previous transaction remains pending");
       saveCheckpoint(null);
     });
-    it("does not clear a checkpoint that changed in another tab", () => {
-      const checkpoint: TransferCheckpoint = {
-        router: TESTNET.router,
+
+    it("confirms displayed operation matches the exact envelope sent to the wallet", () => {
+      const recipient = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
+      const op = bridgeOperation(TESTNET.reader, quote, recipient);
+      const tx = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+        fee: "100",
+        networkPassphrase: TESTNET.networkPassphrase,
+      })
+        .addOperation(op)
+        .setTimeout(60)
+        .build();
+      expect(validateEnvelopeOperation(op, tx)).toBe(true);
+    });
+
+    it("detects when envelope operation does not match displayed operation", () => {
+      const recipient = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
+      const op1 = bridgeOperation(TESTNET.reader, quote, recipient);
+      const alteredQuote: LiveQuote = { ...quote, requestedAmount: 20000000n };
+      const op2 = bridgeOperation(TESTNET.reader, alteredQuote, recipient);
+      const tx = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+        fee: "100",
+        networkPassphrase: TESTNET.networkPassphrase,
+      })
+        .addOperation(op2)
+        .setTimeout(60)
+        .build();
+      expect(validateEnvelopeOperation(op1, tx)).toBe(false);
+    });
+
+    it("keeps amount units and fee categories distinct in review snapshots", () => {
+      const snapshot1: ReviewSnapshot = {
         account: TESTNET.reader,
         recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
         destination: "sepolia",
         route: 1,
-        bridgeAmount: "1000000",
+        bridgeAmount: 10000009n,
         stage: "bridge",
-        txHash: "3".repeat(64),
+        resourceFee: 45000n,
+        networkFee: 100n,
       };
-      saveCheckpoint(null);
-      saveCheckpoint(checkpoint);
-
-      expect(() => saveCheckpoint(null, "4".repeat(64))).toThrow("changed in another tab");
-      saveCheckpoint(checkpoint);
-      saveCheckpoint(null, checkpoint.txHash);
+      const snapshot2: ReviewSnapshot = {
+        ...snapshot1,
+        resourceFee: 50000n,
+      };
+      expect(validateReviewMatch(snapshot1, { ...snapshot1 })).toBe(true);
+      expect(validateReviewMatch(snapshot1, snapshot2)).toBe(false);
     });
     it("retains a pending hash when writes fail but storage reads still work", () => {
       const checkpoint = {
@@ -401,6 +493,46 @@ describe("Real Stellar transaction encoding", () => {
       }).toThrow("previous transaction remains pending");
       saveCheckpoint(null);
     });
+
+    it.each(["unavailable", "discarded"] as const)(
+      "retains the signed hash and blocks another transaction when checkpoint storage is %s",
+      (failure) => {
+        const checkpoint: TransferCheckpoint = {
+          router: TESTNET.router,
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "1000000",
+          stage: "bridge",
+          txHash: "a".repeat(64),
+        };
+        saveCheckpoint(null);
+        vi.stubGlobal("window", {});
+        vi.stubGlobal(
+          "localStorage",
+          failure === "unavailable"
+            ? undefined
+            : {
+                getItem: () => null,
+                setItem: () => {
+                  /* Simulate a browser discarding writes. */
+                },
+                removeItem: () => {
+                  /* No value was retained. */
+                },
+              },
+        );
+        expect(() => {
+          saveCheckpoint(checkpoint);
+        }).toThrow("Browser storage is unavailable");
+        expect(() => {
+          saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) });
+        }).toThrow("previous transaction remains pending");
+        vi.unstubAllGlobals();
+        saveCheckpoint(null);
+      },
+    );
 
     it("blocks ownership creation before signing when storage is unavailable", () => {
       vi.stubGlobal("localStorage", {

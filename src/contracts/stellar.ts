@@ -2,6 +2,8 @@ import { createPublicClient, http, parseAbi } from "viem";
 import {
   Account,
   Address,
+  Asset,
+  StrKey,
   BASE_FEE,
   Contract,
   TransactionBuilder,
@@ -29,10 +31,54 @@ import {
   type BridgeRoute,
   type DestinationKey,
 } from "../config/testnet";
+import type { TransferCheckpoint } from "./checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
+import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
+import { validateProviderFee } from "../lib/fee-schema";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
+export const TRANSACTION_TIMEOUT_SECONDS = 180;
+
+export interface TransactionDeadline {
+  readonly minTime: number;
+  readonly maxTime: number;
+  readonly remainingSeconds: number;
+  readonly expired: boolean;
+  readonly notYetValid: boolean;
+}
+
+export function transactionDeadline(
+  transaction: unknown,
+  now = Math.floor(Date.now() / 1000),
+): TransactionDeadline {
+  if (!transaction || typeof transaction !== "object")
+    throw new Error("The transaction has no envelope time bounds.");
+  const value = transaction as {
+    timeBounds?: { minTime: string; maxTime: string };
+    innerTransaction?: { timeBounds?: { minTime: string; maxTime: string } };
+  };
+  const bounds = value.timeBounds ?? value.innerTransaction?.timeBounds;
+  if (!bounds) throw new Error("The transaction has no envelope time bounds.");
+  const minTime = Number(bounds.minTime);
+  const maxTime = Number(bounds.maxTime);
+  if (
+    !/^\d+$/.test(bounds.minTime) ||
+    !/^\d+$/.test(bounds.maxTime) ||
+    !Number.isSafeInteger(minTime) ||
+    !Number.isSafeInteger(maxTime) ||
+    minTime < 0 ||
+    maxTime <= minTime
+  )
+    throw new Error("The transaction has invalid envelope time bounds.");
+  return {
+    minTime,
+    maxTime,
+    remainingSeconds: Math.max(0, maxTime - now),
+    expired: now >= maxTime,
+    notYetValid: now < minTime,
+  };
+}
 
 export type WalletSigner = (
   xdr: string,
@@ -43,7 +89,12 @@ export interface TransactionResult {
   status: "confirmed" | "pending" | "failed";
   txHash: string;
   nonce?: string;
-  reason?: string;
+  failure?: SubmissionFailure;
+}
+export interface CheckpointRecoveryResult {
+  status: "confirmed" | "failed" | "unknown";
+  source: "rpc" | "horizon" | "unknown";
+  message: string;
 }
 export interface LiveQuote {
   route: number;
@@ -51,6 +102,15 @@ export interface LiveQuote {
   fee: bigint;
   netAmount: bigint;
   destinationAmount: bigint;
+  /**
+   * `netAmount` truncated down to the destination's decimal precision, expressed in
+   * destination-native base units, before the relay gas deduction folded into
+   * `destinationAmount`. Equal to `netAmount` whenever source and destination decimals match
+   * (Axelar ITS). This is the router's own `destination_amount`, computed from the
+   * `destination_decimals` passed into `quote_routes`, so it never drifts from what is
+   * actually signed.
+   */
+  representableAmount: bigint;
   flowAvailable: bigint;
   ledger: number;
   adapter: string;
@@ -58,6 +118,60 @@ export interface LiveQuote {
   requestedAmount: bigint;
   relayGas: bigint;
   estimatedRelayGas?: bigint;
+  readonly observedAt?: string;
+  readonly observations?: { readonly contractAt: string; readonly providerAt: string };
+  readonly scope?: {
+    readonly destination: DestinationKey;
+    readonly route: BridgeRoute;
+    readonly adapter: string;
+    readonly ledger: number;
+  };
+  resourceFee?: bigint;
+  networkFee?: bigint;
+}
+export type QuoteFreshness = "current" | "stale" | "unknown";
+const QUOTE_MAX_AGE_MS = 30_000;
+export function quoteFreshness(
+  quote: Pick<LiveQuote, "observedAt">,
+  now = Date.now(),
+): QuoteFreshness {
+  const observed = Date.parse(quote.observedAt ?? "");
+  if (!Number.isFinite(observed) || observed > now) return "unknown";
+  return now - observed <= QUOTE_MAX_AGE_MS ? "current" : "stale";
+}
+
+export interface QuoteBreakdown {
+  readonly requestedSourceAmount: bigint;
+  readonly actualSourceDebit: bigint;
+  readonly protocolFee: bigint;
+  readonly representableBridgeAmount: bigint;
+  readonly retainedDust: bigint;
+}
+
+/** Exact source units: the router leaves unrepresentable precision dust in the account. */
+export function quoteBreakdown(quote: LiveQuote): QuoteBreakdown {
+  const quantum = 10n ** BigInt(7 - destinationDecimals(quote.route));
+  const representableBridgeAmount = quote.representableAmount * quantum;
+  if (
+    quote.requestedAmount <= 0n ||
+    quote.requestedAmount > I128_MAX ||
+    quote.fee < 0n ||
+    quote.fee >= quote.requestedAmount ||
+    representableBridgeAmount <= 0n ||
+    representableBridgeAmount !== quote.netAmount ||
+    quote.grossAmount !== quote.fee + representableBridgeAmount ||
+    quote.grossAmount > quote.requestedAmount ||
+    quote.requestedAmount - quote.grossAmount >= quantum ||
+    quote.destinationAmount <= 0n
+  )
+    throw new Error("The live quote does not conserve its exact source and destination amounts.");
+  return {
+    requestedSourceAmount: quote.requestedAmount,
+    actualSourceDebit: quote.grossAmount,
+    protocolFee: quote.fee,
+    representableBridgeAmount,
+    retainedDust: quote.requestedAmount - quote.grossAmount,
+  };
 }
 export interface LaneState {
   available: boolean;
@@ -96,6 +210,21 @@ export function claimMatchesDeployment(
     claim.deployment.router === deployment.router &&
     claim.deployment.wasmHash === deployment.wasmHash
   );
+}
+
+export const MAX_BATCH_CLAIMS = 20;
+
+export function supportsBatchClaimSettlement(methods: readonly xdr.ScSpecFunctionV0[]): boolean {
+  return methods.some((method) => {
+    const [sender, ids] = method.inputs;
+    return (
+      method.name.toString() === "settle_claims" &&
+      method.inputs.length === 2 &&
+      sender?.type.type === "scSpecTypeAddress" &&
+      ids?.type.type === "scSpecTypeVec" &&
+      ids.type.value.elementType.type === "scSpecTypeU64"
+    );
+  });
 }
 
 export type ClaimPayoutStatus = "eligible" | "ineligible" | "unknown";
@@ -261,6 +390,17 @@ function contractMethods(contract: string) {
 }
 
 export function errorMessage(error: unknown): string {
+  if (error instanceof SubmissionFailure) {
+    const label = {
+      build: "Transaction preparation",
+      simulation: "Transaction simulation",
+      approval: "Wallet approval",
+      checkpoint: "Recovery checkpoint",
+      broadcast: "Source broadcast",
+      confirmation: "Source confirmation",
+    }[error.stage];
+    return `${label}: ${error.message}`;
+  }
   const message = error instanceof Error ? error.message : String(error);
   const code = /Error\(Contract, #(\d+)\)/.exec(message)?.[1];
   if (code) {
@@ -268,6 +408,45 @@ export function errorMessage(error: unknown): string {
     if (name) return `${name}: ${describeError(name).summary}`;
   }
   return message.split("\n")[0] ?? "The network request failed. Please try again.";
+}
+
+export type SubmissionFailureStage =
+  "build" | "simulation" | "approval" | "checkpoint" | "broadcast" | "confirmation";
+
+export class SubmissionFailure extends Error {
+  constructor(
+    readonly stage: SubmissionFailureStage,
+    message: string,
+    readonly txHash?: string,
+  ) {
+    super(message);
+    this.name = "SubmissionFailure";
+  }
+}
+
+export function classifySubmissionFailure(
+  stage: SubmissionFailureStage,
+  error: unknown,
+  txHash?: string,
+): SubmissionFailure {
+  if (error instanceof SubmissionFailure) return error;
+  const message = errorMessage(error).slice(0, 400);
+  const publicHash =
+    (stage === "broadcast" || stage === "confirmation") && /^[0-9a-f]{64}$/i.test(txHash ?? "")
+      ? txHash
+      : undefined;
+  return new SubmissionFailure(stage, message, publicHash);
+}
+
+async function submissionStage<T>(
+  stage: SubmissionFailureStage,
+  action: () => T | Promise<T>,
+): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    throw classifySubmissionFailure(stage, error);
+  }
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -332,10 +511,10 @@ export async function readLane(
   route: BridgeRoute = 1,
 ): Promise<LaneState> {
   const destination = destinationFor(destinationKey);
-  if (route === 1 && destinationKey !== "sepolia")
+  if (!destination.routes.includes(route))
     return {
       available: false,
-      reason: "Axelar ITS is configured for Sepolia. Choose Circle CCTP for this network.",
+      reason: "This bridge does not have an independently verified lane to this testnet.",
       feeBps: null,
       ledger: 0,
       adapter: null,
@@ -537,6 +716,7 @@ export async function quoteTransfer(
     nativeToScVal(amount, { type: "i128" }),
     nativeToScVal(destinationDecimals(route), { type: "u32" }),
   ]);
+  const contractAt = new Date().toISOString();
   if (!Array.isArray(response.value)) throw new Error("The router returned an invalid quote.");
   const quote = response.value.map(object).find((q) => q.route === route);
   if (!quote) throw new Error("The router did not quote this bridge.");
@@ -559,15 +739,26 @@ export async function quoteTransfer(
     return response;
   });
   if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");
-  const fee: unknown = await feeResponse.json();
+  const providerDestination =
+    route === 0 ? destinationKey : destinationFor(destinationKey).axelarName;
+  if (!providerDestination) throw new Error("This destination has no configured provider chain.");
+  const fee = validateProviderFee(await feeResponse.json(), {
+    token: route === 0 ? "USDC" : "XLM",
+    destination: providerDestination,
+  });
+  const providerAt = new Date().toISOString();
   const relayGas = integer(object(fee).amount);
   const estimatedRelayGas = integer(object(fee).estimatedAmount ?? relayGas);
   if (estimatedRelayGas <= 0n || estimatedRelayGas > relayGas)
     throw new Error("Invalid live fee estimate.");
   if (relayGas <= 0n || relayGas > I128_MAX) throw new Error("Invalid relay gas estimate.");
-  if (route === 0 && (relayGas % 10n !== 0n || relayGas >= integer(quote.net_amount)))
+  // See `quoteBreakdown` for what this quantum represents: it must divide the relay gas
+  // exactly so the gas deduction below lands on a destination-representable boundary too.
+  const quantum = 10n ** BigInt(7 - destinationDecimals(route));
+  if (route === 0 && (relayGas % quantum !== 0n || relayGas >= integer(quote.net_amount)))
     throw new Error("Increase the amount to cover Circle's destination forwarding fee.");
-  return {
+  const representableAmount = integer(quote.destination_amount);
+  const result: LiveQuote = {
     relayGas,
     estimatedRelayGas,
     route,
@@ -577,10 +768,21 @@ export async function quoteTransfer(
     grossAmount: integer(quote.gross_amount),
     fee: integer(quote.fee),
     netAmount: integer(quote.net_amount),
-    destinationAmount: integer(quote.destination_amount) - (route === 0 ? relayGas / 10n : 0n),
+    destinationAmount: representableAmount - (route === 0 ? relayGas / quantum : 0n),
+    representableAmount,
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
+    observedAt: providerAt,
+    observations: { contractAt, providerAt },
+    scope: {
+      destination: destinationKey,
+      route,
+      adapter: lane.adapter,
+      ledger: response.ledger,
+    },
   };
+  quoteBreakdown(result);
+  return result;
 }
 
 export async function readBalance(account: string): Promise<bigint> {
@@ -616,45 +818,9 @@ export function bridgeOperation(sender: string, quote: LiveQuote, recipientInput
   );
 }
 
-const MAX_TRANSACTION_READ_SOURCES = 3;
-
-function transactionReadSources(): string[] {
-  const configured = (process.env.NEXT_PUBLIC_STELLAR_READ_RPC_URLS ?? "")
-    .split(",")
-    .map((url) => url.trim())
-    .filter(Boolean);
-  const sources: string[] = [];
-  const origins = new Set<string>();
-  for (const endpoint of [TESTNET.rpcUrl, ...configured]) {
-    let url: URL;
-    try {
-      url = new URL(endpoint);
-    } catch {
-      throw new Error("A Stellar transaction read source is not a valid URL.");
-    }
-    if (
-      (url.protocol !== "https:" && url.protocol !== "http:") ||
-      url.username ||
-      url.password
-    ) {
-      throw new Error("Stellar transaction read sources must be public HTTP(S) endpoints.");
-    }
-    if (origins.has(url.origin)) continue;
-    origins.add(url.origin);
-    sources.push(url.toString());
-    if (sources.length === MAX_TRANSACTION_READ_SOURCES) break;
-  }
-  return sources;
-}
-
-async function readTransactionFrom(
-  client: rpc.Server,
-  hash: string,
-): Promise<TransactionResult> {
-  const network = await client.getNetwork();
-  if (network.passphrase !== TESTNET.networkPassphrase)
-    throw new Error("The RPC endpoint is not Stellar Testnet.");
-  const result = await client.getTransaction(hash);
+export async function readTransaction(hash: string): Promise<TransactionResult | null> {
+  if (!/^[0-9a-fA-F]{64}$/.test(hash)) return null;
+  const result = await server().getTransaction(hash);
   if (result.status === rpc.Api.GetTransactionStatus.FAILED)
     return { status: "failed", txHash: hash };
   if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
@@ -668,34 +834,313 @@ async function readTransactionFrom(
   return { status: "pending", txHash: hash };
 }
 
-export async function readTransaction(hash: string): Promise<TransactionResult | null> {
-  if (!/^[0-9a-fA-F]{64}$/.test(hash)) return null;
-  const sources = transactionReadSources();
-  const reads = await Promise.allSettled(
-    sources.map((url) => readTransactionFrom(new rpc.Server(url, { timeout: 15_000 }), hash)),
+function unknownRecovery(message: string): CheckpointRecoveryResult {
+  return { status: "unknown", source: "unknown", message };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+type ParsedOperation = Transaction["operations"][number];
+
+function matchesConversion(checkpoint: TransferCheckpoint, operations: ParsedOperation[]) {
+  const payments = operations.filter((operation) => operation.type === "pathPaymentStrictReceive");
+  if (
+    payments.length !== 1 ||
+    operations.length > 2 ||
+    operations.some((operation) => operation.source && operation.source !== checkpoint.account)
+  )
+    return false;
+  if (
+    operations.some(
+      (operation) =>
+        operation.type !== "pathPaymentStrictReceive" &&
+        (operation.type !== "changeTrust" ||
+          !(operation.line instanceof Asset) ||
+          operation.line.getCode() !== TESTNET.usdcCode ||
+          operation.line.getIssuer() !== TESTNET.usdcIssuer),
+    )
+  )
+    return false;
+  const payment = payments[0];
+  return (
+    payment?.type === "pathPaymentStrictReceive" &&
+    (!payment.source || payment.source === checkpoint.account) &&
+    payment.destination === checkpoint.account &&
+    payment.destAsset.getCode() === TESTNET.usdcCode &&
+    payment.destAsset.getIssuer() === TESTNET.usdcIssuer &&
+    parseUnits(payment.destAmount, 7) === BigInt(checkpoint.bridgeAmount)
   );
-  const results = reads.flatMap((read) => (read.status === "fulfilled" ? [read.value] : []));
-  if (!results.length) {
-    throw new Error("No configured Stellar Testnet RPC source could verify this transaction.");
+}
+
+function numericValue(value: unknown, expected: bigint): boolean {
+  return (
+    value === expected ||
+    (typeof value === "number" && Number.isSafeInteger(value) && BigInt(value) === expected)
+  );
+}
+
+function matchesBridge(checkpoint: TransferCheckpoint, operation: ParsedOperation | undefined) {
+  if (
+    operation?.type !== "invokeHostFunction" ||
+    (operation.source !== undefined && operation.source !== checkpoint.account) ||
+    operation.func.type !== "hostFunctionTypeInvokeContract"
+  )
+    return false;
+  const invocation = operation.func.invokeContract;
+  if (invocation.functionName.toString() !== "bridge_out_with_gas") return false;
+  if (
+    invocation.contractAddress.type !== "scAddressTypeContract" ||
+    StrKey.encodeContract(invocation.contractAddress.contractId.toBytes()) !== TESTNET.router
+  )
+    return false;
+  const args = invocation.args;
+  if (args.length !== 3 || !args[0] || !args[1] || !args[2]) return false;
+  const sender = scValToNative(args[0]);
+  const request: unknown = scValToNative(args[1]);
+  const relayGas: unknown = scValToNative(args[2]);
+  if (!isRecord(request) || !isRecord(request.destination)) return false;
+  const destination = destinationFor(checkpoint.destination);
+  const expectedRecipient = fromHex(`0x${checkpoint.recipient.slice(2).padStart(64, "0")}`);
+  const actualRecipient = request.destination.address;
+  return (
+    sender === checkpoint.account &&
+    request.token === TESTNET.token &&
+    numericValue(request.amount, BigInt(checkpoint.bridgeAmount)) &&
+    numericValue(request.route, BigInt(checkpoint.route)) &&
+    request.destination.chain === destination.key &&
+    actualRecipient instanceof Uint8Array &&
+    toHex(actualRecipient) === toHex(expectedRecipient) &&
+    numericValue(request.destination_decimals, BigInt(destinationDecimals(checkpoint.route))) &&
+    typeof request.min_destination_amount === "bigint" &&
+    request.min_destination_amount > 0n &&
+    typeof relayGas === "bigint" &&
+    relayGas > 0n
+  );
+}
+
+function inspectCheckpointEnvelope(
+  checkpoint: TransferCheckpoint,
+  envelopeXdr: string,
+  resultXdr: string,
+  successful: boolean | null,
+): "confirmed" | "failed" | null {
+  try {
+    if (
+      checkpoint.router !== TESTNET.router ||
+      envelopeXdr.length > 200_000 ||
+      resultXdr.length > 200_000
+    )
+      return null;
+    const transaction = TransactionBuilder.fromXdr(envelopeXdr, TESTNET.networkPassphrase);
+    if (
+      "innerTransaction" in transaction ||
+      transaction.source !== checkpoint.account ||
+      toHex(transaction.hash()).slice(2).toLowerCase() !== checkpoint.txHash
+    )
+      return null;
+    const matches =
+      checkpoint.stage === "conversion"
+        ? matchesConversion(checkpoint, transaction.operations)
+        : transaction.operations.length === 1 &&
+          matchesBridge(checkpoint, transaction.operations[0]);
+    if (!matches) return null;
+    const transactionResult = xdr.TransactionResult.fromXdr(resultXdr, "base64");
+    const resultSucceeded = transactionResult.result.type === "txSuccess";
+    if (successful !== null && successful !== resultSucceeded) return null;
+    if (
+      transactionResult.result.type === "txFeeBumpInnerSuccess" ||
+      transactionResult.result.type === "txFeeBumpInnerFailed"
+    )
+      return null;
+    if (transactionResult.result.type === "txSuccess") {
+      const results = transactionResult.result.results;
+      if (results.length !== transaction.operations.length) return null;
+      for (const [index, operation] of transaction.operations.entries()) {
+        const result = results[index];
+        if (result?.type !== "opInner" || result.tr.type !== operation.type) return null;
+        if (result.tr.type === "pathPaymentStrictReceive") {
+          const payment = result.tr.pathPaymentStrictReceiveResult;
+          if (payment.type !== "pathPaymentStrictReceiveSuccess") return null;
+          const last = payment.success.last;
+          const asset = Asset.fromOperation(last.asset);
+          if (
+            last.destination.type !== "publicKeyTypeEd25519" ||
+            StrKey.encodeEd25519PublicKey(last.destination.ed25519.toBytes()) !==
+              checkpoint.account ||
+            asset.getCode() !== TESTNET.usdcCode ||
+            asset.getIssuer() !== TESTNET.usdcIssuer ||
+            last.amount !== BigInt(checkpoint.bridgeAmount)
+          )
+            return null;
+        } else if (result.tr.type === "changeTrust") {
+          if (result.tr.changeTrustResult.type !== "changeTrustSuccess") return null;
+        } else if (
+          result.tr.type !== "invokeHostFunction" ||
+          result.tr.invokeHostFunctionResult.type !== "invokeHostFunctionSuccess"
+        )
+          return null;
+      }
+    }
+    return resultSucceeded ? "confirmed" : "failed";
+  } catch {
+    return null;
   }
-  const pending = (reason: string): TransactionResult => ({ status: "pending", txHash: hash, reason });
-  if (results.length !== sources.length)
-    return pending("A transaction read source was unavailable; its outcome remains unknown.");
-  const statuses = new Set(results.map((result) => result.status));
-  if (statuses.size !== 1)
-    return pending("Stellar transaction sources disagree; its outcome remains unknown.");
-  if (statuses.has("pending"))
-    return pending("Stellar Testnet has not confirmed a final transaction result yet.");
-  const nonces = new Set(results.flatMap((result) => (result.nonce ? [result.nonce] : [])));
-  if (nonces.size > 1)
-    return pending("Stellar transaction sources returned conflicting results; its outcome remains unknown.");
-  const [result] = results;
-  if (!result) throw new Error("No Stellar transaction result was returned.");
+}
+
+function recoveryResult(
+  status: "confirmed" | "failed",
+  source: "rpc" | "horizon",
+): CheckpointRecoveryResult {
   return {
-    status: result.status,
-    txHash: hash,
-    ...(nonces.size === 1 ? { nonce: [...nonces][0] } : {}),
+    status,
+    source,
+    message:
+      source === "horizon"
+        ? `The transaction was ${status} in Stellar Testnet history.`
+        : `The transaction was ${status} on Stellar Testnet.`,
   };
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted)
+    return Promise.reject(new DOMException("Recovery lookup cancelled.", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Recovery lookup cancelled.", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (cause: unknown) => {
+        cleanup();
+        reject(cause);
+      },
+    );
+  });
+}
+
+async function boundedHistoryJson(response: Response, signal: AbortSignal): Promise<unknown> {
+  const limit = 512_000;
+  if (Number(response.headers.get("content-length")) > limit || !response.body)
+    throw new Error("Historical evidence is too large or unavailable.");
+  const reader = response.body.getReader();
+  let bytes = 0;
+  let text = "";
+  const decoder = new TextDecoder();
+  try {
+    while (true) {
+      const chunk = await abortable(reader.read(), signal);
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > limit) throw new Error("Historical evidence exceeds the size limit.");
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    return JSON.parse(text + decoder.decode()) as unknown;
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+}
+
+export async function resolveCheckpointTransaction(
+  checkpoint: TransferCheckpoint,
+  signal?: AbortSignal,
+): Promise<CheckpointRecoveryResult> {
+  if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
+  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || checkpoint.router !== TESTNET.router)
+    return unknownRecovery("The saved checkpoint does not match the configured Stellar Testnet.");
+  const lookupSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+    : AbortSignal.timeout(15000);
+  try {
+    const rpcServer = server();
+    const rpcSignal = AbortSignal.any([lookupSignal, AbortSignal.timeout(5000)]);
+    const network = await abortable(rpcServer.getNetwork(), rpcSignal);
+    if (network.passphrase !== TESTNET.networkPassphrase)
+      return unknownRecovery("RPC returned a network that is not Stellar Testnet.");
+    const rpcResult = await abortable(rpcServer.getTransaction(checkpoint.txHash), rpcSignal);
+    if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
+    const expectedSuccess =
+      rpcResult.status === rpc.Api.GetTransactionStatus.SUCCESS
+        ? true
+        : rpcResult.status === rpc.Api.GetTransactionStatus.FAILED
+          ? false
+          : null;
+    if (expectedSuccess !== null) {
+      if (rpcResult.txHash !== checkpoint.txHash || ("feeBump" in rpcResult && rpcResult.feeBump))
+        return unknownRecovery("RPC returned conflicting transaction identity.");
+      const envelopeXdr =
+        "envelopeXdr" in rpcResult ? rpcResult.envelopeXdr.toXdr("base64") : undefined;
+      const resultXdr = "resultXdr" in rpcResult ? rpcResult.resultXdr.toXdr("base64") : undefined;
+      if (typeof envelopeXdr === "string" && typeof resultXdr === "string") {
+        const verified = inspectCheckpointEnvelope(
+          checkpoint,
+          envelopeXdr,
+          resultXdr,
+          expectedSuccess,
+        );
+        if (verified) return recoveryResult(verified, "rpc");
+        return unknownRecovery("RPC returned conflicting or invalid transaction evidence.");
+      }
+    }
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+  }
+
+  try {
+    const networkResponse = await fetch(TESTNET.horizonUrl, {
+      signal: lookupSignal,
+      cache: "no-store",
+    });
+    const network: unknown = networkResponse.ok
+      ? await boundedHistoryJson(networkResponse, lookupSignal)
+      : null;
+    if (!isRecord(network) || network.network_passphrase !== TESTNET.networkPassphrase)
+      return unknownRecovery("Historical evidence does not establish the Stellar Testnet network.");
+    const response = await fetch(
+      `${TESTNET.horizonUrl}/transactions/${encodeURIComponent(checkpoint.txHash)}`,
+      {
+        signal: lookupSignal,
+        cache: "no-store",
+      },
+    );
+    if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
+    if (response.status === 404)
+      return unknownRecovery("No matching transaction is available in Stellar Testnet history.");
+    if (!response.ok)
+      return unknownRecovery("Stellar Testnet transaction history is temporarily unavailable.");
+    const body: unknown = await boundedHistoryJson(response, lookupSignal);
+    if (
+      !isRecord(body) ||
+      body.hash !== checkpoint.txHash ||
+      body.source_account !== checkpoint.account ||
+      typeof body.successful !== "boolean" ||
+      typeof body.envelope_xdr !== "string" ||
+      typeof body.result_xdr !== "string"
+    )
+      return unknownRecovery("Historical transaction evidence is incomplete or does not match.");
+    const verified = inspectCheckpointEnvelope(
+      checkpoint,
+      body.envelope_xdr,
+      body.result_xdr,
+      body.successful,
+    );
+    if (!verified)
+      return unknownRecovery("Historical transaction evidence conflicts with this checkpoint.");
+    return recoveryResult(verified, "horizon");
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    return unknownRecovery(
+      "Stellar Testnet history could not be checked. The saved checkpoint is unchanged.",
+    );
+  }
 }
 
 export interface ReviewSnapshot {
@@ -707,6 +1152,8 @@ export interface ReviewSnapshot {
   stage: "conversion" | "bridge";
   sourceId?: string;
   sourceAmount?: bigint;
+  resourceFee?: bigint;
+  networkFee?: bigint;
 }
 
 export interface SubmissionReconciliation {
@@ -735,6 +1182,20 @@ export function validateReviewMatch(original: ReviewSnapshot, current: ReviewSna
     return false;
   }
   if (original.sourceAmount !== undefined && original.sourceAmount !== current.sourceAmount) {
+    return false;
+  }
+  if (
+    original.resourceFee !== undefined &&
+    current.resourceFee !== undefined &&
+    original.resourceFee !== current.resourceFee
+  ) {
+    return false;
+  }
+  if (
+    original.networkFee !== undefined &&
+    current.networkFee !== undefined &&
+    original.networkFee !== current.networkFee
+  ) {
     return false;
   }
   return true;
@@ -798,16 +1259,42 @@ export async function verifyAccountSequence(
   }
 }
 
-export async function submitOperation(
+export interface SimulatedOperation {
+  resourceFee: bigint;
+  networkFee: bigint;
+  totalFee: bigint;
+  preparedTransaction: Transaction;
+  envelopeXdr: string;
+  sequence: string;
+}
+
+export function validateEnvelopeOperation(
+  expectedOperation: xdr.Operation,
+  preparedTransaction: Transaction,
+): boolean {
+  const envelope = preparedTransaction.toEnvelope();
+  if (envelope.type !== "envelopeTypeTx" || envelope.v1.tx.operations.length !== 1) return false;
+  const actual = envelope.v1.tx.operations[0];
+  if (
+    !actual ||
+    expectedOperation.body.type !== "invokeHostFunction" ||
+    actual.body.type !== "invokeHostFunction"
+  )
+    return false;
+  // Assembly adds the authorization entries returned by simulation. The reviewed call
+  // and operation source must stay identical; the full assembled envelope is frozen separately.
+  return (
+    actual.body.invokeHostFunctionOp.hostFunction.toXdr("base64") ===
+      expectedOperation.body.invokeHostFunctionOp.hostFunction.toXdr("base64") &&
+    actual.sourceAccount?.toXdr("base64") === expectedOperation.sourceAccount?.toXdr("base64")
+  );
+}
+
+export async function simulateOperation(
   sender: string,
   operation: xdr.Operation,
-  sign: WalletSigner,
-  progress?: (phase: TransactionPhase, hash?: string) => void,
-  approval?: WalletApprovalProvenance,
-  reconcile?: SubmissionReconciliation,
-): Promise<TransactionResult> {
+): Promise<SimulatedOperation> {
   const client = server();
-  progress?.("preparing");
   const network = await client.getNetwork();
   if (network.passphrase !== TESTNET.networkPassphrase)
     throw new Error("The RPC endpoint is not Stellar Testnet.");
@@ -817,40 +1304,126 @@ export async function submitOperation(
     networkPassphrase: TESTNET.networkPassphrase,
   })
     .addOperation(operation)
-    .setTimeout(180)
+    .setTimeout(TRANSACTION_TIMEOUT_SECONDS)
     .build();
-  const simulation = await client.simulateTransaction(transaction);
+  const simulation = await submissionStage("simulation", () =>
+    client.simulateTransaction(transaction),
+  );
   if (!rpc.Api.isSimulationSuccess(simulation)) {
-    throw new Error(
+    throw classifySubmissionFailure(
+      "simulation",
       rpc.Api.isSimulationError(simulation)
         ? simulation.error
         : "Contract state needs restoration. Ask the operator to restore it.",
     );
   }
-  const prepared = rpc.assembleTransaction(transaction, simulation).build();
-  await verifyAccountSequence(client, sender, prepared.sequence);
-  progress?.("signing");
-  return signAndSubmit(prepared, sign, progress, approval, reconcile);
+  const prepared = await submissionStage("simulation", () =>
+    rpc.assembleTransaction(transaction, simulation).build(),
+  );
+  const envelope = prepared.toEnvelope();
+  if (envelope.type !== "envelopeTypeTx" || envelope.v1.tx.ext.type !== "sorobanData")
+    throw new Error("The simulation did not assemble a Soroban envelope.");
+  const resourceFee = envelope.v1.tx.ext.sorobanData.resourceFee;
+  const totalFee = BigInt(prepared.fee);
+  const networkFee = totalFee - resourceFee;
+  if (networkFee < 0n) throw new Error("Invalid simulation fee data. Refresh the simulation.");
+  return {
+    resourceFee,
+    networkFee,
+    totalFee,
+    preparedTransaction: prepared,
+    envelopeXdr: prepared.toXdr(),
+    sequence: prepared.sequence,
+  };
 }
 
-export async function submitClassicOperations(
+export async function simulateBridgeOut(
   sender: string,
-  operations: readonly xdr.Operation[],
+  quoted: LiveQuote,
+  recipient: string,
+): Promise<SimulatedOperation> {
+  validateRecipient(recipient);
+  const operation = bridgeOperation(sender, quoted, recipient);
+  return simulateOperation(sender, operation);
+}
+
+export async function submitOperation(
+  sender: string,
+  operation: xdr.Operation,
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
+  simulated?: SimulatedOperation,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
-  const client = server();
-  if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
-    throw new Error("The RPC endpoint is not Stellar Testnet.");
-  const account = await client.getAccount(sender);
-  const builder = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: TESTNET.networkPassphrase,
+  const prepared = await submissionStage("build", async () => {
+    const client = server();
+    progress?.("preparing");
+    const network = await client.getNetwork();
+    if (network.passphrase !== TESTNET.networkPassphrase)
+      throw new Error("The RPC endpoint is not Stellar Testnet.");
+    let prepared: Transaction;
+    if (simulated) {
+      if (!validateEnvelopeOperation(operation, simulated.preparedTransaction)) {
+        throw new Error(
+          "Displayed operation does not correspond to the envelope sent to the wallet.",
+        );
+      }
+      prepared = simulated.preparedTransaction;
+      const envelope = prepared.toEnvelope();
+      if (
+        envelope.type !== "envelopeTypeTx" ||
+        envelope.v1.tx.ext.type !== "sorobanData" ||
+        simulated.totalFee !== BigInt(prepared.fee) ||
+        simulated.resourceFee !== envelope.v1.tx.ext.sorobanData.resourceFee ||
+        simulated.networkFee !== simulated.totalFee - simulated.resourceFee
+      )
+        throw new Error(
+          "The displayed simulation fees changed. Review a fresh simulation before signing.",
+        );
+      if (
+        prepared.source !== sender ||
+        prepared.toXdr() !== simulated.envelopeXdr ||
+        prepared.sequence !== simulated.sequence
+      )
+        throw new Error(
+          "The reviewed simulation changed. Review a fresh simulation before signing.",
+        );
+    } else {
+      const sim = await simulateOperation(sender, operation);
+      prepared = sim.preparedTransaction;
+    }
+    await verifyAccountSequence(client, sender, prepared.sequence);
+    progress?.("signing");
+    return prepared;
   });
-  for (const operation of operations) builder.addOperation(operation);
-  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval, reconcile);
+  return signAndSubmit(prepared, sign, progress, approval, reconcile, signal);
+}
+
+export async function submitClassicOperations(
+  sender: string,
+  operations: readonly xdr.Operation[] | (() => Promise<readonly xdr.Operation[]>),
+  sign: WalletSigner,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
+  approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
+  signal?: AbortSignal,
+): Promise<TransactionResult> {
+  const prepared = await submissionStage("build", async () => {
+    const client = server();
+    if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
+      throw new Error("The RPC endpoint is not Stellar Testnet.");
+    const account = await client.getAccount(sender);
+    const builder = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: TESTNET.networkPassphrase,
+    });
+    const preparedOperations = typeof operations === "function" ? await operations() : operations;
+    for (const operation of preparedOperations) builder.addOperation(operation);
+    return builder.setTimeout(TRANSACTION_TIMEOUT_SECONDS).build();
+  });
+  return signAndSubmit(prepared, sign, progress, approval, reconcile, signal);
 }
 
 async function signAndSubmit(
@@ -859,73 +1432,112 @@ async function signAndSubmit(
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const client = server();
-  progress?.("signing");
-  const signOptions = { networkPassphrase: TESTNET.networkPassphrase };
-  const signed = await sign(
-    prepared.toXdr(),
-    approval ? { ...signOptions, approval } : signOptions,
-  );
-  const signedTransaction = TransactionBuilder.fromXdr(
-    signed.signedTxXdr,
-    TESTNET.networkPassphrase,
-  );
-  if (toHex(signedTransaction.hash()) !== toHex(prepared.hash())) {
-    throw new Error("The wallet returned a different transaction. Nothing was submitted.");
-  }
-  if ("innerTransaction" in signedTransaction || signedTransaction.sequence !== prepared.sequence) {
-    throw new Error(
-      "The transaction sequence was modified. Stale sequence cannot be silently changed inside a reviewed signed envelope.",
-    );
-  }
-  const hash = toHex(prepared.hash()).slice(2);
-  if (reconcile) {
-    if (reconcile.isSuperseded?.()) {
-      throw new Error("The review was superseded before signing completed. Nothing was submitted.");
+  const signedTransaction = await submissionStage("approval", async () => {
+    progress?.("signing");
+    if (transactionDeadline(prepared).notYetValid)
+      throw new Error("The transaction envelope is not yet valid. Review a fresh transaction.");
+    if (transactionDeadline(prepared).expired)
+      throw new Error("The signed transaction envelope has expired. Review again.");
+    const signOptions = { networkPassphrase: TESTNET.networkPassphrase };
+    let signed: Awaited<ReturnType<WalletSigner>>;
+    try {
+      signed = await sign(prepared.toXdr(), approval ? { ...signOptions, approval } : signOptions);
+    } catch (error) {
+      throw classifySubmissionFailure("approval", error);
     }
-    const currentAccount = reconcile.getCurrentAccount
-      ? reconcile.getCurrentAccount()
-      : reconcile.expectedAccount;
-    if (currentAccount !== reconcile.expectedAccount) {
-      if (reconcile.onAccountSwitch) {
-        await reconcile.onAccountSwitch(hash, signedTransaction);
-      }
-      throw new Error(
-        "Wallet account switched. The transaction was preserved in recovery and not submitted.",
+    const signedTransaction = TransactionBuilder.fromXdr(
+      signed.signedTxXdr,
+      TESTNET.networkPassphrase,
+    );
+    if (toHex(signedTransaction.hash()) !== toHex(prepared.hash())) {
+      throw classifySubmissionFailure(
+        "approval",
+        "The wallet returned a different transaction. Nothing was submitted.",
       );
     }
-    if (reconcile.validate) {
-      await reconcile.validate(hash, signedTransaction);
+    if (
+      "innerTransaction" in signedTransaction ||
+      signedTransaction.sequence !== prepared.sequence
+    ) {
+      throw new Error(
+        "The transaction sequence was modified. Stale sequence cannot be silently changed inside a reviewed signed envelope.",
+      );
     }
-  }
-  progress?.("submitting", hash);
+    if (transactionDeadline(signedTransaction).notYetValid)
+      throw new Error("The transaction envelope is not yet valid. Nothing was submitted.");
+    if (transactionDeadline(signedTransaction).expired)
+      throw new Error(
+        "The signed transaction envelope expired before broadcast. Nothing was submitted.",
+      );
+    return signedTransaction;
+  });
+  const hash = toHex(prepared.hash()).slice(2);
+  await submissionStage("checkpoint", async () => {
+    if (reconcile) {
+      if (reconcile.isSuperseded?.()) {
+        throw new Error(
+          "The review was superseded before signing completed. Nothing was submitted.",
+        );
+      }
+      const currentAccount = reconcile.getCurrentAccount
+        ? reconcile.getCurrentAccount()
+        : reconcile.expectedAccount;
+      if (currentAccount !== reconcile.expectedAccount) {
+        if (reconcile.onAccountSwitch) {
+          await reconcile.onAccountSwitch(hash, signedTransaction);
+        }
+        throw new Error(
+          "Wallet account switched. The transaction was preserved in recovery and not submitted.",
+        );
+      }
+      if (reconcile.validate) {
+        await reconcile.validate(hash, signedTransaction);
+      }
+    }
+    progress?.("submitting", hash);
+  });
   try {
     const submitted = await client.sendTransaction(signedTransaction);
     if (submitted.status === "ERROR")
-      throw new Error(
+      throw classifySubmissionFailure(
+        "broadcast",
         "The network rejected the signed transaction. Refresh the quote and try again.",
+        hash,
       );
     if (submitted.status === "TRY_AGAIN_LATER")
-      throw new Error("The network is busy. Nothing was accepted; please try again.");
+      throw classifySubmissionFailure(
+        "broadcast",
+        "The network is busy. Nothing was accepted; please try again.",
+        hash,
+      );
   } catch (error) {
-    if (
-      error instanceof Error &&
-      /network rejected|Nothing was accepted|superseded|switched|sequence/i.test(error.message)
-    )
-      throw error;
+    if (error instanceof SubmissionFailure) throw error;
     // A network timeout after submission has an unknown outcome. Preserve the real hash for checking.
-    return { status: "pending", txHash: hash };
+    return {
+      status: "pending",
+      txHash: hash,
+      failure: classifySubmissionFailure("broadcast", error, hash),
+    };
   }
   progress?.("pending", hash);
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (signal?.aborted) return { status: "pending", txHash: hash };
+    await confirmationDelay(2000, signal);
+    if (signal?.aborted) return { status: "pending", txHash: hash };
     let result: TransactionResult | null;
     try {
       result = await readTransaction(hash);
-    } catch {
-      return { status: "pending", txHash: hash };
+    } catch (error) {
+      return {
+        status: "pending",
+        txHash: hash,
+        failure: classifySubmissionFailure("confirmation", error, hash),
+      };
     }
+    if (signal?.aborted) return { status: "pending", txHash: hash };
     if (result && result.status !== "pending") {
       if (result.status === "confirmed") progress?.("confirmed", hash);
       return result;
@@ -942,6 +1554,8 @@ export async function submitBridgeOut(
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
+  simulated?: SimulatedOperation,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
   const refreshed = await quoteTransfer(
@@ -967,6 +1581,8 @@ export async function submitBridgeOut(
     progress,
     approval,
     reconcile,
+    simulated,
+    signal,
   );
 }
 
@@ -987,12 +1603,47 @@ export async function getClaim(id: bigint): Promise<PendingClaim> {
   };
 }
 
+export async function getClaims(ids: readonly bigint[]): Promise<PendingClaim[]> {
+  if (ids.length === 0) throw new Error("Enter at least one claim number.");
+  if (ids.length > MAX_BATCH_CLAIMS)
+    throw new Error(`Review at most ${MAX_BATCH_CLAIMS} claims at a time.`);
+  const unique = new Set(ids.map(String));
+  if (unique.size !== ids.length) throw new Error("Each claim number can appear only once.");
+  return Promise.all(ids.map((id) => getClaim(id)));
+}
+
+export async function batchClaimSettlementSupport(): Promise<boolean> {
+  await verifyRouterDeployment();
+  const client = await ContractClient.from({
+    contractId: TESTNET.router,
+    rpcUrl: TESTNET.rpcUrl,
+    networkPassphrase: TESTNET.networkPassphrase,
+  });
+  return supportsBatchClaimSettlement(client.spec.funcs());
+}
+
+export function settleClaimsOperation(sender: string, ids: readonly bigint[]) {
+  if (ids.length < 2 || ids.length > MAX_BATCH_CLAIMS)
+    throw new Error(`Batch settlement requires two to ${MAX_BATCH_CLAIMS} claims.`);
+  if (
+    new Set(ids.map(String)).size !== ids.length ||
+    ids.some((id) => id <= 0n || id > (1n << 64n) - 1n)
+  )
+    throw new Error("Use distinct valid claim numbers.");
+  return new Contract(TESTNET.router).call(
+    "settle_claims",
+    new Address(sender).toScVal(),
+    nativeToScVal([...ids], { type: "u64" }),
+  );
+}
+
 export async function submitSettleClaim(
   sender: string,
   id: bigint,
   sign: WalletSigner,
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
@@ -1014,5 +1665,76 @@ export async function submitSettleClaim(
     undefined,
     approval,
     reconcile,
+    undefined,
+    signal,
   );
+}
+
+export async function submitSettleClaims(
+  sender: string,
+  claims: readonly PendingClaim[],
+  sign: WalletSigner,
+  approval?: WalletApprovalProvenance,
+  reconcile?: SubmissionReconciliation,
+  signal?: AbortSignal,
+): Promise<TransactionResult> {
+  if (claims.length < 2) throw new Error("Batch settlement requires at least two claims.");
+  if (claims.length > MAX_BATCH_CLAIMS)
+    throw new Error(`Review at most ${MAX_BATCH_CLAIMS} claims at a time.`);
+  if (claims.some((claim) => claim.settled))
+    throw new Error("Remove already settled claims before signing the batch.");
+  const deployment = await verifyRouterDeployment();
+  if (claims.some((claim) => claim.deployment.wasmHash !== deployment.wasmHash))
+    throw new Error(
+      "Claim recovery is read-only: the verified router changed. Look up the claims again.",
+    );
+  if (!(await batchClaimSettlementSupport()))
+    throw new Error("This router supports single-claim settlement only.");
+  const current = await getClaims(claims.map((claim) => claim.id));
+  if (
+    current.some((claim, index) => {
+      const reviewed = claims[index];
+      return (
+        claim.eligibility.status === "ineligible" ||
+        !reviewed ||
+        claim.settled ||
+        claim.recipient !== reviewed.recipient ||
+        claim.token !== reviewed.token ||
+        claim.amount !== reviewed.amount ||
+        claim.deployment.router !== reviewed.deployment.router ||
+        claim.deployment.chain !== reviewed.deployment.chain ||
+        claim.deployment.wasmHash !== reviewed.deployment.wasmHash
+      );
+    })
+  )
+    throw new Error("The claims changed. Review them again before signing.");
+  return submitOperation(
+    sender,
+    settleClaimsOperation(
+      sender,
+      claims.map((claim) => claim.id),
+    ),
+    sign,
+    undefined,
+    approval,
+    reconcile,
+    undefined,
+    signal,
+  );
+}
+
+function confirmationDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
+  });
 }
