@@ -41,6 +41,13 @@ export function EvidenceTimeline({ transfer }: EvidenceTimelineProps): ReactElem
                     </a>
                   </>
                 )}
+                {stage.observedAt && (
+                  <details>
+                    <summary>Evidence details</summary>
+                    <p>Observed {new Date(stage.observedAt).toLocaleString()}.</p>
+                    <p>References are public identifiers only; provider credentials are never displayed.</p>
+                  </details>
+                )}
               </span>
             </div>
           </li>

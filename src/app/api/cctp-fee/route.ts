@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { destinationFor } from "../../../config/testnet";
-import { relayBudget } from "../../../lib/relay-budget";
+import { feeObservation, relayBudget } from "../../../lib/relay-budget";
 
 export async function GET(request: Request) {
   let domain: number;
@@ -41,6 +41,8 @@ export async function GET(request: Request) {
         token: "USDC",
         decimals: 7,
         finality: 2000,
+        provider: "Circle CCTP",
+        ...feeObservation(),
       },
       { headers: { "Cache-Control": "no-store" } },
     );
