@@ -615,7 +615,9 @@ function PendingTransferCard({
         </p>
       )}
       {checking && <p role="status">Checking Stellar Testnet transaction history...</p>}
-      {visibleCurrent && <p role="status">{visibleCurrent.message}</p>}
+      {visibleCurrent && visibleCurrent.message !== error && (
+        <p role="status">{visibleCurrent.message}</p>
+      )}
       {error && (
         <p role="alert" className={styles.error}>
           {error}
