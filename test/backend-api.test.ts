@@ -56,6 +56,7 @@ describe("Real indexer client", () => {
     } as unknown as FormattedTransfer;
     expect(hasVerifiedDestinationEvidence(transfer)).toBe(false);
     expect(hasVerifiedDestinationEvidence({ ...transfer, proofRevision: null })).toBe(true);
+  });
   it("lists claims with explicit chain and settlement filters", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
     const payload = { claims: [], count: 0, limit: 20, offset: 0 };
