@@ -897,7 +897,7 @@ function matchesBridge(checkpoint: TransferCheckpoint, operation: ParsedOperatio
     return false;
   const args = invocation.args;
   if (args.length !== 3 || !args[0] || !args[1] || !args[2]) return false;
-  const sender = scValToNative(args[0]);
+  const sender: unknown = scValToNative(args[0]);
   const request: unknown = scValToNative(args[1]);
   const relayGas: unknown = scValToNative(args[2]);
   if (!isRecord(request) || !isRecord(request.destination)) return false;
@@ -966,7 +966,6 @@ function inspectCheckpointEnvelope(
           const last = payment.success.last;
           const asset = Asset.fromOperation(last.asset);
           if (
-            last.destination.type !== "publicKeyTypeEd25519" ||
             StrKey.encodeEd25519PublicKey(last.destination.ed25519.toBytes()) !==
               checkpoint.account ||
             asset.getCode() !== TESTNET.usdcCode ||
@@ -1008,7 +1007,9 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (signal.aborted)
     return Promise.reject(new DOMException("Recovery lookup cancelled.", "AbortError"));
   return new Promise((resolve, reject) => {
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
     const onAbort = () => {
       cleanup();
       reject(new DOMException("Recovery lookup cancelled.", "AbortError"));
@@ -1021,7 +1022,7 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
       },
       (cause: unknown) => {
         cleanup();
-        reject(cause);
+        reject(cause instanceof Error ? cause : new Error("Recovery read failed."));
       },
     );
   });
@@ -1036,7 +1037,7 @@ async function boundedHistoryJson(response: Response, signal: AbortSignal): Prom
   let text = "";
   const decoder = new TextDecoder();
   try {
-    while (true) {
+    for (;;) {
       const chunk = await abortable(reader.read(), signal);
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
@@ -1045,7 +1046,9 @@ async function boundedHistoryJson(response: Response, signal: AbortSignal): Prom
     }
     return JSON.parse(text + decoder.decode()) as unknown;
   } finally {
-    void reader.cancel().catch(() => {});
+    void reader.cancel().catch(() => {
+      // The finished or aborted stream has already been released.
+    });
   }
 }
 
