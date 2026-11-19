@@ -256,6 +256,7 @@
 
 .disconnectBtn {
   width: 100%;
+  min-height: 44px;
   padding: 0.375rem 0.5rem;
   background-color: transparent;
   border: 1px solid var(--rule);

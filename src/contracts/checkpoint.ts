@@ -4,6 +4,7 @@ import { TESTNET, destinationFor, type BridgeRoute, type DestinationKey } from "
 
 export interface TransferCheckpoint {
   router: string;
+  token?: string;
   account: string;
   recipient: string;
   destination: DestinationKey;
@@ -89,6 +90,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
   try {
     const value = JSON.parse(raw) as {
       router: string;
+      token?: string;
       account: string;
       recipient: string;
       destination: string;
@@ -99,6 +101,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     };
     if (
       value.router !== TESTNET.router ||
+      (value.token !== undefined && value.token !== TESTNET.token) ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
       !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||
       /^0x0{40}$/.test(value.recipient) ||
@@ -112,6 +115,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     destinationFor(value.destination);
     return {
       ...value,
+      token: TESTNET.token,
       destination: destinationFor(value.destination).key,
       route: value.route,
       stage: value.stage,
@@ -136,17 +140,25 @@ export function checkpointMatches(
     checkpoint.stage === context.stage
   );
 }
-export function listCheckpoints(account?: string): TransferCheckpoint[] {
-  const value = parseCheckpoint(snapshot());
-  return value && (!account || value.account === account) ? [value] : [];
+export function getTransferCheckpoint(): TransferCheckpoint | null {
+  return parseCheckpoint(snapshot());
 }
-export function saveCheckpoint(value: TransferCheckpoint | null, account?: string) {
-  // Clearing on behalf of an account must never discard another account's unresolved transfer.
-  if (!value && account) {
-    const stored = parseCheckpoint(snapshot());
-    if (stored && stored.account !== account) return;
-  }
+export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
+  return JSON.stringify([
+    checkpoint.router,
+    checkpoint.account,
+    checkpoint.recipient,
+    checkpoint.destination,
+    checkpoint.route,
+    checkpoint.bridgeAmount,
+    checkpoint.stage,
+    checkpoint.txHash,
+  ]);
+}
+export function saveCheckpoint(value: TransferCheckpoint | null, expected?: TransferCheckpoint) {
   const existing = parseCheckpoint(snapshot());
+  if (expected && (!existing || checkpointIdentity(existing) !== checkpointIdentity(expected)))
+    throw new Error("The pending transaction changed in another tab. Check its current outcome.");
   if (
     value &&
     existing &&

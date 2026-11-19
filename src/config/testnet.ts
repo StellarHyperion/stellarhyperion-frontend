@@ -88,16 +88,29 @@ export const TESTNET = {
     "https://soroban-testnet.stellar.org",
   ),
   networkPassphrase: "Test SDF Network ; September 2015",
-  horizonUrl: "https://horizon-testnet.stellar.org",
+  horizonUrl: configured(
+    process.env.NEXT_PUBLIC_STELLAR_HORIZON_URL,
+    "https://horizon-testnet.stellar.org",
+  ),
 } as const;
 export const STELLAR_DEPLOYMENT = {
   chain: "stellar-testnet",
   router: stellar.router,
+  usdcToken: stellar.tokens.USDC.sacId,
+  usdcCode: stellar.tokens.USDC.code,
+  usdcIssuer: stellar.tokens.USDC.issuer,
   networkPassphrase: stellar.networkPassphrase,
   wasmHash: stellar.wasmHashes.router,
   commit: stellar.commit,
   deployedLedger: stellar.deployedAt.ledger,
 } as const;
+export function deploymentIdentityMismatch(router: string, token: string): string | null {
+  if (router !== STELLAR_DEPLOYMENT.router)
+    return "The configured Stellar router does not match the verified testnet deployment.";
+  if (token !== STELLAR_DEPLOYMENT.usdcToken)
+    return "The configured Stellar USDC token contract does not match the verified testnet deployment.";
+  return null;
+}
 
 export function getPublicAssetMetadata(
   code: string,
