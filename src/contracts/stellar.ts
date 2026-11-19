@@ -331,10 +331,10 @@ export async function readLane(
   route: BridgeRoute = 1,
 ): Promise<LaneState> {
   const destination = destinationFor(destinationKey);
-  if (route === 1 && destinationKey !== "sepolia")
+  if (!destination.routes.includes(route))
     return {
       available: false,
-      reason: "Axelar ITS is configured for Sepolia. Choose Circle CCTP for this network.",
+      reason: "This bridge does not have an independently verified lane to this testnet.",
       feeBps: null,
       ledger: 0,
       adapter: null,
@@ -768,7 +768,7 @@ export async function submitOperation(
 
 export async function submitClassicOperations(
   sender: string,
-  operations: readonly xdr.Operation[],
+  operations: readonly xdr.Operation[] | (() => Promise<readonly xdr.Operation[]>),
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
@@ -782,7 +782,8 @@ export async function submitClassicOperations(
     fee: BASE_FEE,
     networkPassphrase: TESTNET.networkPassphrase,
   });
-  for (const operation of operations) builder.addOperation(operation);
+  const preparedOperations = typeof operations === "function" ? await operations() : operations;
+  for (const operation of preparedOperations) builder.addOperation(operation);
   return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval, reconcile);
 }
 

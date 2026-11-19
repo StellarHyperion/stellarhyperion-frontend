@@ -6,6 +6,7 @@ import {
   conversionExecutionIntent,
   conversionRoute,
   conversionOperations,
+  revalidateConversion,
   issuerVerificationLabel,
   quoteTrade,
   searchAssets,
@@ -18,7 +19,7 @@ import {
   trustlineLabel,
 } from "../src/contracts/assets";
 import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
-import { TESTNET } from "../src/config/testnet";
+import { DESTINATIONS, TESTNET } from "../src/config/testnet";
 import { relayBudget } from "../src/lib/relay-budget";
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -111,6 +112,29 @@ describe("Real Stellar conversion transaction boundaries", () => {
     await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow("No liquid");
     answer([{ ...path, destination_asset_issuer: TESTNET.reader }]);
     await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow("No liquid");
+  });
+  it("rechecks live liquidity without changing reviewed conversion bounds", async () => {
+    const reviewed = { source: XLM, sourceMax: 10000000n, usdcAmount: 8000000n, path: [] };
+    answer([
+      {
+        ...path,
+        destination_amount: "0.8100000",
+        path: [
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "EUR",
+            asset_issuer: USDC.issuer,
+          },
+        ],
+      },
+    ]);
+    await expect(revalidateConversion(reviewed)).rejects.toThrow("conversion path changed");
+    answer([{ ...path, destination_amount: "0.8100000", path: [] }]);
+    expect(await revalidateConversion(reviewed)).toBe(reviewed);
+    answer([{ ...path, destination_amount: "0.8000000" }]);
+    await expect(revalidateConversion(reviewed)).rejects.toThrow("reviewed USDC minimum");
+    answer([]);
+    await expect(revalidateConversion(reviewed)).rejects.toThrow("No liquid");
   });
   it("keeps issuer identity and rejects invalid assets or oversized source amounts", async () => {
     expect(() => stellarAsset({ ...USDC, id: "USDC:different" })).toThrow();
@@ -359,6 +383,15 @@ describe("Real Stellar conversion transaction boundaries", () => {
     };
     expect(spendableBalance(precisionAsset)).toBe("0.0000001");
     expect(suggestSourceSpend(precisionAsset)).toBe("0.0000001");
+  });
+});
+describe("Independently verified testnet bridge lanes", () => {
+  it("exposes only the routes backed by checked-in delivery evidence", () => {
+    expect(Object.fromEntries(DESTINATIONS.map(({ key, routes }) => [key, routes]))).toEqual({
+      sepolia: [0, 1],
+      "base-sepolia": [0],
+      "arc-testnet": [0],
+    });
   });
 });
 describe("Interrupted transfer recovery", () => {
