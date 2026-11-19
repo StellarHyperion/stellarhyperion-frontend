@@ -205,7 +205,14 @@ function QuoteDetails({
         <dd>{formatUnits(quote.fee, 7)} USDC</dd>
       </div>
       <div>
-        <dt>{quote.route === 0 ? "Circle forwarding budget" : "Axelar relay gas budget"}</dt>
+        <dt>{quote.route === 0 ? "Circle forwarding budget" : "Axelar gas estimate"}</dt>
+        <dd>
+          {formatUnits(quote.estimatedRelayGas ?? quote.relayGas, 7)}{" "}
+          {quote.route === 0 ? "USDC" : "XLM"}
+        </dd>
+      </div>
+      <div>
+        <dt>{quote.route === 0 ? "Approved Circle budget" : "Approved Axelar XLM"}</dt>
         <dd>
           {formatUnits(quote.relayGas, 7)} {quote.route === 0 ? "USDC" : "XLM"}
         </dd>
@@ -240,6 +247,10 @@ function QuoteDetails({
           {formatUnits(quote.destinationAmount, destinationDecimals(quote.route))}{" "}
           {receiveSymbol(quote.route)}
         </dd>
+      </div>
+      <div>
+        <dt>Refund disclosure</dt>
+        <dd>{quote.route === 0 ? "Provider-dependent" : "Not guaranteed"}</dd>
       </div>
     </dl>
   );
@@ -1195,8 +1206,8 @@ export function Bridge() {
               Quoted at Stellar ledger {quote.bridge.ledger}. Fees are checked again before signing.
             </p>
             <p className={styles.assetNote}>
-              Relay budgets include 10% headroom. The Axelar XLM budget is paid in full; the Circle
-              receive minimum accounts for its full USDC budget.
+              Estimates and approved budgets are separate. Axelar gas is approved in XLM, Circle
+              forwarding is approved in USDC, and any refund depends on provider behavior.
             </p>
           </details>
         ) : (

@@ -29,6 +29,7 @@ import {
   type BridgeRoute,
   type DestinationKey,
 } from "../config/testnet";
+import { boundedRetryAfter, cctpMinimumReceived } from "../lib/relay-budget";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 
@@ -249,10 +250,22 @@ export async function verifyRouterDeployment(): Promise<RouterDeploymentIdentity
   };
 }
 
+class FeeUnavailableError extends Error {
+  constructor(readonly retryAfterSeconds: number | null) {
+    super(
+      retryAfterSeconds === null
+        ? "Live bridge pricing is temporarily unavailable. Try again later."
+        : `Live bridge pricing is rate-limited. Try again in ${retryAfterSeconds} seconds.`,
+    );
+    this.name = "FeeUnavailableError";
+  }
+}
+
 async function readWithRetry<T>(read: () => Promise<T>): Promise<T> {
   try {
     return await read();
   } catch (error) {
+    if (error instanceof FeeUnavailableError) throw error;
     if (!/fetch failed|timeout|timed out|429|502|503|504|ECONN/i.test(String(error))) throw error;
     await new Promise((resolve) => setTimeout(resolve, 300));
     return read();
@@ -571,8 +584,8 @@ export async function quoteTransfer(
         cache: "no-store",
       },
     );
-    if (response.status === 503)
-      throw new Error("503: Live bridge pricing is temporarily unavailable. Try again.");
+    if (response.status === 429 || response.status === 503)
+      throw new FeeUnavailableError(boundedRetryAfter(response.headers.get("retry-after")));
     return response;
   });
   if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");
@@ -594,7 +607,10 @@ export async function quoteTransfer(
     grossAmount: integer(quote.gross_amount),
     fee: integer(quote.fee),
     netAmount: integer(quote.net_amount),
-    destinationAmount: integer(quote.destination_amount) - (route === 0 ? relayGas / 10n : 0n),
+    destinationAmount:
+      route === 0
+        ? cctpMinimumReceived(integer(quote.destination_amount), relayGas)
+        : integer(quote.destination_amount),
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
   };

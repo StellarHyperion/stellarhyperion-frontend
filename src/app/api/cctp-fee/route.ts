@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { destinationFor } from "../../../config/testnet";
-import { relayBudget } from "../../../lib/relay-budget";
+import { boundedRetryAfter, relayBudget } from "../../../lib/relay-budget";
 
 export async function GET(request: Request) {
   let domain: number;
@@ -17,6 +17,19 @@ export async function GET(request: Request) {
         cache: "no-store",
       },
     );
+    if (response.status === 429 || response.status === 503) {
+      const retryAfter = boundedRetryAfter(response.headers.get("retry-after"));
+      return NextResponse.json(
+        { error: "Circle forwarding pricing is rate-limited. No transfer can be prepared." },
+        {
+          status: 429,
+          headers: {
+            "Cache-Control": "no-store",
+            ...(retryAfter === null ? {} : { "Retry-After": String(retryAfter) }),
+          },
+        },
+      );
+    }
     const body: unknown = await response.json();
     if (!response.ok || !Array.isArray(body)) throw new Error("Invalid Circle fee response.");
     const fee = body.find(
