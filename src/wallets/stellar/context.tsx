@@ -147,7 +147,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     setAuthorizing(id);
     setError(null);
     try {
-      const value = await connectionGeneration.current.run((signal) => walletAddress(id, true, signal));
+      const value = await connectionGeneration.current.run((signal) =>
+        walletAddress(id, true, signal),
+      );
       if (attempt.current !== version) return;
       setAddress(value);
       setWalletId(id);

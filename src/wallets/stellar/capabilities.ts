@@ -20,7 +20,8 @@ export async function walletAvailability(id: StellarWalletId): Promise<WalletAva
   try {
     if (id === "freighter") {
       const api = await import("@stellar/freighter-api");
-      return (await withTimeout(api.isConnected(), 8_000, "Wallet availability unknown.")).isConnected
+      return (await withTimeout(api.isConnected(), 8_000, "Wallet availability unknown."))
+        .isConnected
         ? "installed"
         : "missing_extension";
     }

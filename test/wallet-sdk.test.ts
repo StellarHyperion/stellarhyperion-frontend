@@ -9,8 +9,14 @@ import {
   walletSign,
 } from "../src/wallets/stellar/sdk";
 import { verifyWalletSignature } from "../src/wallets/stellar/signature";
-import { withTimeout, WalletTimeoutError, WalletSigningUncertainError } from "../src/wallets/stellar/timeout";
-function stalled<T>(): Promise<T> { return new Promise<T>(() => undefined); }
+import {
+  withTimeout,
+  WalletTimeoutError,
+  WalletSigningUncertainError,
+} from "../src/wallets/stellar/timeout";
+function stalled<T>(): Promise<T> {
+  return new Promise<T>(() => undefined);
+}
 
 const api = vi.hoisted(() => ({
   freighter: {
@@ -114,9 +120,8 @@ describe("Direct Stellar wallet adapters", () => {
     coordinator.abandon(new Error("Disconnected during preflight"));
     await expect(outstanding).rejects.toThrow("Disconnected during preflight");
     finishPreflight({ address: signer.publicKey() });
-    await vi.waitFor(() => {
-      expect(api.freighter.getNetworkDetails).toHaveBeenCalled();
-    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(api.freighter.getNetworkDetails).not.toHaveBeenCalled();
     expect(api.freighter.signTransaction).not.toHaveBeenCalled();
     expect(coordinator.pending).toBeNull();
   });
@@ -444,6 +449,41 @@ describe("Connection generation tracking", () => {
 });
 
 describe("Bounded wallet adapter request timeouts", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("clears its timer when cancelled and observes a late rejecting adapter", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let failLate!: (reason: Error) => void;
+    const pending = withTimeout(
+      new Promise<never>((_resolve, reject) => {
+        failLate = reject;
+      }),
+      20_000,
+      "timed out",
+      WalletTimeoutError,
+      controller.signal,
+    );
+    controller.abort(new Error("Connection superseded"));
+    await expect(pending).rejects.toThrow("Connection superseded");
+    expect(vi.getTimerCount()).toBe(0);
+    failLate(new Error("Late extension failure"));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it("cancels a stalled xBull account request and closes the old bridge", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    api.xbull.connect.mockReturnValue(stalled());
+    const pending = walletAddress("xbull", true, controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort(new Error("Disconnected"));
+    await expect(pending).rejects.toThrow("Disconnected");
+    expect(api.xbull.closeConnections).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it("frees a stalled availability check instead of hanging and never requests access", async () => {
     vi.useFakeTimers();
     api.freighter.isConnected.mockReturnValue(stalled());

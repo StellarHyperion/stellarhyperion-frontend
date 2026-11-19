@@ -1,7 +1,11 @@
 import { TESTNET } from "../../config/testnet";
 import { assertWalletApproval } from "./signature";
 import type { WalletApprovalProvenance } from "./types";
-import { withTimeout as requestTimeout, WalletTimeoutError, WalletSigningUncertainError } from "./timeout";
+import {
+  withTimeout as requestTimeout,
+  WalletTimeoutError,
+  WalletSigningUncertainError,
+} from "./timeout";
 
 export const STELLAR_WALLETS = [
   { id: "freighter", name: "Freighter", url: "https://www.freighter.app/" },
@@ -171,7 +175,9 @@ function withTimeout<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   return requestTimeout(
-    promise.catch((error: unknown) => { throw new Error(friendlyMessage(error)); }),
+    promise.catch((error: unknown) => {
+      throw new Error(friendlyMessage(error));
+    }),
     ms,
     signing
       ? `${timeoutMessage} The approval outcome is unknown. Close the wallet prompt and review before trying again. Nothing is automatically submitted.`
@@ -187,7 +193,11 @@ async function albedoClient() {
   return "default" in client ? (client.default as typeof client) : client;
 }
 
-export async function walletAddress(id: StellarWalletId, requestAccess = true, signal?: AbortSignal): Promise<string> {
+export async function walletAddress(
+  id: StellarWalletId,
+  requestAccess = true,
+  signal?: AbortSignal,
+): Promise<string> {
   signal?.throwIfAborted();
   switch (id) {
     case "freighter": {
@@ -197,8 +207,8 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true, s
         api.isConnected(),
         WALLET_AVAILABILITY_TIMEOUT_MS,
         "Freighter did not respond. Open the extension and try again.",
-      false,
-      signal,
+        false,
+        signal,
       );
       if (!connected.isConnected) throw new Error("Install and open Freighter to connect.");
       signal?.throwIfAborted();
@@ -206,8 +216,8 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true, s
         requestAccess ? api.requestAccess() : api.getAddress(),
         WALLET_CONNECT_TIMEOUT_MS,
         "Freighter did not return an account in time. Open the extension and try again.",
-      false,
-      signal,
+        false,
+        signal,
       );
       if (result.error) throwWalletError(result.error);
       signal?.throwIfAborted();
@@ -220,8 +230,8 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true, s
         client.publicKey({}),
         WALLET_CONNECT_TIMEOUT_MS,
         "Albedo closed or did not respond to the connection request. Reopen the popup and try again.",
-      false,
-      signal,
+        false,
+        signal,
       );
       signal?.throwIfAborted();
       return account(result.pubkey);
@@ -235,8 +245,8 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true, s
           bridge.connect(),
           WALLET_CONNECT_TIMEOUT_MS,
           "xBull closed or did not respond to the connection request. Reopen the extension and try again.",
-        false,
-        signal,
+          false,
+          signal,
         );
         return await account(connected);
       } finally {
@@ -250,8 +260,8 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true, s
         api.isConnected(),
         WALLET_AVAILABILITY_TIMEOUT_MS,
         "LOBSTR did not respond. Open the extension and try again.",
-      false,
-      signal,
+        false,
+        signal,
       );
       if (!connected) throw new Error("Install and open LOBSTR to connect.");
       signal?.throwIfAborted();
@@ -260,8 +270,8 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true, s
           api.getPublicKey(),
           WALLET_CONNECT_TIMEOUT_MS,
           "LOBSTR closed or did not respond to the connection request. Open the extension and try again.",
-        false,
-        signal,
+          false,
+          signal,
         ),
       );
     }
