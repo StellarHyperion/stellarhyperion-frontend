@@ -24,6 +24,7 @@ import {
   TESTNET,
   STELLAR_DEPLOYMENT,
   CIRCLE_STELLAR,
+  archivedRouterFor,
   destinationFor,
   destinationDecimals,
   type BridgeRoute,
@@ -696,6 +697,17 @@ export async function readTransaction(hash: string): Promise<TransactionResult |
     txHash: hash,
     ...(nonces.size === 1 ? { nonce: [...nonces][0] } : {}),
   };
+}
+
+export async function readCheckpointTransaction(
+  router: string,
+  hash: string,
+): Promise<TransactionResult | null> {
+  if (router !== TESTNET.router && !archivedRouterFor(router))
+    throw new Error(
+      "This checkpoint does not match a known Stellar Testnet deployment. Its status cannot be checked safely.",
+    );
+  return readTransaction(hash);
 }
 
 export interface ReviewSnapshot {

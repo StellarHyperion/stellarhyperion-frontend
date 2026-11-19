@@ -16,6 +16,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import {
   TESTNET,
+  archivedRouterFor,
   destinationFor,
   destinationDecimals,
   type BridgeRoute,
@@ -26,7 +27,7 @@ import {
   getClaim,
   quoteTransfer,
   readLane,
-  readTransaction,
+  readCheckpointTransaction,
   submitBridgeOut,
   submitSettleClaim,
   validateRecipient,
@@ -174,6 +175,9 @@ function PendingTransferCard({
         ? latest
         : null;
   const sameAccount = wallet.address === checkpoint.account;
+  const archivedDeployment = archivedRouterFor(checkpoint.router);
+  const activeDeployment =
+    checkpoint.router === TESTNET.router && !archivedDeployment;
   const check = async () => {
     if (checking || busy) return;
     setChecking(true);
@@ -181,11 +185,16 @@ function PendingTransferCard({
     try {
       if (getTransferCheckpoint()?.txHash !== checkpoint.txHash)
         throw new Error("The pending transaction changed in another tab. Refresh its status.");
-      const result = await readTransaction(checkpoint.txHash);
+      const result = await readCheckpointTransaction(checkpoint.router, checkpoint.txHash);
       if (getTransferCheckpoint()?.txHash !== checkpoint.txHash)
         throw new Error("The pending transaction changed in another tab. Refresh its status.");
       setChecked(result);
-      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount)
+      if (
+        result?.status === "confirmed" &&
+        checkpoint.stage === "conversion" &&
+        sameAccount &&
+        activeDeployment
+      )
         setReview(
           await quoteTransfer(
             checkpoint.destination,
@@ -200,12 +209,20 @@ function PendingTransferCard({
     }
   };
   const continueBridge = async () => {
+    if (!activeDeployment) {
+      setError(
+        "This checkpoint's router cannot continue in this app. Check its original Stellar transaction first, then start a fresh transfer with a new quote.",
+      );
+      return;
+    }
     if (!review || !sameAccount || checking) return;
     setChecking(true);
     setError(null);
     try {
       if (getTransferCheckpoint()?.txHash !== checkpoint.txHash)
-        throw new Error("The pending transaction changed in another tab. Check its current outcome.");
+        throw new Error(
+          "The pending transaction changed in another tab. Check its current outcome.",
+        );
       const result = await submitBridgeOut(
         checkpoint.account,
         review,
@@ -242,10 +259,49 @@ function PendingTransferCard({
         </h2>
       </div>
       <p>
-        {checkpoint.stage === "conversion"
-          ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
-          : "Follow destination delivery in your transfer activity. A Stellar confirmation starts the bridge journey."}
+        {archivedDeployment
+          ? "This saved transaction belongs to an archived router revision. Its status can be checked by hash on Stellar Testnet, but confirmation does not prove destination delivery."
+          : checkpoint.stage === "conversion"
+            ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
+            : "Follow destination delivery in your transfer activity. A Stellar confirmation starts the bridge journey."}
       </p>
+      {archivedDeployment && (
+        <div role="status">
+          <p>
+            Archived router: <span className={styles.address}>{archivedDeployment.router}</span>.
+            Status lookup checks only this saved transaction hash; it does not inspect claim state
+            on the successor router.
+          </p>
+          <p>
+            Successor: {archivedDeployment.successor.router} (revision{" "}
+            {archivedDeployment.successor.commit}, WASM {archivedDeployment.successor.wasmHash},
+            deployed at ledger {archivedDeployment.successor.deployedLedger}).
+          </p>
+          <a
+            href={`https://stellar.expert/explorer/testnet/contract/${archivedDeployment.successor.router}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Inspect successor deployment <ArrowUpRight size={14} aria-hidden="true" />
+          </a>
+          <p>
+            Continuing this checkpoint is disabled. Start a fresh transfer only after checking this
+            transaction and reviewing a new quote.
+          </p>
+        </div>
+      )}
+      {!archivedDeployment && !activeDeployment && (
+        <p role="status">
+          This checkpoint references an unrecognized router ({checkpoint.router}). Status lookup
+          and continuation are disabled; use the saved transaction hash on its original Stellar
+          network. Source confirmation does not verify destination delivery.
+        </p>
+      )}
+      {!activeDeployment && (
+        <button type="button" className={styles.secondary} disabled>
+          Continue unavailable for this router
+        </button>
+      )}
       <a
         className={styles.transactionLink}
         href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -277,7 +333,10 @@ function PendingTransferCard({
         </p>
       )}
       {current?.status === "failed" ||
-      (checkpoint.stage === "bridge" && current?.status === "confirmed") ? (
+      (checkpoint.stage === "bridge" && current?.status === "confirmed" && !archivedDeployment) ||
+      (checkpoint.stage === "conversion" &&
+        current?.status === "confirmed" &&
+        Boolean(archivedDeployment)) ? (
         <button
           type="button"
           className={styles.secondary}
@@ -297,12 +356,12 @@ function PendingTransferCard({
         >
           {checking
             ? "Checking transaction..."
-            : checkpoint.stage === "conversion" && sameAccount
+            : checkpoint.stage === "conversion" && sameAccount && !archivedDeployment
               ? "Check and continue"
               : "Check status"}
         </button>
       )}
-      {review && (
+      {review && activeDeployment && (
         <ReviewDialog
           onClose={() => {
             if (!checking) setReview(null);

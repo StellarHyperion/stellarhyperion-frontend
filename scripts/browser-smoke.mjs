@@ -49,13 +49,13 @@ try {
     localStorage.setItem(
       "hyperion.testnet.pending-transfer",
       JSON.stringify({
-        router: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        router: "CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF",
         account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
         recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
         destination: "sepolia",
         route: 1,
         bridgeAmount: "10000000",
-        stage: "bridge",
+        stage: "conversion",
         txHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       }),
     );
@@ -63,6 +63,12 @@ try {
   });
   await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
   await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
+  await page.getByText("Archived router:", { exact: false }).waitFor();
+  await page.getByRole("link", { name: "Inspect successor deployment" }).waitFor();
+  assert.equal(
+    await page.getByRole("button", { name: "Continue unavailable for this router" }).isDisabled(),
+    true,
+  );
   await page.getByRole("button", { name: "Check status" }).waitFor();
   const otherTab = await page.context().newPage();
   await otherTab.goto(origin, { waitUntil: "domcontentloaded" });

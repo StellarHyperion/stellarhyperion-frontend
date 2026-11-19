@@ -375,6 +375,28 @@ describe("Real Stellar transaction encoding", () => {
       saveCheckpoint(checkpoint);
       saveCheckpoint(null, checkpoint.txHash);
     });
+    it("does not rewrite or continue a checkpoint from an archived router", () => {
+      const checkpoint: TransferCheckpoint = {
+        router: "CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF",
+        account: TESTNET.reader,
+        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        destination: "sepolia",
+        route: 1,
+        bridgeAmount: "900719925474099312345",
+        stage: "conversion",
+        txHash: "5".repeat(64),
+      };
+      saveCheckpoint(null);
+      saveCheckpoint(checkpoint);
+
+      expect(() => saveCheckpoint({ ...checkpoint, router: TESTNET.router })).toThrow(
+        "previous transaction remains pending",
+      );
+      expect(() =>
+        saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: "6".repeat(64) }),
+      ).toThrow("previous transaction remains pending");
+      saveCheckpoint(null, checkpoint.txHash);
+    });
     it("retains a pending hash when writes fail but storage reads still work", () => {
       const checkpoint = {
         router: TESTNET.router,

@@ -375,6 +375,15 @@ describe("Interrupted transfer recovery", () => {
   it("preserves a real conversion hash and the intended second leg", () => {
     expect(parseCheckpoint(JSON.stringify(checkpoint))).toEqual(checkpoint);
   });
+  it("preserves signed transaction evidence for a known archived router", () => {
+    const archived = {
+      ...checkpoint,
+      router: "CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF",
+      bridgeAmount: "900719925474099312345",
+      txHash: "b".repeat(64),
+    };
+    expect(parseCheckpoint(JSON.stringify(archived))).toEqual(archived);
+  });
   it.each([
     { router: "different" },
     { account: "invalid" },

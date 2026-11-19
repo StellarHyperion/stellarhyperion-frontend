@@ -1,6 +1,12 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
-import { TESTNET, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
+import {
+  TESTNET,
+  archivedRouterFor,
+  destinationFor,
+  type BridgeRoute,
+  type DestinationKey,
+} from "../config/testnet";
 
 export interface TransferCheckpoint {
   router: string;
@@ -46,7 +52,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       txHash: string;
     };
     if (
-      value.router !== TESTNET.router ||
+      !StrKey.isValidEd25519PublicKey(value.router) ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
       !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||
       /^0x0{40}$/.test(value.recipient) ||
@@ -75,23 +81,29 @@ export function saveCheckpoint(value: TransferCheckpoint | null, expectedTxHash?
   const existing = parseCheckpoint(snapshot());
   if (!value && expectedTxHash && existing?.txHash !== expectedTxHash)
     throw new Error("The pending transaction changed in another tab. Check its current outcome.");
-  if (
-    value &&
-    existing &&
-    value.txHash !== existing.txHash &&
-    !(
-      existing.stage === "conversion" &&
-      value.stage === "bridge" &&
+  if (value && existing) {
+    const sameTransfer =
+      existing.router === value.router &&
       existing.account === value.account &&
       existing.recipient === value.recipient &&
       existing.destination === value.destination &&
       existing.route === value.route &&
-      existing.bridgeAmount === value.bridgeAmount
+      existing.bridgeAmount === value.bridgeAmount;
+    const sameTransaction = value.txHash === existing.txHash;
+    const conversionContinuation =
+      !archivedRouterFor(existing.router) &&
+      existing.stage === "conversion" &&
+      value.stage === "bridge" &&
+      sameTransfer;
+    if (
+      !sameTransfer ||
+      (sameTransaction && value.stage !== existing.stage) ||
+      (!sameTransaction && !conversionContinuation)
     )
-  )
-    throw new Error(
-      "A previous transaction remains pending. Check its outcome before submitting another.",
-    );
+      throw new Error(
+        "A previous transaction remains pending. Check its outcome before submitting another.",
+      );
+  }
   if (value) memoryCheckpoint = JSON.stringify(value);
   try {
     if (typeof localStorage !== "undefined") {

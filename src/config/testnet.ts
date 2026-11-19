@@ -24,6 +24,33 @@ export const STELLAR_DEPLOYMENT = {
   commit: stellar.commit,
   deployedLedger: stellar.deployedAt.ledger,
 } as const;
+export interface ArchivedRouterDeployment {
+  chain: "stellar-testnet";
+  router: string;
+  networkPassphrase: string;
+  wasmHash: string;
+  commit: string;
+  deployedLedger: number;
+  successor: {
+    router: string;
+    wasmHash: string;
+    commit: string;
+    deployedLedger: number;
+  };
+}
+export const ARCHIVED_STELLAR_DEPLOYMENTS: readonly ArchivedRouterDeployment[] =
+  stellar.archivedDeployments.map((archived) => ({
+    chain: "stellar-testnet",
+    router: archived.router,
+    networkPassphrase: stellar.networkPassphrase,
+    wasmHash: archived.wasmHash,
+    commit: archived.commit,
+    deployedLedger: archived.deployedAt.ledger,
+    successor: archived.successor,
+  }));
+export function archivedRouterFor(router: string): ArchivedRouterDeployment | null {
+  return ARCHIVED_STELLAR_DEPLOYMENTS.find((deployment) => deployment.router === router) ?? null;
+}
 export type BridgeRoute = 0 | 1;
 export const CIRCLE_STELLAR = {
   messenger: "CDNG7HXAPBWICI2E3AUBP3YZWZELJLYSB6F5CC7WLDTLTHVM74SLRTHP",
