@@ -210,6 +210,13 @@ function QuoteDetails({
           {formatUnits(quote.relayGas, 7)} {quote.route === 0 ? "USDC" : "XLM"}
         </dd>
       </div>
+      <div>
+        <dt>Provider estimate</dt>
+        <dd>
+          {formatUnits(quote.estimatedRelayGas ?? quote.relayGas, 7)}{" "}
+          {quote.route === 0 ? "USDC" : "XLM"}
+        </dd>
+      </div>
       {resourceFee !== undefined && (
         <div>
           <dt>Assembled resource fee</dt>

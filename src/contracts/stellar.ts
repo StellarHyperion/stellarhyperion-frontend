@@ -31,6 +31,7 @@ import {
 } from "../config/testnet";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
+import { cctpMinimumReceived } from "../lib/relay-budget";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
@@ -582,8 +583,9 @@ export async function quoteTransfer(
   if (estimatedRelayGas <= 0n || estimatedRelayGas > relayGas)
     throw new Error("Invalid live fee estimate.");
   if (relayGas <= 0n || relayGas > I128_MAX) throw new Error("Invalid relay gas estimate.");
-  if (route === 0 && (relayGas % 10n !== 0n || relayGas >= integer(quote.net_amount)))
-    throw new Error("Increase the amount to cover Circle's destination forwarding fee.");
+  const netAmount = integer(quote.net_amount);
+  const destinationAmount =
+    route === 0 ? cctpMinimumReceived(netAmount, relayGas) : integer(quote.destination_amount);
   return {
     relayGas,
     estimatedRelayGas,
@@ -593,8 +595,8 @@ export async function quoteTransfer(
     requestedAmount: amount,
     grossAmount: integer(quote.gross_amount),
     fee: integer(quote.fee),
-    netAmount: integer(quote.net_amount),
-    destinationAmount: integer(quote.destination_amount) - (route === 0 ? relayGas / 10n : 0n),
+    netAmount,
+    destinationAmount,
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
   };
