@@ -58,6 +58,12 @@ export interface FormattedTransfer {
   readonly claim: {
     readonly id: string;
     readonly settled: boolean;
+    /** Claims without provenance remain visible but cannot be offered for settlement. */
+    readonly deployment?: {
+      readonly chain: string;
+      readonly router: string;
+      readonly revision: string;
+    } | null;
   } | null;
 }
 
@@ -66,6 +72,82 @@ export interface TransfersResponse {
   readonly limit: number;
   readonly offset: number;
   readonly count: number;
+  /** Optional until the backend implements scoped historical coverage metadata. */
+  readonly coverage?: TransferCoverage;
+}
+
+export interface TransferCoverage {
+  readonly complete?: boolean;
+  readonly oldestObservedAt?: string | null;
+  readonly newestObservedAt?: string | null;
+  readonly reason?: string | null;
+}
+
+export interface IndexerCursor {
+  readonly chain: string;
+  readonly block: string;
+  readonly hash: string | null;
+  readonly updatedAt: string;
+}
+
+export interface IndexerMetrics {
+  readonly service: string;
+  readonly network: string;
+  readonly uptimeSeconds: number;
+  readonly transfers: {
+    readonly totalOutbound: number;
+    readonly totalInbound: number;
+  };
+  readonly claims: {
+    readonly total: number;
+    readonly settled: number;
+    readonly unsettled: number;
+  };
+  readonly railAttestations: Readonly<Record<string, number>>;
+  readonly cursors: readonly IndexerCursor[];
+}
+
+const STALE_AFTER_MS = 10 * 60 * 1000;
+export type CursorFreshness = "fresh" | "delayed" | "stale" | "unknown";
+
+export function cursorFreshness(cursor: IndexerCursor | null, now = Date.now()): CursorFreshness {
+  if (!cursor) return "unknown";
+  const updatedAt = Date.parse(cursor.updatedAt);
+  if (!Number.isFinite(updatedAt)) return "unknown";
+  const age = Math.max(0, now - updatedAt);
+  if (age <= STALE_AFTER_MS) return "fresh";
+  if (age <= STALE_AFTER_MS * 3) return "delayed";
+  return "stale";
+}
+
+export interface FormattedClaim {
+  readonly id: string;
+  readonly chain: string;
+  readonly claimId: string;
+  readonly recipient: string;
+  readonly token: string;
+  readonly amount: string;
+  readonly route: number;
+  readonly sourceChain: string;
+  readonly sourceNonce: string;
+  readonly settled: boolean;
+  readonly createdAt: string;
+  readonly observedAt: string;
+}
+
+export interface ClaimsResponse {
+  readonly claims: readonly FormattedClaim[];
+  readonly limit: number;
+  readonly offset: number;
+  readonly count: number;
+}
+
+export interface ClaimsQuery {
+  readonly chain?: string;
+  readonly recipient?: string;
+  readonly settled?: string;
+  readonly limit?: string;
+  readonly offset?: string;
 }
 
 export interface TransfersQuery {
@@ -137,6 +219,14 @@ function params(query?: object): string {
 export async function fetchTransfers(query?: TransfersQuery): Promise<TransfersResponse> {
   return await request<TransfersResponse>(`/v1/transfers${params(query)}`);
 }
+export async function fetchClaims(query?: ClaimsQuery): Promise<ClaimsResponse> {
+  return await request<ClaimsResponse>(`/v1/claims${params(query)}`);
+}
+
+export async function fetchIndexerMetrics(): Promise<IndexerMetrics> {
+  return await request<IndexerMetrics>("/v1/metrics");
+}
+
 export function fetchTransferByTx(hash: string): Promise<FormattedTransfer | null> {
   return request<FormattedTransfer>(`/v1/transfers/by-tx/${encodeURIComponent(hash)}`, true);
 }

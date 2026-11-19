@@ -3,6 +3,15 @@
   display: inline-flex;
 }
 
+.disconnected {
+  max-width: min(19rem, calc(100vw - 8rem));
+  min-width: 0;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.375rem;
+}
+
 .button {
   display: inline-flex;
   align-items: center;
@@ -38,6 +47,12 @@
   display: inline-block;
 }
 
+.walletBadge {
+  font-size: 0.6875rem;
+  color: var(--copper-2);
+  text-transform: lowercase;
+}
+
 .network {
   font-size: 0.6875rem;
   color: var(--text-secondary);
@@ -48,7 +63,7 @@
   position: absolute;
   top: calc(100% + 12px);
   right: 0;
-  min-width: 14rem;
+  width: min(19rem, calc(100vw - 2rem));
   background-color: var(--ink-2);
   border: 1px solid var(--rule-2);
   border-radius: var(--radius-control);
@@ -66,10 +81,63 @@
   padding: 0.25rem 0.5rem;
 }
 
+.preference {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+}
+
 .addressLabel {
   font-family: var(--face-mono);
   font-size: 0.6875rem;
   color: var(--text-secondary);
+}
+
+.preferenceBtn {
+  min-height: 2.75rem;
+  padding: 0.375rem 0.5rem;
+  background: transparent;
+  border: 0;
+  color: var(--text-secondary);
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.preferenceBtn:hover {
+  color: var(--fg);
+}
+
+.preferenceBtn:focus-visible {
+  outline: 2px solid var(--copper);
+  outline-offset: 2px;
+}
+
+.preferenceError {
+  margin: 0;
+  color: var(--bad);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+
+.preferenceNotice {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 49;
+  width: min(18rem, 80vw);
+  margin: 0;
+  padding: 0.5rem;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--radius-control);
+  background-color: var(--ink-2);
+  color: var(--bad);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
 }
 
 .fullAddress {
@@ -77,6 +145,113 @@
   font-size: 0.75rem;
   color: var(--fg);
   word-break: break-all;
+}
+
+.diagnosticsSection {
+  border-top: 1px solid var(--rule);
+  padding-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.diagTitle {
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+  color: var(--fg-3);
+  text-transform: lowercase;
+}
+
+.diagRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+}
+
+.diagKey {
+  color: var(--fg-3);
+}
+
+.diagVal {
+  color: var(--fg-2);
+}
+
+.walletList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.walletOption {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.375rem 0.5rem;
+  background-color: var(--ink-3);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--fg);
+  font-family: var(--face-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background-color var(--motion-state) var(--ease-enter),
+    border-color var(--motion-state) var(--ease-enter);
+}
+
+.walletOption:hover:not(:disabled) {
+  background-color: var(--ink-4);
+  border-color: var(--copper);
+}
+
+.walletOption:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.statusPill {
+  font-size: 0.625rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 2px;
+  text-transform: lowercase;
+}
+
+.statusInstalled {
+  background-color: var(--ok);
+  color: var(--ink);
+}
+
+.statusMissing {
+  background-color: var(--warn);
+  color: var(--ink);
+}
+
+.statusPopup {
+  background-color: var(--instr);
+  color: var(--ink);
+}
+
+.statusAvailable {
+  background-color: var(--ok);
+  color: var(--ink);
+}
+
+.statusUnsupported {
+  background-color: var(--bad);
+  color: var(--fg);
+}
+
+.errorBox {
+  padding: 0.375rem 0.5rem;
+  background-color: var(--ink-4);
+  border: 1px solid var(--bad);
+  border-radius: 2px;
+  color: var(--bad);
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
 }
 
 .disconnectBtn {

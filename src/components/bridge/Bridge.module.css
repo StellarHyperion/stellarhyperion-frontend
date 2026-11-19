@@ -107,6 +107,29 @@
   color: var(--text-secondary);
   opacity: 1;
 }
+.maxSpend {
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background var(--motion-state),
+    color var(--motion-state);
+}
+.maxSpend:hover:not(:disabled) {
+  background: var(--surface-well);
+  color: var(--text-primary);
+}
+.maxSpend:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .tokenSelector {
   display: flex;
   align-items: center;
@@ -283,6 +306,51 @@
   color: var(--text-secondary);
   font-size: 0.75rem;
   line-height: 1.6;
+}
+
+.conversionIntent {
+  display: grid;
+  gap: var(--space-2);
+  padding-block: var(--space-3);
+  border-block: 1px solid var(--edge-color);
+}
+
+.conversionIntent h3,
+.conversionIntent p {
+  margin: 0;
+}
+
+.conversionIntent h3 {
+  font-family: var(--face-display);
+  font-size: 1rem;
+}
+
+.conversionIntent p {
+  color: var(--text-secondary);
+  font-size: var(--type-mono-sm-size);
+}
+
+.conversionPath {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conversionStep {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.conversionStep .address {
+  max-width: 14rem;
+  overflow-wrap: anywhere;
 }
 .quotePrompt {
   font-size: 0.75rem;
@@ -574,6 +642,63 @@
 .transactionLink {
   font-family: var(--face-mono);
   font-size: 0.75rem;
+}
+.transactionIdentity {
+  display: grid;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.transactionIdentityLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+}
+.transactionIdentityValue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.transactionHash {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--face-mono);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  background: var(--surface-page);
+  border: 1px solid var(--edge-color);
+  border-radius: 10px;
+  padding: 8px 10px;
+  user-select: all;
+}
+.copyHash {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-family: var(--face-mono);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.copyHash:hover {
+  background: var(--surface-well);
+  border-color: var(--leg-origin);
+}
+.copyHash svg {
+  flex-shrink: 0;
 }
 .reviewTotal {
   display: grid;
