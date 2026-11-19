@@ -119,8 +119,8 @@ export function SourceAssetPicker({
         />
       </label>
       <p className={styles.note}>
-        Stellar Testnet. Non-USDC quotes compare up to {MAX_CONVERSION_PATHS} Horizon paths by
-        exact USDC output. Only paths matching the asset identity and requested source amount qualify.
+        Stellar Testnet. Non-USDC quotes compare up to {MAX_CONVERSION_PATHS} Horizon paths by exact
+        USDC output. Only paths matching the asset identity and requested source amount qualify.
       </p>
       <div className={styles.list} aria-busy={loading}>
         {loading && <p role="status">Searching Stellar assets...</p>}

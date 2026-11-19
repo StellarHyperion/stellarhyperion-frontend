@@ -2,12 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Account, Asset, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { TESTNET } from "../src/config/testnet";
 import {
+  createGenerationTracker,
   createSigningCoordinator,
   WALLET_SIGN_TIMEOUT_MS,
   walletAddress,
   walletSign,
 } from "../src/wallets/stellar/sdk";
 import { verifyWalletSignature } from "../src/wallets/stellar/signature";
+import {
+  withTimeout,
+  WalletTimeoutError,
+  WalletSigningUncertainError,
+} from "../src/wallets/stellar/timeout";
+function stalled<T>(): Promise<T> {
+  return new Promise<T>(() => undefined);
+}
 
 const api = vi.hoisted(() => ({
   freighter: {
@@ -111,9 +120,8 @@ describe("Direct Stellar wallet adapters", () => {
     coordinator.abandon(new Error("Disconnected during preflight"));
     await expect(outstanding).rejects.toThrow("Disconnected during preflight");
     finishPreflight({ address: signer.publicKey() });
-    await vi.waitFor(() => {
-      expect(api.freighter.getNetworkDetails).toHaveBeenCalled();
-    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(api.freighter.getNetworkDetails).not.toHaveBeenCalled();
     expect(api.freighter.signTransaction).not.toHaveBeenCalled();
     expect(coordinator.pending).toBeNull();
   });
@@ -348,5 +356,236 @@ describe("An outstanding approval resolves to an explicit failure instead of han
     await expect(walletSign("freighter", envelope().original, signer.publicKey())).rejects.toThrow(
       "The wallet extension was removed or reloaded. Reopen it and try again.",
     );
+  });
+});
+
+describe("Connection generation tracking", () => {
+  it("releases a superseded account request before its old adapter responds", async () => {
+    let finishOld!: (value: { address: string }) => void;
+    api.freighter.requestAccess.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOld = resolve;
+        }),
+    );
+    const tracker = createGenerationTracker();
+    const oldRequest = tracker.run(() => walletAddress("freighter"));
+    await vi.waitFor(() => {
+      expect(api.freighter.requestAccess).toHaveBeenCalled();
+    });
+    tracker.advance();
+    await expect(oldRequest).rejects.toThrow("wallet connection changed");
+    await expect(tracker.run(() => walletAddress("freighter"))).resolves.toBe(signer.publicKey());
+    finishOld({ address: Keypair.random().publicKey() });
+    await Promise.resolve();
+    await expect(oldRequest).rejects.toThrow("wallet connection changed");
+  });
+
+  it("never starts an old generation's deferred action after reconnection", async () => {
+    const tracker = createGenerationTracker();
+    const action = vi.fn(() => Promise.resolve("stale"));
+    const oldRequest = tracker.run(action);
+    tracker.advance();
+    await expect(oldRequest).rejects.toThrow("wallet connection changed");
+    expect(action).not.toHaveBeenCalled();
+    await expect(tracker.run(() => Promise.resolve("current"))).resolves.toBe("current");
+  });
+
+  it("starts at zero and advances monotonically", () => {
+    const tracker = createGenerationTracker();
+    expect(tracker.value()).toBe(0);
+    expect(tracker.advance()).toBe(1);
+    expect(tracker.advance()).toBe(2);
+    expect(tracker.value()).toBe(2);
+  });
+
+  it("lets a caller detect that its captured generation is no longer current", () => {
+    const tracker = createGenerationTracker();
+    const issued = tracker.value();
+    expect(tracker.value()).toBe(issued);
+    tracker.advance();
+    expect(tracker.value()).not.toBe(issued);
+  });
+
+  it("discards a late wallet address result once the connection has moved on", async () => {
+    let settleFirstRequest!: (address: string) => void;
+    api.freighter.requestAccess.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settleFirstRequest = (address) => {
+            resolve({ address });
+          };
+        }),
+    );
+    const tracker = createGenerationTracker();
+    const issuedGeneration = tracker.value();
+    const firstRequest = walletAddress("freighter").then((value) => ({
+      value,
+      // Mirrors the check a caller (e.g. the wallet context's signTransaction) makes once
+      // its awaited call resolves: has the connection generation moved on since this call
+      // was issued?
+      stale: tracker.value() !== issuedGeneration,
+    }));
+
+    // Let walletAddress's own `isConnected()` await run before Freighter's request mock is
+    // actually invoked, so `settleFirstRequest` is assigned before we use it below.
+    await vi.waitFor(() => {
+      if (typeof settleFirstRequest !== "function") throw new Error("not yet called");
+    });
+
+    // The user disconnects/reconnects before Freighter's first request settles.
+    tracker.advance();
+    settleFirstRequest(signer.publicKey());
+
+    const { value, stale } = await firstRequest;
+    expect(value).toBe(signer.publicKey());
+    expect(stale).toBe(true);
+  });
+
+  it("does not flag a result as stale when the generation has not moved on", async () => {
+    const tracker = createGenerationTracker();
+    const issuedGeneration = tracker.value();
+    const result = await walletAddress("freighter", false).then((value) => ({
+      value,
+      stale: tracker.value() !== issuedGeneration,
+    }));
+    expect(result.stale).toBe(false);
+  });
+});
+
+describe("Bounded wallet adapter request timeouts", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("clears its timer when cancelled and observes a late rejecting adapter", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let failLate!: (reason: Error) => void;
+    const pending = withTimeout(
+      new Promise<never>((_resolve, reject) => {
+        failLate = reject;
+      }),
+      20_000,
+      "timed out",
+      WalletTimeoutError,
+      controller.signal,
+    );
+    controller.abort(new Error("Connection superseded"));
+    await expect(pending).rejects.toThrow("Connection superseded");
+    expect(vi.getTimerCount()).toBe(0);
+    failLate(new Error("Late extension failure"));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it.each([true, false])(
+    "normalizes string abort reasons before or during a request (%s)",
+    async (alreadyAborted) => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      if (alreadyAborted) controller.abort("Connection superseded");
+      const pending = withTimeout(
+        stalled(),
+        20_000,
+        "timed out",
+        WalletTimeoutError,
+        controller.signal,
+      );
+      if (!alreadyAborted) controller.abort("Connection superseded");
+      await expect(pending).rejects.toBeInstanceOf(Error);
+      await expect(pending).rejects.toThrow("Connection superseded");
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("cancels a stalled xBull account request and closes the old bridge", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    api.xbull.connect.mockReturnValue(stalled());
+    const pending = walletAddress("xbull", true, controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort(new Error("Disconnected"));
+    await expect(pending).rejects.toThrow("Disconnected");
+    expect(api.xbull.closeConnections).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("frees a stalled availability check instead of hanging and never requests access", async () => {
+    vi.useFakeTimers();
+    api.freighter.isConnected.mockReturnValue(stalled());
+    const pending = walletAddress("freighter");
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletTimeoutError);
+    await vi.advanceTimersByTimeAsync(8_000);
+    await assertion;
+    expect(api.freighter.requestAccess).not.toHaveBeenCalled();
+  });
+
+  it("frees a stalled account fetch instead of hanging", async () => {
+    vi.useFakeTimers();
+    api.freighter.requestAccess.mockReturnValue(stalled());
+    const pending = walletAddress("freighter");
+    const assertion = expect(pending).rejects.toThrow(/did not return an account/);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await assertion;
+  });
+
+  it("frees a stalled LOBSTR availability check instead of hanging", async () => {
+    vi.useFakeTimers();
+    api.lobstr.isConnected.mockReturnValue(stalled());
+    const pending = walletAddress("lobstr");
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletTimeoutError);
+    await vi.advanceTimersByTimeAsync(8_000);
+    await assertion;
+    expect(api.lobstr.getPublicKey).not.toHaveBeenCalled();
+  });
+
+  it("frees a stalled xBull connect and still closes the bridge connection", async () => {
+    vi.useFakeTimers();
+    api.xbull.connect.mockReturnValue(stalled());
+    const pending = walletAddress("xbull");
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletTimeoutError);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await assertion;
+    expect(api.xbull.closeConnections).toHaveBeenCalledOnce();
+  });
+
+  it("treats a Freighter signing timeout as uncertain rather than failed, without resubmitting", async () => {
+    const { original } = envelope();
+    vi.useFakeTimers();
+    api.freighter.signTransaction.mockReturnValue(stalled());
+    const pending = walletSign("freighter", original, signer.publicKey());
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletSigningUncertainError);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await assertion;
+    expect(api.freighter.signTransaction).toHaveBeenCalledOnce();
+  });
+
+  it("treats an xBull signing timeout as uncertain and still closes the bridge connection", async () => {
+    const { original } = envelope();
+    vi.useFakeTimers();
+    api.xbull.sign.mockReturnValue(stalled());
+    const pending = walletSign("xbull", original, signer.publicKey());
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletSigningUncertainError);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await assertion;
+    expect(api.xbull.closeConnections).toHaveBeenCalledOnce();
+  });
+
+  it("never lets a late adapter response resolve a signing call that already timed out", async () => {
+    const { original, signed } = envelope();
+    let resolveLate: ((value: { signedTxXdr: string }) => void) | undefined;
+    api.freighter.signTransaction.mockReturnValue(
+      new Promise((resolve) => {
+        resolveLate = resolve;
+      }),
+    );
+    vi.useFakeTimers();
+    const pending = walletSign("freighter", original, signer.publicKey());
+    const assertion = expect(pending).rejects.toBeInstanceOf(WalletSigningUncertainError);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await assertion;
+    // The real wallet response arrives only after Hyperion already treated the request as
+    // uncertain and moved on. It must be dropped, not retroactively resubmitted or trusted.
+    resolveLate?.({ signedTxXdr: signed });
+    await vi.advanceTimersByTimeAsync(0);
   });
 });

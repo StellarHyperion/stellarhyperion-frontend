@@ -1,6 +1,11 @@
 import { TESTNET } from "../../config/testnet";
 import { assertWalletApproval } from "./signature";
 import type { WalletApprovalProvenance } from "./types";
+import {
+  withTimeout as requestTimeout,
+  WalletTimeoutError,
+  WalletSigningUncertainError,
+} from "./timeout";
 
 export const STELLAR_WALLETS = [
   { id: "freighter", name: "Freighter", url: "https://www.freighter.app/" },
@@ -12,6 +17,60 @@ export type StellarWalletId = (typeof STELLAR_WALLETS)[number]["id"];
 export const isWalletId = (value: string | null): value is StellarWalletId =>
   STELLAR_WALLETS.some((wallet) => wallet.id === value);
 
+/**
+ * Tags every asynchronous wallet call with the connection generation it was issued under.
+ *
+ * Connecting, switching accounts and disconnecting each advance the generation. A caller that
+ * captures `value()` before starting a wallet request can compare it again once that request
+ * settles: if the generation has since moved on, the result belongs to a connection that is no
+ * longer current and must be discarded rather than applied, so a slow or stale wallet response
+ * can never overwrite a later connection (or be treated as a valid signature for one).
+ */
+export function createGenerationTracker() {
+  let current = 0;
+  let controller = new AbortController();
+  return {
+    /** Starts a new generation and returns it. */
+    advance(): number {
+      controller.abort(new Error("Your wallet connection changed. Review the transaction again."));
+      controller = new AbortController();
+      current += 1;
+      return current;
+    },
+    /** The generation currently in effect. */
+    value(): number {
+      return current;
+    },
+    async run<T>(action: (signal: AbortSignal) => Promise<T>): Promise<T> {
+      const signal = controller.signal;
+      let abort!: () => void;
+      const cancelled = new Promise<never>((_resolve, reject) => {
+        abort = () => {
+          const reason: unknown = signal.reason;
+          reject(
+            reason instanceof Error
+              ? reason
+              : new Error("Your wallet connection changed. Review the transaction again."),
+          );
+        };
+        signal.addEventListener("abort", abort, { once: true });
+      });
+      try {
+        return await Promise.race([
+          Promise.resolve().then(() => {
+            signal.throwIfAborted();
+            return action(signal);
+          }),
+          cancelled,
+        ]);
+      } finally {
+        signal.removeEventListener("abort", abort);
+      }
+    },
+  };
+}
+export type GenerationTracker = ReturnType<typeof createGenerationTracker>;
+
 export type SigningOperation =
   "bridge" | "conversion" | "claim" | "claim-settlement" | "transaction";
 export interface PendingSigningRequest {
@@ -22,8 +81,9 @@ export interface PendingSigningRequest {
 // A wallet extension can be removed, have its popup closed without a response, or otherwise go
 // silent while a request is outstanding. Without a bound, the caller would await forever. These
 // timeouts only force the *caller's* promise to settle; they never resubmit or assume success.
-export const WALLET_CONNECT_TIMEOUT_MS = 60_000;
-export const WALLET_SIGN_TIMEOUT_MS = 180_000;
+export const WALLET_CONNECT_TIMEOUT_MS = 20_000;
+export const WALLET_AVAILABILITY_TIMEOUT_MS = 8_000;
+export const WALLET_SIGN_TIMEOUT_MS = 120_000;
 
 // Browsers raise distinctive messages when an extension's background context disappears
 // mid-request (removed, reloaded, or crashed). Surface those as a clear, actionable message
@@ -119,28 +179,19 @@ function withTimeout<T>(
   ms: number,
   timeoutMessage: string,
   signing = false,
+  signal?: AbortSignal,
 ): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(
-        new Error(
-          signing
-            ? `${timeoutMessage} The approval outcome is unknown. Close the wallet prompt and review before trying again. Nothing is automatically submitted.`
-            : timeoutMessage,
-        ),
-      );
-    }, ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(new Error(friendlyMessage(error)));
-      },
-    );
-  });
+  return requestTimeout(
+    promise.catch((error: unknown) => {
+      throw new Error(friendlyMessage(error));
+    }),
+    ms,
+    signing
+      ? `${timeoutMessage} The approval outcome is unknown. Close the wallet prompt and review before trying again. Nothing is automatically submitted.`
+      : timeoutMessage,
+    signing ? WalletSigningUncertainError : WalletTimeoutError,
+    signal,
+  );
 }
 
 async function albedoClient() {
@@ -149,40 +200,60 @@ async function albedoClient() {
   return "default" in client ? (client.default as typeof client) : client;
 }
 
-export async function walletAddress(id: StellarWalletId, requestAccess = true): Promise<string> {
+export async function walletAddress(
+  id: StellarWalletId,
+  requestAccess = true,
+  signal?: AbortSignal,
+): Promise<string> {
+  signal?.throwIfAborted();
   switch (id) {
     case "freighter": {
       const api = await import("@stellar/freighter-api");
+      signal?.throwIfAborted();
       const connected = await withTimeout(
         api.isConnected(),
-        WALLET_CONNECT_TIMEOUT_MS,
+        WALLET_AVAILABILITY_TIMEOUT_MS,
         "Freighter did not respond. Open the extension and try again.",
+        false,
+        signal,
       );
       if (!connected.isConnected) throw new Error("Install and open Freighter to connect.");
+      signal?.throwIfAborted();
       const result = await withTimeout(
         requestAccess ? api.requestAccess() : api.getAddress(),
         WALLET_CONNECT_TIMEOUT_MS,
-        "Freighter closed or did not respond to the connection request. Open the extension and try again.",
+        "Freighter did not return an account in time. Open the extension and try again.",
+        false,
+        signal,
       );
       if (result.error) throwWalletError(result.error);
+      signal?.throwIfAborted();
       return account(result.address);
     }
     case "albedo": {
+      const client = await albedoClient();
+      signal?.throwIfAborted();
       const result = await withTimeout(
-        (await albedoClient()).publicKey({}),
+        client.publicKey({}),
         WALLET_CONNECT_TIMEOUT_MS,
         "Albedo closed or did not respond to the connection request. Reopen the popup and try again.",
+        false,
+        signal,
       );
+      signal?.throwIfAborted();
       return account(result.pubkey);
     }
     case "xbull": {
       const { xBullWalletConnect } = await import("@creit.tech/xbull-wallet-connect");
       const bridge = new xBullWalletConnect();
       try {
+        signal?.throwIfAborted();
         const connected = await withTimeout(
           bridge.connect(),
           WALLET_CONNECT_TIMEOUT_MS,
           "xBull closed or did not respond to the connection request. Reopen the extension and try again.",
+          false,
+          signal,
         );
         return await account(connected);
       } finally {
@@ -191,17 +262,23 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true): 
     }
     case "lobstr": {
       const api = await import("@lobstrco/signer-extension-api");
+      signal?.throwIfAborted();
       const connected = await withTimeout(
         api.isConnected(),
-        WALLET_CONNECT_TIMEOUT_MS,
+        WALLET_AVAILABILITY_TIMEOUT_MS,
         "LOBSTR did not respond. Open the extension and try again.",
+        false,
+        signal,
       );
       if (!connected) throw new Error("Install and open LOBSTR to connect.");
+      signal?.throwIfAborted();
       return account(
         await withTimeout(
           api.getPublicKey(),
           WALLET_CONNECT_TIMEOUT_MS,
           "LOBSTR closed or did not respond to the connection request. Open the extension and try again.",
+          false,
+          signal,
         ),
       );
     }
@@ -218,7 +295,7 @@ export async function walletSign(
   signal?.throwIfAborted();
   if (approval) assertWalletApproval(approval, address);
   if (approval && (id === "albedo" || id === "xbull")) {
-    const actual = await walletAddress(id, false);
+    const actual = await walletAddress(id, false, signal);
     if (actual !== address)
       throw new Error("The wallet account changed. Review the transaction again.");
   }
@@ -226,12 +303,15 @@ export async function walletSign(
   switch (id) {
     case "freighter": {
       const api = await import("@stellar/freighter-api");
-      const actual = await walletAddress(id, false);
+      const actual = await walletAddress(id, false, signal);
       if (actual !== address) throw new Error("Your wallet account changed. Connect again.");
+      signal?.throwIfAborted();
       const network = await withTimeout(
         api.getNetworkDetails(),
-        WALLET_CONNECT_TIMEOUT_MS,
+        WALLET_AVAILABILITY_TIMEOUT_MS,
         "Freighter did not respond. Open the extension and try again.",
+        false,
+        signal,
       );
       if (network.error) throwWalletError(network.error);
       if (network.networkPassphrase !== TESTNET.networkPassphrase)
@@ -245,6 +325,7 @@ export async function walletSign(
         WALLET_SIGN_TIMEOUT_MS,
         "Freighter closed or did not respond to the signature request. Reopen Freighter and try again.",
         true,
+        signal,
       );
       if (result.error) throwWalletError(result.error);
       signed = result.signedTxXdr;
@@ -263,6 +344,7 @@ export async function walletSign(
         WALLET_SIGN_TIMEOUT_MS,
         "Albedo closed or did not respond to the signature request. Reopen the popup and try again.",
         true,
+        signal,
       );
       signed = result.signed_envelope_xdr;
       break;
@@ -277,6 +359,7 @@ export async function walletSign(
           WALLET_SIGN_TIMEOUT_MS,
           "xBull closed or did not respond to the signature request. Reopen the extension and try again.",
           true,
+          signal,
         );
       } finally {
         bridge.closeConnections();
@@ -285,7 +368,7 @@ export async function walletSign(
     }
     case "lobstr": {
       const api = await import("@lobstrco/signer-extension-api");
-      if ((await walletAddress(id, false)) !== address)
+      if ((await walletAddress(id, false, signal)) !== address)
         throw new Error("Your wallet account changed. Connect again.");
       signal?.throwIfAborted();
       signed = await withTimeout(
@@ -293,6 +376,7 @@ export async function walletSign(
         WALLET_SIGN_TIMEOUT_MS,
         "LOBSTR closed or did not respond to the signature request. Reopen the extension and try again.",
         true,
+        signal,
       );
       break;
     }
