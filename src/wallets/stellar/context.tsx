@@ -68,12 +68,20 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       });
     return () => {
       active = false;
+      attempt.current++;
+      connectionGeneration.current.advance();
+      coordinator.current.abandon(new Error("Wallet connection closed before signing completed."));
+      pending.current?.(null);
+      pending.current = null;
     };
   }, [pickerOpen]);
   const [authorizing, setAuthorizing] = useState<StellarWalletId | null>(null);
   const [pendingSigningRequest, setPendingSigningRequest] = useState<PendingSigningRequest | null>(
     null,
   );
+  // Tracks (at most) one outstanding signing request. It can be force-settled from here on
+  // disconnect or explicit cancellation, so a vanished wallet extension/popup can never leave
+  // this locked forever.
   const coordinator = useRef(createSigningCoordinator(setPendingSigningRequest));
   const pending = useRef<((address: string | null) => void) | null>(null);
   const attempt = useRef(0);
@@ -90,7 +98,8 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     const saved = readSavedWallet();
     // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
     if (isWalletId(saved) && saved === "freighter")
-      void walletAddress(saved, false)
+      void connectionGeneration.current
+        .run(() => walletAddress(saved, false))
         .then((value) => {
           if (active && attempt.current === version) {
             setAddress(value);
@@ -118,6 +127,10 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const connect = useCallback(async () => {
     if (pending.current) return null;
+    connectionGeneration.current.advance();
+    coordinator.current.abandon(
+      new Error("Your wallet connection changed. Review the transaction again."),
+    );
     attempt.current++;
     setConnecting(true);
     setError(null);
@@ -134,7 +147,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     setAuthorizing(id);
     setError(null);
     try {
-      const value = await walletAddress(id);
+      const value = await connectionGeneration.current.run(() => walletAddress(id));
       if (attempt.current !== version) return;
       setAddress(value);
       setWalletId(id);
@@ -155,11 +168,26 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const disconnect = useCallback(() => {
     closePicker();
     connectionGeneration.current.advance();
+    // A pending approval must never be left to resolve against a wallet we've already walked
+    // away from: settle it to an explicit failure instead of letting it hang or complete silently.
+    coordinator.current.abandon(
+      new Error(
+        "Wallet disconnected before the signature completed. Close any old wallet prompt, reconnect and review the transfer.",
+      ),
+    );
     setAddress(null);
     setWalletId(null);
     saveWallet(null);
     return Promise.resolve();
   }, [closePicker]);
+
+  const cancelSignature = useCallback(() => {
+    coordinator.current.abandon(
+      new Error(
+        "Stopped waiting for this signature. Close the wallet prompt and review before trying again.",
+      ),
+    );
+  }, []);
 
   const signTransaction = useCallback(
     async (
@@ -181,7 +209,16 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
           operation: opts?.approval?.operation ?? opts?.operation ?? "transaction",
           account: address,
         },
-        () => walletSign(walletId, transaction, address, opts?.approval),
+        (signal) =>
+          connectionGeneration.current.run((connectionSignal) =>
+            walletSign(
+              walletId,
+              transaction,
+              address,
+              opts?.approval,
+              AbortSignal.any([signal, connectionSignal]),
+            ),
+          ),
       );
       // The wallet took long enough to respond that the user disconnected or switched
       // accounts in the meantime. Never hand back a signature bound to a connection that is
@@ -203,11 +240,13 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       walletId,
       isConnected: address !== null,
       isConnecting,
+      isSigning: pendingSigningRequest !== null,
       error,
       pendingSigningRequest,
       connect,
       disconnect,
       signTransaction,
+      cancelSignature,
     }),
     [
       address,
@@ -218,6 +257,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       connect,
       disconnect,
       signTransaction,
+      cancelSignature,
     ],
   );
   return (
