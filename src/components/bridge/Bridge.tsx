@@ -193,6 +193,7 @@ function QuoteDetails({
   simulating?: boolean;
   simulationError?: string | null;
 }) {
+  const breakdown = quoteBreakdown(quote);
   const resourceFee = simulation?.resourceFee;
   const networkFee = simulation?.networkFee;
   const breakdown = quoteBreakdown(quote);
