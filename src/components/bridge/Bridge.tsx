@@ -283,7 +283,7 @@ function QuoteDiffDetails({ diff }: { diff: QuoteDiff }) {
     <>
       <h3>
         {diff.materialWorsening
-          ? "Refreshed quote is worse — review required"
+          ? "Refreshed quote is worse: review required"
           : "Refreshed quote changed"}
       </h3>
       <p className={styles.reviewNote}>
