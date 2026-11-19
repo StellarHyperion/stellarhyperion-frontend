@@ -1,6 +1,9 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
 import { TESTNET, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
+import { stellarAsset, type SourceAsset } from "./assets";
+
+export type CheckpointSource = Pick<SourceAsset, "id" | "code" | "issuer">;
 
 export interface TransferCheckpoint {
   router: string;
@@ -11,6 +14,8 @@ export interface TransferCheckpoint {
   bridgeAmount: string;
   stage: "conversion" | "bridge";
   txHash: string;
+  /** The exact source asset (code + issuer) this recovery data was converted from. */
+  source: CheckpointSource;
 }
 const key = "hyperion.testnet.pending-transfer";
 const event = "hyperion:pending-transfer";
@@ -32,6 +37,27 @@ function subscribe(listener: () => void) {
     window.removeEventListener(event, listener);
   };
 }
+/**
+ * Validates and normalizes the source asset a checkpoint claims to have converted from.
+ * Reuses `stellarAsset`'s identity checks so a checkpoint can never carry a corrupted or
+ * spoofed code/issuer pairing: an invalid identity throws, which the caller treats as a
+ * corrupted recovery record.
+ */
+function checkpointSource(value: unknown): CheckpointSource {
+  if (!value || typeof value !== "object") throw new Error("Missing source asset.");
+  const candidate = value as { id?: unknown; code?: unknown; issuer?: unknown };
+  if (typeof candidate.id !== "string" || typeof candidate.code !== "string")
+    throw new Error("Invalid source asset.");
+  if (candidate.issuer !== null && typeof candidate.issuer !== "string")
+    throw new Error("Invalid source asset issuer.");
+  const source: CheckpointSource = {
+    id: candidate.id,
+    code: candidate.code,
+    issuer: candidate.issuer,
+  };
+  stellarAsset(source);
+  return source;
+}
 export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
   if (!raw) return null;
   try {
@@ -44,6 +70,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       bridgeAmount: string;
       stage: string;
       txHash: string;
+      source: unknown;
     };
     if (
       value.router !== TESTNET.router ||
@@ -57,12 +84,14 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       (value.stage !== "conversion" && value.stage !== "bridge")
     )
       return null;
+    const source = checkpointSource(value.source);
     destinationFor(value.destination);
     return {
       ...value,
       destination: destinationFor(value.destination).key,
       route: value.route,
       stage: value.stage,
+      source,
     };
   } catch {
     return null;
@@ -83,6 +112,20 @@ export function checkpointMatches(
     checkpoint.bridgeAmount === context.bridgeAmount &&
     checkpoint.stage === context.stage
   );
+}
+
+/**
+ * Decides whether existing recovery data still applies to a given source asset selection.
+ * A checkpoint only ever belongs to the exact asset (code + issuer) it was converted from;
+ * once the user selects a different asset, the previous intent's recovery data must not be
+ * carried over, so this returns `null` instead of the stale checkpoint.
+ */
+export function checkpointForAsset(
+  checkpoint: TransferCheckpoint | null,
+  asset: Pick<SourceAsset, "id">,
+): TransferCheckpoint | null {
+  if (checkpoint?.source.id !== asset.id) return null;
+  return checkpoint;
 }
 export function saveCheckpoint(value: TransferCheckpoint | null) {
   const existing = parseCheckpoint(snapshot());

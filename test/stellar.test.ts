@@ -1,4 +1,5 @@
 import { parseClaimPreview } from "../src/contracts/stellar";
+import { XLM } from "../src/contracts/assets";
 import {
   claimOperationOwnership,
   getOperationOwnership,
@@ -373,6 +374,7 @@ describe("Real Stellar transaction encoding", () => {
         bridgeAmount: "1000000",
         stage: "bridge",
         txHash: "1".repeat(64),
+        source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
       };
       const cp2: TransferCheckpoint = {
         ...cp1,
@@ -442,6 +444,7 @@ describe("Real Stellar transaction encoding", () => {
         bridgeAmount: "1000000",
         stage: "bridge" as const,
         txHash: "a".repeat(64),
+        source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
       };
       vi.stubGlobal("localStorage", {
         getItem: () => null,

@@ -659,6 +659,7 @@ describe("Checkpoint staleness guards", () => {
     bridgeAmount: "10000000",
     stage: "bridge",
     txHash: "0".repeat(64),
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
   const sameIntent = {
     account: checkpoint.account,
@@ -704,6 +705,7 @@ describe("Source identity and explorer access", () => {
     bridgeAmount: "10000000",
     stage: "bridge" as const,
     txHash: realHash,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
 
   it("preserves the real signed hash exactly in a saved checkpoint", () => {

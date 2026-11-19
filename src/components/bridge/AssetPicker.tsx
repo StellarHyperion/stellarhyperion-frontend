@@ -25,11 +25,14 @@ export function AssetIcon({ code, network = false }: { code: string; network?: b
 export function SourceAssetPicker({
   selected,
   balances,
+  pendingRecovery,
   onSelect,
   onClose,
 }: {
   selected: SourceAsset;
   balances: SourceAsset[];
+  /** The source asset bound to any unresolved converted-USDC recovery data, if one exists. */
+  pendingRecovery?: Pick<SourceAsset, "id" | "code"> | null;
   onSelect: (asset: SourceAsset) => void;
   onClose: () => void;
 }) {
@@ -89,6 +92,12 @@ export function SourceAssetPicker({
       <p className={styles.note}>
         Stellar Testnet. Assets bridge through USDC when a liquid conversion path exists.
       </p>
+      {pendingRecovery && pendingRecovery.id !== selected.id && (
+        <p className={styles.note} role="note">
+          Choosing a different token clears your pending {pendingRecovery.code} conversion recovery
+          reminder. Any USDC already converted stays in your wallet.
+        </p>
+      )}
       <div className={styles.list} aria-busy={loading}>
         {loading && <p role="status">Searching Stellar assets...</p>}
         {remote?.key === query && remote.version === queryVersion && remote.error && (

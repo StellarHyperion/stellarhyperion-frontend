@@ -61,6 +61,7 @@ import {
 } from "../../contracts/assets";
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import {
+  checkpointForAsset,
   claimOperationOwnership,
   getOperationOwnership,
   releaseOperationOwnership,
@@ -406,7 +407,11 @@ function PendingTransferCard({
       </div>
       <p>
         {checkpoint.stage === "conversion"
-          ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
+          ? `Converting ${checkpoint.source.code}${
+              checkpoint.source.issuer
+                ? ` (${checkpoint.source.issuer.slice(0, 7)}...${checkpoint.source.issuer.slice(-7)})`
+                : ""
+            } into USDC. Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC.`
           : "Follow destination delivery in your transfer activity. A Stellar confirmation starts the bridge journey."}
       </p>
       <a
@@ -881,6 +886,11 @@ export function Bridge() {
       bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
       stage,
       txHash: hash,
+      source: {
+        id: reviewedQuote.source.id,
+        code: reviewedQuote.source.code,
+        issuer: reviewedQuote.source.issuer,
+      },
     });
     const conversionReconcile: SubmissionReconciliation = {
       expectedAccount: sender,
@@ -1046,7 +1056,7 @@ export function Bridge() {
               type="button"
               className={styles.tokenSelector}
               aria-label="Choose source token"
-              disabled={locked}
+              disabled={busy}
               onClick={() => {
                 setPicker("source");
               }}
@@ -1351,7 +1361,12 @@ export function Bridge() {
         <SourceAssetPicker
           selected={source}
           balances={balances}
+          pendingRecovery={checkpoint?.source ?? null}
           onSelect={(asset) => {
+            // A newly selected asset never inherits converted-USDC recovery data that
+            // belongs to a different previous intent: discard it instead of leaving it to
+            // be silently reused once the form unlocks for the new selection.
+            if (checkpoint && !checkpointForAsset(checkpoint, asset)) saveCheckpoint(null);
             setSource(asset);
             invalidateQuote();
             setError(null);
