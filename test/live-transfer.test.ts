@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -47,7 +47,10 @@ it.skipIf(!enabled)(
     }).trim();
     const recipient = validateRecipient(recipientInput) as `0x${string}`;
     const file =
-      process.env.HYPERION_TESTNET_PROOF ?? join(tmpdir(), "hyperion-live-transfer.json");
+      process.env.HYPERION_TESTNET_PROOF ??
+      join(mkdtempSync(join(tmpdir(), "hyperion-live-transfer-")), "proof.json");
+    // Retain the proof on interruption; set this path explicitly to resume without resending.
+    console.log(`Live transfer proof: ${file}`);
     const amount = parseSendAmount("0.1");
     const proof = existsSync(file)
       ? (JSON.parse(readFileSync(file, "utf8")) as Proof)
@@ -65,7 +68,7 @@ it.skipIf(!enabled)(
     expect(proof.recipient).toBe(recipient);
     expect(proof.grossAmount).toBe(String(amount));
     const save = () => {
-      writeFileSync(file, `${JSON.stringify(proof, null, 2)}\n`);
+      writeFileSync(file, `${JSON.stringify(proof, null, 2)}\n`, { mode: 0o600 });
     };
     const remote = createPublicClient({
       transport: http("https://ethereum-sepolia-rpc.publicnode.com", { timeout: 15_000 }),
