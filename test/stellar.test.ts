@@ -41,6 +41,7 @@ const quote: LiveQuote = {
   fee: 30000n,
   netAmount: 9970009n,
   destinationAmount: 9970009n,
+  representableAmount: 9970009n,
   flowAvailable: 10000000000n,
   ledger: 1,
   relayGas: 1051082n,
