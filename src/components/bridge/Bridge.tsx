@@ -36,9 +36,11 @@ import {
   submitSettleClaim,
   submitSettleClaims,
   validateRecipient,
+  QuoteChangedError,
   type LaneState,
   type LiveQuote,
   type PendingClaim,
+  type QuoteDiff,
   type ReviewedIntentSnapshot,
   type SimulatedOperation,
   type SubmissionReconciliation,
@@ -276,6 +278,59 @@ function QuoteDetails({
   );
 }
 
+function QuoteDiffDetails({ diff }: { diff: QuoteDiff }) {
+  return (
+    <>
+      <h3>
+        {diff.materialWorsening
+          ? "Refreshed quote is worse — review required"
+          : "Refreshed quote changed"}
+      </h3>
+      <p className={styles.reviewNote}>
+        Exact base-unit differences decide this comparison; formatted values are shown for context
+        only and never round the decision.
+      </p>
+      <dl className={styles.summary} aria-label="Quote field differences">
+        {diff.fields.map((field) => (
+          <div
+            key={field.key}
+            className={
+              field.direction === "worse"
+                ? styles.diffWorse
+                : field.direction === "better"
+                  ? styles.diffBetter
+                  : undefined
+            }
+          >
+            <dt>{field.label}</dt>
+            <dd>
+              {field.reviewedDisplay} <ArrowRight size={11} aria-hidden="true" />{" "}
+              {field.refreshedDisplay}
+              <span className={styles.diffKind}>
+                {field.direction === "worse"
+                  ? "Worse"
+                  : field.direction === "better"
+                    ? "Better"
+                    : "Changed"}
+              </span>
+              {field.delta !== null && (
+                <span className={styles.diffDelta}>
+                  {field.delta > 0n ? "+" : ""}
+                  {field.delta.toString()} base units
+                </span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className={styles.reviewNote}>
+        Your reviewed minimum and provider budget stay fixed in the signed transaction. Nothing is
+        applied silently.
+      </p>
+    </>
+  );
+}
+
 function ConversionIntent({
   conversion,
   addTrustline,
@@ -403,6 +458,7 @@ function PendingTransferCard({
   const [cardSimulating, setCardSimulating] = useState(false);
   const [cardSimError, setCardSimError] = useState<string | null>(null);
   const [reviewedIntent, setReviewedIntent] = useState<ReviewedIntentSnapshot | null>(null);
+  const [cardDiff, setCardDiff] = useState<QuoteDiff | null>(null);
   const current =
     checked?.txHash === checkpoint.txHash
       ? checked
@@ -484,15 +540,25 @@ function PendingTransferCard({
           getCurrentAccount: () => currentAccount.current,
         },
         cardSimulation,
+        undefined,
+        (diff) => {
+          setCardDiff(diff);
+        },
       );
       setChecked(result);
       setReview(null);
       setReviewedIntent(null);
       setCardSimulation(null);
+      setCardDiff(null);
     } catch (cause) {
-      const message = errorMessage(cause);
-      if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
-      setError(message);
+      if (cause instanceof QuoteChangedError) {
+        setCardDiff(cause.diff);
+        setError(null);
+      } else {
+        const message = errorMessage(cause);
+        if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
+        setError(message);
+      }
     } finally {
       setChecking(false);
     }
@@ -623,6 +689,21 @@ function PendingTransferCard({
             }}
           />
           <QuoteDetails quote={review} simulation={cardSimulation} />
+          {cardDiff && (
+            <section className={styles.quoteDiff} aria-label="Refreshed quote comparison">
+              <QuoteDiffDetails diff={cardDiff} />
+              <button
+                type="button"
+                className={styles.secondary}
+                onClick={() => {
+                  setCardDiff(null);
+                  void check();
+                }}
+              >
+                Check refreshed quote
+              </button>
+            </section>
+          )}
           <p className={styles.address}>Recipient: {checkpoint.recipient}</p>
           {cardSimulation && (
             <p className={styles.address}>
@@ -672,6 +753,7 @@ export function Bridge() {
   const [picker, setPicker] = useState<"source" | "destination" | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [reviewApproval, setReviewApproval] = useState<WalletApprovalProvenance | null>(null);
+  const [quoteDiff, setQuoteDiff] = useState<QuoteDiff | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [quoteVersion, setQuoteVersion] = useState(0);
   const [laneState, setLaneState] = useState<{
@@ -864,6 +946,7 @@ export function Bridge() {
     setReviewing(false);
     setReviewApproval(null);
     setReviewed(null);
+    setQuoteDiff(null);
   };
   useEffect(() => {
     let active = true;
@@ -1113,13 +1196,23 @@ export function Bridge() {
         bridgeReconcile,
         reviewed.simulation ?? undefined,
         controller.signal,
+        (diff) => {
+          setQuoteDiff(diff);
+        },
       );
       if (generation !== waitGeneration.current) return;
       setResult(submitted);
     } catch (cause) {
-      const message = errorMessage(cause);
-      if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(converted);
-      setError(message);
+      if (cause instanceof QuoteChangedError) {
+        setQuoteDiff(cause.diff);
+        setReviewed(null);
+        setReviewApproval(null);
+        setError(null);
+      } else {
+        const message = errorMessage(cause);
+        if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(converted);
+        setError(message);
+      }
     } finally {
       releaseOperationOwnership(ownership.id);
       setBusy(false);
@@ -1131,6 +1224,7 @@ export function Bridge() {
     setResult(null);
     setError(null);
     setReviewed(null);
+    setQuoteDiff(null);
     setAmount("");
     setSimulatedState(null);
     setRefresh((value) => value + 1);
@@ -1399,6 +1493,22 @@ export function Bridge() {
             {`This amount exceeds the available route limit. Maximum bridgeable: ${formatUnits(conservativeMax, 7)} USDC.`}
           </p>
         )}
+        {quoteDiff && (
+          <section className={styles.quoteDiff} aria-label="Refreshed quote comparison">
+            <QuoteDiffDetails diff={quoteDiff} />
+            <button
+              type="button"
+              className={styles.secondary}
+              disabled={busy}
+              onClick={() => {
+                setQuoteDiff(null);
+                invalidateQuote();
+              }}
+            >
+              Review refreshed quote
+            </button>
+          </section>
+        )}
         {busy && (
           <p role="status" className={styles.progress}>
             <LoaderCircle className={styles.spinner} size={16} aria-hidden="true" />
@@ -1489,6 +1599,7 @@ export function Bridge() {
                   simulation,
                   addTrustline: !balances.some((asset) => asset.id === USDC.id),
                 });
+                setQuoteDiff(null);
                 setReviewing(true);
               }}
             >

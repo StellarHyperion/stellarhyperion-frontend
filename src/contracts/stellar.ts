@@ -30,6 +30,9 @@ import {
   type DestinationKey,
 } from "../config/testnet";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
+import { compareQuotes, type QuoteDiff } from "../lib/quote-diff";
+
+export type { QuoteDiff } from "../lib/quote-diff";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 
 const ITS_ROUTE = 1;
@@ -1095,6 +1098,18 @@ async function signAndSubmit(
   return { status: "pending", txHash: hash };
 }
 
+/** Raised before signing when a refreshed quote materially changes the reviewed transfer. */
+export class QuoteChangedError extends Error {
+  readonly diff: QuoteDiff;
+  constructor(diff: QuoteDiff) {
+    super(
+      "The refreshed quote is worse than the reviewed quote. Review the exact differences before signing.",
+    );
+    this.name = "QuoteChangedError";
+    this.diff = diff;
+  }
+}
+
 export async function submitBridgeOut(
   sender: string,
   quoted: LiveQuote,
@@ -1105,6 +1120,7 @@ export async function submitBridgeOut(
   reconcile?: SubmissionReconciliation,
   simulated?: SimulatedOperation,
   signal?: AbortSignal,
+  onQuoteDiff?: (diff: QuoteDiff) => void,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
   const reviewedIntent = reconcile?.reviewedIntent;
@@ -1123,17 +1139,11 @@ export async function submitBridgeOut(
   )
     throw new Error("The reviewed transfer intent changed. Review it again before signing.");
   const refreshed = await quoteTransfer(quoted.destination, quoted.requestedAmount, quoted.route);
-  if (
-    refreshed.destination !== quoted.destination ||
-    refreshed.route !== quoted.route ||
-    refreshed.requestedAmount !== quoted.requestedAmount ||
-    refreshed.grossAmount !== quoted.grossAmount ||
-    refreshed.destinationAmount < quoted.destinationAmount ||
-    refreshed.fee !== quoted.fee ||
-    refreshed.relayGas > quoted.relayGas ||
-    (refreshed.estimatedRelayGas ?? refreshed.relayGas) > quoted.relayGas
-  ) {
-    throw new Error("The quote changed. Review a fresh quote before signing.");
+  const diff = compareQuotes(quoted, refreshed);
+  if (diff.changed) {
+    // Show exact integer differences either way, but never relax the reviewed intent in place.
+    onQuoteDiff?.(diff);
+    if (diff.materialWorsening) throw new QuoteChangedError(diff);
   }
   const balance = await readBalance(sender);
   if (balance < refreshed.grossAmount)
