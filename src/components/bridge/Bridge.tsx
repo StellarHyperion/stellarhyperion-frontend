@@ -380,6 +380,30 @@ function PendingTransferCard({
   const [cardSimulating, setCardSimulating] = useState(false);
   const [cardSimError, setCardSimError] = useState<string | null>(null);
   const sameAccount = wallet.address === checkpoint.account;
+  const actionRef = useRef<HTMLButtonElement>(null);
+  const recoveryMessageRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const focus = () => {
+      const action = actionRef.current;
+      if (action && !action.disabled) action.focus();
+      else recoveryMessageRef.current?.focus();
+    };
+    let frame = requestAnimationFrame(focus);
+    const requestFocus = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(focus);
+    };
+    const onHashChange = () => {
+      if (window.location.hash === "#pending-recovery") requestFocus();
+    };
+    window.addEventListener("hashchange", onHashChange);
+    window.addEventListener("hyperion:recovery-focus", requestFocus);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("hashchange", onHashChange);
+      window.removeEventListener("hyperion:recovery-focus", requestFocus);
+    };
+  }, [busy, checking, checkpoint.txHash]);
   const recoveryOwner = JSON.stringify([checkpoint, wallet.address]);
   const ownerRef = useRef(recoveryOwner);
   const requestRef = useRef<AbortController | null>(null);
@@ -540,7 +564,13 @@ function PendingTransferCard({
     }
   };
   return (
-    <section className={styles.pending} aria-label="Transfer recovery" aria-busy={checking}>
+    <section
+      id="pending-recovery"
+      className={styles.pending}
+      aria-label="Transfer recovery"
+      aria-busy={checking}
+      tabIndex={-1}
+    >
       <div className={styles.pendingTitle}>
         <ShieldCheck size={18} aria-hidden="true" />
         <h2>
@@ -555,12 +585,18 @@ function PendingTransferCard({
                 : "Transfer source status unknown"}
         </h2>
       </div>
-      <p>
+      <p id="pending-recovery-message" ref={recoveryMessageRef} role="status" tabIndex={-1}>
         {checkpoint.stage === "conversion"
-          ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
+          ? visibleCurrent?.status === "confirmed"
+            ? "Conversion confirmed on Stellar. Your bridge is a separate transaction and still requires your wallet approval."
+            : visibleCurrent?.status === "failed"
+              ? "Conversion failed on Stellar. No bridge transaction was submitted."
+              : "This saved signed hash does not establish broadcast or confirmation. Check the conversion source status before continuing with USDC."
           : visibleCurrent?.status === "confirmed"
-            ? "The source transaction is confirmed. Follow destination delivery separately in transfer activity."
-            : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
+            ? "Source transaction confirmed on Stellar. Destination delivery is tracked separately."
+            : visibleCurrent?.status === "failed"
+              ? "Source transaction failed on Stellar. No destination delivery was initiated."
+              : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
       <a
         className={styles.transactionLink}
@@ -626,6 +662,8 @@ function PendingTransferCard({
       {visibleCurrent?.status === "failed" ||
       (checkpoint.stage === "bridge" && visibleCurrent?.status === "confirmed") ? (
         <button
+          id="pending-recovery-action"
+          ref={actionRef}
           type="button"
           className={styles.secondary}
           onClick={onReset}
@@ -635,6 +673,8 @@ function PendingTransferCard({
         </button>
       ) : (
         <button
+          id="pending-recovery-action"
+          ref={actionRef}
           type="button"
           className={styles.secondary}
           onClick={() => {
@@ -1057,6 +1097,7 @@ export function Bridge() {
     let converted: TransferCheckpoint | null = null;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
       router: TESTNET.router,
+      token: TESTNET.token,
       account: sender,
       recipient: validateRecipient(recipient),
       destination,
