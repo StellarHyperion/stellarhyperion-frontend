@@ -12,7 +12,9 @@ export interface ProvidersProps {
 export function Providers({ children }: ProvidersProps): ReactElement {
   const [feeRoutes, setFeeRoutes] = useState<boolean | null>(null);
   useEffect(() => {
-    void detectRuntimeCapabilities().then((value) => setFeeRoutes(value.feeRoutes));
+    void detectRuntimeCapabilities().then((value) => {
+      setFeeRoutes(value.feeRoutes);
+    });
   }, []);
   return (
     <WalletProvider>

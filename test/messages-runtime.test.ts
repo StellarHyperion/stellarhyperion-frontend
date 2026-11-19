@@ -10,7 +10,10 @@ describe("runtime capability messages", () => {
 
   it("keeps read-only history available when fee routes are missing", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
-    await expect(detectRuntimeCapabilities()).resolves.toEqual({ feeRoutes: false, readOnlyHistory: true });
+    await expect(detectRuntimeCapabilities()).resolves.toEqual({
+      feeRoutes: false,
+      readOnlyHistory: true,
+    });
     vi.unstubAllGlobals();
   });
 });
