@@ -107,9 +107,7 @@ try {
   const sourceDialog = page.getByRole("dialog", { name: "Choose a token" });
   await sourceDialog.waitFor();
   await page.getByLabel("Search Stellar assets").waitFor();
-  await sourceDialog
-    .getByText(/compare up to 50 Horizon paths by exact USDC output/i)
-    .waitFor();
+  await sourceDialog.getByText(/compare up to 50 Horizon paths by exact USDC output/i).waitFor();
   await page.getByLabel("Search Stellar assets").fill("USDC");
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "hidden" });
