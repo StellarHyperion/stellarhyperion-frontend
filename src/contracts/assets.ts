@@ -314,8 +314,13 @@ export async function requireRecoveredUsdc(
   signal?: AbortSignal,
 ): Promise<void> {
   const assets = await accountAssets(account, signal);
-  const balance = assets.find((asset) => asset.id === USDC.id)?.balance;
-  if (balance === undefined || parseUnits(balance, 7) < amount)
+  const usdc = assets.find((asset) => asset.id === USDC.id);
+  if (
+    amount <= 0n ||
+    usdc?.trustline !== "present" ||
+    usdc.available === undefined ||
+    parseUnits(usdc.available, 7) < amount
+  )
     throw new Error("The confirmed conversion's USDC is not currently available in this wallet.");
 }
 

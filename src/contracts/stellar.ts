@@ -2,6 +2,8 @@ import { createPublicClient, http, parseAbi } from "viem";
 import {
   Account,
   Address,
+  Asset,
+  StrKey,
   BASE_FEE,
   Contract,
   TransactionBuilder,
@@ -844,12 +846,18 @@ type ParsedOperation = Transaction["operations"][number];
 
 function matchesConversion(checkpoint: TransferCheckpoint, operations: ParsedOperation[]) {
   const payments = operations.filter((operation) => operation.type === "pathPaymentStrictReceive");
-  if (payments.length !== 1 || operations.length > 2) return false;
+  if (
+    payments.length !== 1 ||
+    operations.length > 2 ||
+    operations.some((operation) => operation.source && operation.source !== checkpoint.account)
+  )
+    return false;
   if (
     operations.some(
       (operation) =>
         operation.type !== "pathPaymentStrictReceive" &&
         (operation.type !== "changeTrust" ||
+          !(operation.line instanceof Asset) ||
           operation.line.getCode() !== TESTNET.usdcCode ||
           operation.line.getIssuer() !== TESTNET.usdcIssuer),
     )
@@ -882,8 +890,10 @@ function matchesBridge(checkpoint: TransferCheckpoint, operation: ParsedOperatio
     return false;
   const invocation = operation.func.invokeContract;
   if (invocation.functionName.toString() !== "bridge_out_with_gas") return false;
-  const configuredAddress = new Address(TESTNET.router).toScVal().address();
-  if (toHex(invocation.contractAddress.contractId()) !== toHex(configuredAddress.contractId()))
+  if (
+    invocation.contractAddress.type !== "scAddressTypeContract" ||
+    StrKey.encodeContract(invocation.contractAddress.contractId.toBytes()) !== TESTNET.router
+  )
     return false;
   const args = invocation.args;
   if (args.length !== 3 || !args[0] || !args[1] || !args[2]) return false;
@@ -939,6 +949,40 @@ function inspectCheckpointEnvelope(
     const transactionResult = xdr.TransactionResult.fromXdr(resultXdr, "base64");
     const resultSucceeded = transactionResult.result.type === "txSuccess";
     if (successful !== null && successful !== resultSucceeded) return null;
+    if (
+      transactionResult.result.type === "txFeeBumpInnerSuccess" ||
+      transactionResult.result.type === "txFeeBumpInnerFailed"
+    )
+      return null;
+    if (transactionResult.result.type === "txSuccess") {
+      const results = transactionResult.result.results;
+      if (results.length !== transaction.operations.length) return null;
+      for (const [index, operation] of transaction.operations.entries()) {
+        const result = results[index];
+        if (result?.type !== "opInner" || result.tr.type !== operation.type) return null;
+        if (result.tr.type === "pathPaymentStrictReceive") {
+          const payment = result.tr.pathPaymentStrictReceiveResult;
+          if (payment.type !== "pathPaymentStrictReceiveSuccess") return null;
+          const last = payment.success.last;
+          const asset = Asset.fromOperation(last.asset);
+          if (
+            last.destination.type !== "publicKeyTypeEd25519" ||
+            StrKey.encodeEd25519PublicKey(last.destination.ed25519.toBytes()) !==
+              checkpoint.account ||
+            asset.getCode() !== TESTNET.usdcCode ||
+            asset.getIssuer() !== TESTNET.usdcIssuer ||
+            last.amount !== BigInt(checkpoint.bridgeAmount)
+          )
+            return null;
+        } else if (result.tr.type === "changeTrust") {
+          if (result.tr.changeTrustResult.type !== "changeTrustSuccess") return null;
+        } else if (
+          result.tr.type !== "invokeHostFunction" ||
+          result.tr.invokeHostFunctionResult.type !== "invokeHostFunctionSuccess"
+        )
+          return null;
+      }
+    }
     return resultSucceeded ? "confirmed" : "failed";
   } catch {
     return null;
@@ -983,6 +1027,28 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   });
 }
 
+async function boundedHistoryJson(response: Response, signal: AbortSignal): Promise<unknown> {
+  const limit = 512_000;
+  if (Number(response.headers.get("content-length")) > limit || !response.body)
+    throw new Error("Historical evidence is too large or unavailable.");
+  const reader = response.body.getReader();
+  let bytes = 0;
+  let text = "";
+  const decoder = new TextDecoder();
+  try {
+    while (true) {
+      const chunk = await abortable(reader.read(), signal);
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > limit) throw new Error("Historical evidence exceeds the size limit.");
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    return JSON.parse(text + decoder.decode()) as unknown;
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+}
+
 export async function resolveCheckpointTransaction(
   checkpoint: TransferCheckpoint,
   signal?: AbortSignal,
@@ -990,8 +1056,16 @@ export async function resolveCheckpointTransaction(
   if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
   if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || checkpoint.router !== TESTNET.router)
     return unknownRecovery("The saved checkpoint does not match the configured Stellar Testnet.");
+  const lookupSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+    : AbortSignal.timeout(15000);
   try {
-    const rpcResult = await abortable(server().getTransaction(checkpoint.txHash), signal);
+    const rpcServer = server();
+    const rpcSignal = AbortSignal.any([lookupSignal, AbortSignal.timeout(5000)]);
+    const network = await abortable(rpcServer.getNetwork(), rpcSignal);
+    if (network.passphrase !== TESTNET.networkPassphrase)
+      return unknownRecovery("RPC returned a network that is not Stellar Testnet.");
+    const rpcResult = await abortable(rpcServer.getTransaction(checkpoint.txHash), rpcSignal);
     if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
     const expectedSuccess =
       rpcResult.status === rpc.Api.GetTransactionStatus.SUCCESS
@@ -1000,8 +1074,11 @@ export async function resolveCheckpointTransaction(
           ? false
           : null;
     if (expectedSuccess !== null) {
-      const envelopeXdr = "envelopeXdr" in rpcResult ? rpcResult.envelopeXdr : undefined;
-      const resultXdr = "resultXdr" in rpcResult ? rpcResult.resultXdr : undefined;
+      if (rpcResult.txHash !== checkpoint.txHash || rpcResult.feeBump)
+        return unknownRecovery("RPC returned conflicting transaction identity.");
+      const envelopeXdr =
+        "envelopeXdr" in rpcResult ? rpcResult.envelopeXdr.toXdr("base64") : undefined;
+      const resultXdr = "resultXdr" in rpcResult ? rpcResult.resultXdr.toXdr("base64") : undefined;
       if (typeof envelopeXdr === "string" && typeof resultXdr === "string") {
         const verified = inspectCheckpointEnvelope(
           checkpoint,
@@ -1018,12 +1095,19 @@ export async function resolveCheckpointTransaction(
   }
 
   try {
+    const networkResponse = await fetch(TESTNET.horizonUrl, {
+      signal: lookupSignal,
+      cache: "no-store",
+    });
+    const network: unknown = networkResponse.ok
+      ? await boundedHistoryJson(networkResponse, lookupSignal)
+      : null;
+    if (!isRecord(network) || network.network_passphrase !== TESTNET.networkPassphrase)
+      return unknownRecovery("Historical evidence does not establish the Stellar Testnet network.");
     const response = await fetch(
       `${TESTNET.horizonUrl}/transactions/${encodeURIComponent(checkpoint.txHash)}`,
       {
-        signal: signal
-          ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
-          : AbortSignal.timeout(10000),
+        signal: lookupSignal,
         cache: "no-store",
       },
     );
@@ -1032,7 +1116,7 @@ export async function resolveCheckpointTransaction(
       return unknownRecovery("No matching transaction is available in Stellar Testnet history.");
     if (!response.ok)
       return unknownRecovery("Stellar Testnet transaction history is temporarily unavailable.");
-    const body: unknown = await response.json();
+    const body: unknown = await boundedHistoryJson(response, lookupSignal);
     if (
       !isRecord(body) ||
       body.hash !== checkpoint.txHash ||

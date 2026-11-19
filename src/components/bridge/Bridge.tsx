@@ -356,20 +356,18 @@ function ConversionDetails({ conversion }: { conversion: NonNullable<TradeQuote[
 function PendingTransferCard({
   checkpoint,
   busy,
-  latest,
   onReset,
 }: {
   checkpoint: TransferCheckpoint;
   busy: boolean;
-  latest: TransactionResult | null;
   onReset: () => void;
 }) {
   const wallet = useStellarWallet();
   const [copied, setCopied] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [checked, setChecked] = useState<(CheckpointRecoveryResult & { txHash: string }) | null>(
-    null,
-  );
+  const [checked, setChecked] = useState<
+    (CheckpointRecoveryResult & { txHash: string; owner: string }) | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<LiveQuote | null>(null);
   const currentAccount = useRef(wallet.address);
@@ -379,12 +377,6 @@ function PendingTransferCard({
   const [cardSimulation, setCardSimulation] = useState<SimulatedOperation | null>(null);
   const [cardSimulating, setCardSimulating] = useState(false);
   const [cardSimError, setCardSimError] = useState<string | null>(null);
-  const current =
-    checked?.txHash === checkpoint.txHash
-      ? checked
-      : latest?.txHash === checkpoint.txHash
-        ? latest
-        : null;
   const sameAccount = wallet.address === checkpoint.account;
   const recoveryOwner = JSON.stringify([checkpoint, wallet.address]);
   const ownerRef = useRef(recoveryOwner);
@@ -397,8 +389,7 @@ function PendingTransferCard({
       requestRef.current?.abort();
     };
   }, [recoveryOwner]);
-  const visibleCurrent =
-    checked?.txHash === checkpoint.txHash && ownerRef.current === recoveryOwner ? checked : current;
+  const visibleCurrent = checked?.owner === recoveryOwner ? checked : null;
   const check = async () => {
     if (checking || busy || requestRef.current) return;
     const controller = new AbortController();
@@ -410,7 +401,9 @@ function PendingTransferCard({
     try {
       const result = await resolveCheckpointTransaction(checkpoint, controller.signal);
       if (!active()) return;
-      setChecked({ ...result, txHash: checkpoint.txHash });
+      setReview(null);
+      setCardSimulation(null);
+      setChecked({ ...result, txHash: checkpoint.txHash, owner });
       if (result.status === "unknown") {
         setError(result.message);
         return;
@@ -456,6 +449,8 @@ function PendingTransferCard({
   const continueBridge = async () => {
     if (
       !review ||
+      checked?.owner !== recoveryOwner ||
+      checked.status !== "confirmed" ||
       !sameAccount ||
       checking ||
       cardSimulating ||
@@ -506,6 +501,8 @@ function PendingTransferCard({
             ? null
             : {
                 ...result,
+                status: result.status === "confirmed" ? "confirmed" : "failed",
+                owner,
                 source: "rpc",
                 message: `The transaction is ${result.status} on Stellar Testnet.`,
               },
@@ -600,7 +597,7 @@ function PendingTransferCard({
         </p>
       )}
       {checking && <p role="status">Checking Stellar Testnet transaction history...</p>}
-      {checked?.txHash === checkpoint.txHash && <p role="status">{checked.message}</p>}
+      {visibleCurrent && <p role="status">{visibleCurrent.message}</p>}
       {error && (
         <p role="alert" className={styles.error}>
           {error}
@@ -632,7 +629,7 @@ function PendingTransferCard({
               : "Check status"}
         </button>
       )}
-      {review && (
+      {review && checked?.owner === recoveryOwner && (
         <ReviewDialog
           onClose={() => {
             if (!checking) {
@@ -1163,7 +1160,12 @@ export function Bridge() {
   return (
     <>
       {checkpoint && (
-        <PendingTransferCard checkpoint={checkpoint} busy={busy} latest={result} onReset={reset} />
+        <PendingTransferCard
+          key={JSON.stringify([checkpoint, wallet.address])}
+          checkpoint={checkpoint}
+          busy={busy}
+          onReset={reset}
+        />
       )}
       <section className={styles.panel} aria-labelledby="bridge-heading" aria-busy={fetching}>
         <div className={styles.heading}>
