@@ -356,7 +356,10 @@ describe("Connection generation tracking", () => {
   it("releases a superseded account request before its old adapter responds", async () => {
     let finishOld!: (value: { address: string }) => void;
     api.freighter.requestAccess.mockImplementationOnce(
-      () => new Promise((resolve) => (finishOld = resolve)),
+      () =>
+        new Promise((resolve) => {
+          finishOld = resolve;
+        }),
     );
     const tracker = createGenerationTracker();
     const oldRequest = tracker.run(() => walletAddress("freighter"));

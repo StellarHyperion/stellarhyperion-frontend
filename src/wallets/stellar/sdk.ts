@@ -40,7 +40,14 @@ export function createGenerationTracker() {
       const signal = controller.signal;
       let abort!: () => void;
       const cancelled = new Promise<never>((_resolve, reject) => {
-        abort = () => reject(signal.reason);
+        abort = () => {
+          const reason: unknown = signal.reason;
+          reject(
+            reason instanceof Error
+              ? reason
+              : new Error("Your wallet connection changed. Review the transaction again."),
+          );
+        };
         signal.addEventListener("abort", abort, { once: true });
       });
       try {
