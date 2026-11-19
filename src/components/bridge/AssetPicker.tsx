@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, Check, ChevronRight, Search } from "lucide-react";
 import { parseUnits } from "@hyperion/protocol";
 import { DESTINATIONS, type BridgeRoute, type DestinationKey } from "../../config/testnet";
@@ -33,6 +33,7 @@ export function SourceAssetPicker({
   onSelect: (asset: SourceAsset) => void;
   onClose: () => void;
 }) {
+  const latestRequest = useRef(0);
   const [query, setQuery] = useState("");
   const [queryVersion, setQueryVersion] = useState(0);
   const [remote, setRemote] = useState<{
@@ -45,13 +46,15 @@ export function SourceAssetPicker({
     if (!query.trim()) return;
     const controller = new AbortController();
     const version = queryVersion;
+    const requestId = ++latestRequest.current;
     const timer = setTimeout(() => {
       void searchAssets(query, controller.signal)
         .then((assets) => {
-          if (!controller.signal.aborted) setRemote({ key: query, version, assets, error: null });
+          if (!controller.signal.aborted && requestId === latestRequest.current)
+            setRemote({ key: query, version, assets, error: null });
         })
         .catch((error: unknown) => {
-          if (!controller.signal.aborted)
+          if (!controller.signal.aborted && requestId === latestRequest.current)
             setRemote({ key: query, version, assets: [], error: errorMessage(error) });
         });
     }, 250);

@@ -856,6 +856,7 @@ export async function submitOperation(
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   simulated?: SimulatedOperation,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("preparing");
@@ -893,7 +894,7 @@ export async function submitOperation(
   }
   await verifyAccountSequence(client, sender, prepared.sequence);
   progress?.("signing");
-  return signAndSubmit(prepared, sign, progress, approval, reconcile);
+  return signAndSubmit(prepared, sign, progress, approval, reconcile, signal);
 }
 
 export async function submitClassicOperations(
@@ -903,6 +904,7 @@ export async function submitClassicOperations(
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const client = server();
   if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
@@ -914,7 +916,14 @@ export async function submitClassicOperations(
   });
   const preparedOperations = typeof operations === "function" ? await operations() : operations;
   for (const operation of preparedOperations) builder.addOperation(operation);
-  return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval, reconcile);
+  return signAndSubmit(
+    builder.setTimeout(180).build(),
+    sign,
+    progress,
+    approval,
+    reconcile,
+    signal,
+  );
 }
 
 async function signAndSubmit(
@@ -923,6 +932,7 @@ async function signAndSubmit(
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("signing");
@@ -983,13 +993,16 @@ async function signAndSubmit(
   }
   progress?.("pending", hash);
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (signal?.aborted) return { status: "pending", txHash: hash };
+    await confirmationDelay(2000, signal);
+    if (signal?.aborted) return { status: "pending", txHash: hash };
     let result: TransactionResult | null;
     try {
       result = await readTransaction(hash);
     } catch {
       return { status: "pending", txHash: hash };
     }
+    if (signal?.aborted) return { status: "pending", txHash: hash };
     if (result && result.status !== "pending") {
       if (result.status === "confirmed") progress?.("confirmed", hash);
       return result;
@@ -1007,6 +1020,7 @@ export async function submitBridgeOut(
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   simulated?: SimulatedOperation,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
   const refreshed = await quoteTransfer(
@@ -1033,6 +1047,7 @@ export async function submitBridgeOut(
     approval,
     reconcile,
     simulated,
+    signal,
   );
 }
 
@@ -1093,6 +1108,7 @@ export async function submitSettleClaim(
   sign: WalletSigner,
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
@@ -1114,6 +1130,8 @@ export async function submitSettleClaim(
     undefined,
     approval,
     reconcile,
+    undefined,
+    signal,
   );
 }
 
@@ -1123,6 +1141,7 @@ export async function submitSettleClaims(
   sign: WalletSigner,
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
+  signal?: AbortSignal,
 ): Promise<TransactionResult> {
   if (claims.length < 2) throw new Error("Batch settlement requires at least two claims.");
   if (claims.length > MAX_BATCH_CLAIMS)
@@ -1164,5 +1183,23 @@ export async function submitSettleClaims(
     undefined,
     approval,
     reconcile,
+    undefined,
+    signal,
   );
+}
+
+function confirmationDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
+  });
 }
