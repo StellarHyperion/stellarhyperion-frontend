@@ -4,6 +4,7 @@ import {
   getOperationOwnership,
   releaseOperationOwnership,
   saveCheckpoint,
+  type TransferCheckpoint,
 } from "../src/contracts/checkpoint";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -16,6 +17,7 @@ import {
 } from "@stellar/stellar-sdk";
 import {
   bridgeOperation,
+  diagnoseSequence,
   claimMatchesDeployment,
   parseSendAmount,
   settleClaimsOperation,
@@ -344,6 +346,44 @@ describe("Real Stellar transaction encoding", () => {
       expect(getOperationOwnership()).toBeNull();
     });
 
+    it("diagnoses matching sequence between constructed intent and ledger state", () => {
+      const result = diagnoseSequence("101", "100");
+      expect(result.valid).toBe(true);
+      expect(result.expectedSequence).toBe("100");
+      expect(result.ledgerSequence).toBe("100");
+      expect(result.reason).toBeNull();
+    });
+
+    it("diagnoses sequence mismatch when ledger sequence has changed", () => {
+      const result = diagnoseSequence("101", "101");
+      expect(result.valid).toBe(false);
+      expect(result.expectedSequence).toBe("100");
+      expect(result.ledgerSequence).toBe("101");
+      expect(result.reason).toContain("sequence changed from 100 to 101");
+    });
+
+    it("preserves unknown previous submissions in recovery rather than replacing them", () => {
+      const cp1: TransferCheckpoint = {
+        router: TESTNET.router,
+        account: TESTNET.reader,
+        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        destination: "sepolia",
+        route: 1,
+        bridgeAmount: "1000000",
+        stage: "bridge",
+        txHash: "1".repeat(64),
+      };
+      const cp2: TransferCheckpoint = {
+        ...cp1,
+        txHash: "2".repeat(64),
+      };
+      saveCheckpoint(null);
+      saveCheckpoint(cp1);
+      expect(() => {
+        saveCheckpoint(cp2);
+      }).toThrow("previous transaction remains pending");
+      saveCheckpoint(null);
+    });
     it("retains a pending hash when writes fail but storage reads still work", () => {
       const checkpoint = {
         router: TESTNET.router,
