@@ -4,6 +4,7 @@ import Link from "next/link";
 import {
   ArrowDown,
   ArrowRight,
+  Copy,
   ArrowUpRight,
   ChevronDown,
   LoaderCircle,
@@ -12,8 +13,9 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
+import { fetchClaims } from "../../api";
 import {
   TESTNET,
   destinationFor,
@@ -23,40 +25,175 @@ import {
 } from "../../config/testnet";
 import {
   errorMessage,
-  getClaim,
+  batchClaimSettlementSupport,
+  getClaims,
   quoteTransfer,
   readLane,
   readTransaction,
+  simulateBridgeOut,
   submitBridgeOut,
   submitSettleClaim,
+  submitSettleClaims,
   validateRecipient,
   type LaneState,
   type LiveQuote,
   type PendingClaim,
+  type SimulatedOperation,
+  type SubmissionReconciliation,
   type TransactionPhase,
   type TransactionResult,
 } from "../../contracts";
 import {
   USDC,
+  XLM,
   accountAssets,
+  issuerVerificationLabel,
+  conversionExecutionIntent,
+  conversionRoute,
   quoteTrade,
+  spendableBalance,
   submitConversion,
+  stellarAsset,
+  trustlineLabel,
+  type Conversion,
   type SourceAsset,
   type TradeQuote,
 } from "../../contracts/assets";
+import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import {
+  claimOperationOwnership,
+  getOperationOwnership,
+  releaseOperationOwnership,
   saveCheckpoint,
   useTransferCheckpoint,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
 import { useStellarWallet } from "../../wallets";
+import type { WalletApprovalProvenance } from "../../wallets/stellar";
 import { AssetIcon, DestinationPicker, ReviewDialog, SourceAssetPicker } from "./AssetPicker";
 import styles from "./Bridge.module.css";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
 
-function QuoteDetails({ quote }: { quote: LiveQuote }) {
+export interface BridgeFormParams {
+  amount: string;
+  recipient: string;
+  destination: DestinationKey;
+  route: BridgeRoute;
+  source: SourceAsset;
+}
+
+// Bounded public form state: only these keys are part of a shareable bridge link.
+// Checkpoints, signatures and submission intent are deliberately excluded.
+export function parseBridgeFormParams(search: string): BridgeFormParams | null {
+  if (search.length > 2048) return null;
+  const params = new URLSearchParams(search);
+  if (["a", "r", "d", "t", "s"].some((key) => params.getAll(key).length > 1)) return null;
+  const amount = params.get("a") ?? "";
+  const recipient = params.get("r") ?? "";
+  const destinationRaw = params.get("d");
+  const routeRaw = params.get("t");
+  const sourceRaw = params.get("s");
+
+  let destination: DestinationKey = "sepolia";
+  if (destinationRaw) {
+    try {
+      destination = destinationFor(destinationRaw).key;
+    } catch {
+      return null;
+    }
+  }
+
+  let route: BridgeRoute = 1;
+  if (routeRaw) {
+    if (routeRaw === "0") route = 0;
+    else if (routeRaw === "1") route = 1;
+    else return null;
+  }
+
+  if (amount.length > 64 || recipient.length > 42 || (sourceRaw?.length ?? 0) > 128) return null;
+  if (amount) {
+    try {
+      if (!/^\d+(?:\.\d{1,7})?$/.test(amount)) return null;
+      const value = parseUnits(amount, 7);
+      if (value <= 0n || value > (1n << 63n) - 1n) return null;
+    } catch {
+      return null;
+    }
+  }
+  if (recipient) {
+    try {
+      validateRecipient(recipient);
+    } catch {
+      return null;
+    }
+  }
+  if (!destinationFor(destination).routes.includes(route)) return null;
+  let source: SourceAsset = USDC;
+  if (sourceRaw) {
+    if (sourceRaw === XLM.id) {
+      source = XLM;
+    } else if (sourceRaw === USDC.id) {
+      source = USDC;
+    } else {
+      const parts = sourceRaw.split(":");
+      if (parts.length !== 2) return null;
+      const [code, issuer] = parts;
+      if (!code || !issuer) return null;
+      const candidate: SourceAsset = {
+        id: sourceRaw,
+        code,
+        issuer,
+        verification: "horizon-search",
+        trustline: "not-checked",
+      };
+      try {
+        stellarAsset(candidate);
+      } catch {
+        return null;
+      }
+      source = candidate;
+    }
+  }
+
+  return { amount, recipient, destination, route, source };
+}
+
+function ApprovalDetails({
+  approval,
+  issuer,
+}: {
+  approval: WalletApprovalProvenance;
+  issuer?: string;
+}) {
+  return (
+    <div className={styles.assetNote}>
+      <strong>Wallet approval</strong>
+      <div>Account: {approval.account}</div>
+      <div>Network: {approval.network}</div>
+      <div>
+        Operation:{" "}
+        {approval.operation === "claim-settlement" ? "Claim settlement" : approval.operation}
+      </div>
+      {issuer && <div>Source issuer: {issuer}</div>}
+    </div>
+  );
+}
+
+function QuoteDetails({
+  quote,
+  simulation,
+  simulating,
+  simulationError,
+}: {
+  quote: LiveQuote;
+  simulation?: SimulatedOperation | null;
+  simulating?: boolean;
+  simulationError?: string | null;
+}) {
+  const resourceFee = simulation?.resourceFee;
+  const networkFee = simulation?.networkFee;
   return (
     <dl className={styles.summary}>
       <div>
@@ -73,6 +210,30 @@ function QuoteDetails({ quote }: { quote: LiveQuote }) {
           {formatUnits(quote.relayGas, 7)} {quote.route === 0 ? "USDC" : "XLM"}
         </dd>
       </div>
+      {resourceFee !== undefined && (
+        <div>
+          <dt>Assembled resource fee</dt>
+          <dd>{formatUnits(resourceFee, 7)} XLM</dd>
+        </div>
+      )}
+      {networkFee !== undefined && (
+        <div>
+          <dt>Stellar network fee</dt>
+          <dd>{formatUnits(networkFee, 7)} XLM</dd>
+        </div>
+      )}
+      {simulating && (
+        <div>
+          <dt>Assembled resource fee</dt>
+          <dd>Estimating simulation...</dd>
+        </div>
+      )}
+      {simulationError && (
+        <div>
+          <dt>Simulation status</dt>
+          <dd>Simulation failed</dd>
+        </div>
+      )}
       <div>
         <dt>Minimum received</dt>
         <dd>
@@ -126,6 +287,57 @@ function RouteComparison({
   );
 }
 
+function ConversionIntent({
+  conversion,
+  addTrustline,
+}: {
+  conversion: Conversion;
+  addTrustline: boolean;
+}) {
+  const intent = conversionExecutionIntent(conversion, addTrustline);
+  return (
+    <section className={styles.conversionIntent} aria-label="Conversion execution intent">
+      <h3>Conversion execution intent</h3>
+      <p>
+        {intent.operation}: receive exactly {formatUnits(intent.destinationAmount, 7)} USDC while
+        spending no more than {formatUnits(intent.sourceMax, 7)} {intent.source.code}.
+      </p>
+      <ol className={styles.conversionPath} aria-label="Conversion route">
+        {conversionRoute(conversion).map((asset, index, route) => (
+          <li key={`${asset.id}-${index}`} className={styles.conversionStep}>
+            <strong>{asset.code}</strong>
+            {asset.issuer && <span className={styles.address}>{asset.issuer}</span>}
+            {index < route.length - 1 && <ArrowRight size={13} aria-hidden="true" />}
+          </li>
+        ))}
+      </ol>
+      <p>
+        {intent.addTrustline
+          ? "This transaction also creates the canonical USDC trustline."
+          : "The canonical USDC trustline already exists."}
+      </p>
+    </section>
+  );
+}
+
+function ConversionDetails({ conversion }: { conversion: NonNullable<TradeQuote["conversion"]> }) {
+  const path = [conversion.source, ...conversion.path, USDC]
+    .map((asset) =>
+      asset.issuer
+        ? `${asset.code} (${asset.issuer.slice(0, 7)}...${asset.issuer.slice(-7)})`
+        : asset.code,
+    )
+    .join(" -> ");
+  return (
+    <p className={styles.assetNote}>
+      Convert up to {formatUnits(conversion.sourceMax, 7)} {conversion.source.code} into at least{" "}
+      {formatUnits(conversion.usdcAmount, 7)} Stellar USDC. Quoted path: {path}. Liquidity is
+      rechecked immediately before wallet approval; signing is blocked if this minimum cannot be
+      met.
+    </p>
+  );
+}
+
 function PendingTransferCard({
   checkpoint,
   busy,
@@ -138,10 +350,18 @@ function PendingTransferCard({
   onReset: () => void;
 }) {
   const wallet = useStellarWallet();
+  const [copied, setCopied] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<LiveQuote | null>(null);
+  const currentAccount = useRef(wallet.address);
+  useLayoutEffect(() => {
+    currentAccount.current = wallet.address;
+  }, [wallet.address]);
+  const [cardSimulation, setCardSimulation] = useState<SimulatedOperation | null>(null);
+  const [cardSimulating, setCardSimulating] = useState(false);
+  const [cardSimError, setCardSimError] = useState<string | null>(null);
   const current =
     checked?.txHash === checkpoint.txHash
       ? checked
@@ -156,14 +376,25 @@ function PendingTransferCard({
     try {
       const result = await readTransaction(checkpoint.txHash);
       setChecked(result);
-      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount)
-        setReview(
-          await quoteTransfer(
-            checkpoint.destination,
-            BigInt(checkpoint.bridgeAmount),
-            checkpoint.route,
-          ),
+      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+        const nextQuote = await quoteTransfer(
+          checkpoint.destination,
+          BigInt(checkpoint.bridgeAmount),
+          checkpoint.route,
         );
+        setReview(nextQuote);
+        setCardSimulating(true);
+        setCardSimError(null);
+        try {
+          const sim = await simulateBridgeOut(checkpoint.account, nextQuote, checkpoint.recipient);
+          setCardSimulation(sim);
+        } catch (simCause) {
+          setCardSimulation(null);
+          setCardSimError(errorMessage(simCause));
+        } finally {
+          setCardSimulating(false);
+        }
+      }
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -171,7 +402,8 @@ function PendingTransferCard({
     }
   };
   const continueBridge = async () => {
-    if (!review || !sameAccount || checking) return;
+    if (!review || !sameAccount || checking || cardSimulating || !!cardSimError || !cardSimulation)
+      return;
     setChecking(true);
     setError(null);
     try {
@@ -179,13 +411,17 @@ function PendingTransferCard({
         checkpoint.account,
         review,
         checkpoint.recipient,
-        wallet.signTransaction,
+        (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "bridge" }),
         (_phase, hash) => {
           if (hash) saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
         },
+        { account: checkpoint.account, network: TESTNET.networkPassphrase, operation: "bridge" },
+        { expectedAccount: checkpoint.account, getCurrentAccount: () => currentAccount.current },
+        cardSimulation,
       );
       setChecked(result);
       setReview(null);
+      setCardSimulation(null);
     } catch (cause) {
       const message = errorMessage(cause);
       if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
@@ -224,6 +460,38 @@ function PendingTransferCard({
         {checkpoint.txHash.slice(0, 12)}...{checkpoint.txHash.slice(-8)}{" "}
         <ArrowUpRight size={14} aria-hidden="true" />
       </a>
+      <div className={styles.transactionIdentity}>
+        <span>Source transaction on Stellar Testnet</span>
+        <div className={styles.transactionIdentityValue}>
+          <code className={styles.transactionHash}>{checkpoint.txHash}</code>
+          <button
+            type="button"
+            className={styles.copyHash}
+            aria-label="Copy transaction hash"
+            onClick={() => {
+              void navigator.clipboard
+                .writeText(checkpoint.txHash)
+                .then(() => {
+                  setCopied(true);
+                })
+                .catch(() => {
+                  setCopied(false);
+                });
+            }}
+          >
+            <Copy size={14} aria-hidden="true" />
+          </button>
+        </div>
+        {copied && <span role="status">Transaction hash copied.</span>}
+        <a
+          className={styles.transactionLink}
+          href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          View on Stellar Expert <ArrowUpRight size={14} aria-hidden="true" />
+        </a>
+      </div>
       {checkpoint.stage === "bridge" && (
         <Link href={`/transfers/${checkpoint.txHash}`}>
           Track transfer <ArrowRight size={14} aria-hidden="true" />
@@ -269,23 +537,53 @@ function PendingTransferCard({
       {review && (
         <ReviewDialog
           onClose={() => {
-            if (!checking) setReview(null);
+            if (!checking) {
+              setReview(null);
+              setCardSimulation(null);
+              setCardSimError(null);
+            }
           }}
         >
           <p className={styles.reviewNote}>
             Conversion confirmed. This step bridges the USDC already in your wallet.
           </p>
-          <QuoteDetails quote={review} />
+          <ApprovalDetails
+            approval={{
+              account: checkpoint.account,
+              network: TESTNET.networkPassphrase,
+              operation: "bridge",
+            }}
+          />
+          <QuoteDetails quote={review} simulation={cardSimulation} />
           <p className={styles.address}>Recipient: {checkpoint.recipient}</p>
+          {cardSimulation && (
+            <p className={styles.address}>
+              Operation: bridge_out_with_gas ({formatUnits(cardSimulation.totalFee, 7)} XLM total
+              envelope fee)
+            </p>
+          )}
+          {cardSimError && (
+            <p role="alert" className={styles.error}>
+              Simulation failed: {cardSimError}. Approval blocked.
+            </p>
+          )}
           <button
             type="button"
             className={styles.primary}
-            disabled={checking || !sameAccount}
+            disabled={
+              checking || !sameAccount || cardSimulating || !!cardSimError || !cardSimulation
+            }
             onClick={() => {
               void continueBridge();
             }}
           >
-            {checking ? "Confirming in your wallet..." : "Bridge converted USDC"}
+            {checking
+              ? "Confirming in your wallet..."
+              : cardSimulating
+                ? "Estimating simulation..."
+                : cardSimError
+                  ? "Approval blocked"
+                  : "Bridge converted USDC"}
           </button>
           {error && <p role="alert">{error}</p>}
         </ReviewDialog>
@@ -305,7 +603,9 @@ export function Bridge() {
   const [touched, setTouched] = useState(false);
   const [picker, setPicker] = useState<"source" | "destination" | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  const [reviewApproval, setReviewApproval] = useState<WalletApprovalProvenance | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [quoteVersion, setQuoteVersion] = useState(0);
   const [laneState, setLaneState] = useState<{
     key: string;
     value: LaneState | null;
@@ -326,17 +626,82 @@ export function Bridge() {
   const [step, setStep] = useState<"conversion" | "bridge">("bridge");
   const [result, setResult] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [simulatedState, setSimulatedState] = useState<{
+    key: string;
+    value: SimulatedOperation | null;
+    error: string | null;
+  } | null>(null);
+  const [reviewed, setReviewed] = useState<{
+    key: string;
+    quote: TradeQuote;
+    addTrustline: boolean;
+    simulation: SimulatedOperation | null;
+  } | null>(null);
   const laneKey = `${destination}:${route}:${refresh}`;
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
-  const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}`;
+  const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
   const quote = quoted?.key === quoteKey && lane?.available ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
+  const simKey = `${quoteKey}:${wallet.address}`;
+  const simulation = simulatedState?.key === simKey ? simulatedState.value : null;
+  const simulationError = simulatedState?.key === simKey ? simulatedState.error : null;
   const balances = accounts?.account === wallet.address ? accounts.assets : [];
+  const walletAsset = balances.find((asset) => asset.id === source.id);
+  const activeSource: SourceAsset = useMemo(
+    () => (walletAsset ? { ...source, ...walletAsset } : source),
+    [source, walletAsset],
+  );
   const sourceBalance =
     accounts?.account === wallet.address && !accounts.error
-      ? (balances.find((asset) => asset.id === source.id)?.balance ?? "0")
+      ? (walletAsset?.balance ?? "0")
       : undefined;
+  const liveReview = useRef({
+    account: wallet.address,
+    recipient,
+    amount,
+    sourceId: source.id,
+    destination,
+    route,
+  });
+  useLayoutEffect(() => {
+    liveReview.current = {
+      account: wallet.address,
+      recipient,
+      amount,
+      sourceId: source.id,
+      destination,
+      route,
+    };
+  }, [wallet.address, recipient, amount, source.id, destination, route]);
+  const spendableStr =
+    accounts?.account === wallet.address && !accounts.error && walletAsset
+      ? spendableBalance(walletAsset)
+      : sourceBalance;
+  const spendableUnits = spendableStr !== undefined ? parseUnits(spendableStr, 7) : undefined;
+  const xlmAsset = balances.find((asset) => asset.id === "native");
+  const xlmSpendable = xlmAsset?.available !== undefined ? parseUnits(xlmAsset.available, 7) : 0n;
+  // Conservative maximum: for USDC source requires a live quote with relay pricing;
+  // for non-USDC source the spendable asset balance is the binding spending cap.
+  const isUsdcSource = source.id === USDC.id;
+  const trustlineOk = activeSource.trustline === "present" || activeSource.trustline === "native";
+  const conservativeMax: bigint | null = isUsdcSource
+    ? quote !== null && lane !== null
+      ? planMaxUsdcAmount({
+          route,
+          usdcSpendable: spendableUnits ?? 0n,
+          xlmSpendable,
+          flowAvailable: quote.bridge.flowAvailable,
+          estimatedRelayGas: quote.bridge.estimatedRelayGas ?? quote.bridge.relayGas,
+        })
+      : null
+    : source.id === "native"
+      ? null
+      : planMaxSourceAmount({
+          spendableSourceUnits: spendableUnits ?? 0n,
+          trustlineOk,
+        });
+
   const locked = busy || checkpoint !== null;
   let inputError: string | null = null;
   let valid = false;
@@ -353,7 +718,68 @@ export function Bridge() {
   }
   const fetching =
     valid && !locked && !laneError && (!lane || (lane.available && quoted?.key !== quoteKey));
+  const simulating =
+    valid &&
+    !!wallet.address &&
+    !!quote &&
+    !quote.conversion &&
+    !locked &&
+    simulatedState?.key !== simKey;
   const chain = destinationFor(destination);
+  const waitController = useRef<AbortController | null>(null);
+  const waitGeneration = useRef(0);
+  const [shareStatus, setShareStatus] = useState<string | null>(null);
+  useEffect(() => {
+    const generation = waitGeneration;
+    return () => {
+      ++generation.current;
+      waitController.current?.abort();
+    };
+  }, [wallet.address]);
+  useEffect(() => {
+    const parsed = parseBridgeFormParams(window.location.search);
+    if (!parsed) return;
+    const timer = setTimeout(() => {
+      setSource(parsed.source);
+      setDestination(parsed.destination);
+      setRoute(parsed.route);
+      setAmount(parsed.amount);
+      setRecipient(parsed.recipient);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, []);
+  const shareConfiguration = async () => {
+    const params = new URLSearchParams({
+      a: amount,
+      r: recipient,
+      d: destination,
+      t: String(route),
+      s: source.id,
+    });
+    if (!parseBridgeFormParams(`?${params}`)) {
+      setShareStatus("Enter a valid amount and recipient on a supported route before sharing.");
+      return;
+    }
+    const url = new URL("/", window.location.origin);
+    url.search = params.toString();
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setShareStatus(
+        "Transfer configuration link copied. Opening it requires fresh quotes and wallet approval.",
+      );
+    } catch {
+      setShareStatus(
+        "Clipboard access is unavailable. Try sharing again after allowing clipboard access.",
+      );
+    }
+  };
+
+  const invalidateQuote = () => {
+    setQuoteVersion((version) => version + 1);
+    setQuoted(null);
+  };
   useEffect(() => {
     let active = true;
     const load = () => {
@@ -392,7 +818,7 @@ export function Bridge() {
     if (!valid || !lane?.available || locked) return;
     let active = true;
     const timer = setTimeout(() => {
-      void quoteTrade(destination, source, amount, route)
+      void quoteTrade(destination, activeSource, amount, route)
         .then((value) => {
           if (active) setQuoted({ key: quoteKey, value, error: null });
         })
@@ -404,15 +830,89 @@ export function Bridge() {
       active = false;
       clearTimeout(timer);
     };
-  }, [valid, lane, locked, destination, source, amount, route, quoteKey]);
+  }, [valid, lane, locked, destination, activeSource, amount, route, quoteKey]);
+  useEffect(() => {
+    const sender = wallet.address;
+    // Conversion funds the later bridge. Simulate that bridge only after conversion confirms.
+    if (!valid || !quote || quote.conversion || !sender || locked) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      void simulateBridgeOut(sender, quote.bridge, recipient)
+        .then((sim) => {
+          if (active) setSimulatedState({ key: simKey, value: sim, error: null });
+        })
+        .catch((cause: unknown) => {
+          if (active) setSimulatedState({ key: simKey, value: null, error: errorMessage(cause) });
+        });
+    }, 450);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [valid, quote, wallet.address, locked, recipient, simKey]);
+
   const submit = async () => {
-    if (!quote || !wallet.address || busy || checkpoint) return;
+    if (!reviewed || !wallet.address || busy || checkpoint) return;
+    if (reviewApproval?.account !== wallet.address) {
+      setReviewing(false);
+      setReviewApproval(null);
+      setReviewed(null);
+      setError("Your wallet account changed. Review the transfer again.");
+      return;
+    }
+    if (reviewed.key !== quoteKey) {
+      setReviewing(false);
+      setReviewed(null);
+      setReviewApproval(null);
+      setError("The conversion route changed. Review the updated path before signing.");
+      return;
+    }
+    const reviewedQuote = reviewed.quote;
     setReviewing(false);
+    const controller = new AbortController();
+    waitController.current?.abort();
+    waitController.current = controller;
+    const generation = ++waitGeneration.current;
     setBusy(true);
     setError(null);
     setResult(null);
     setPhase("preparing");
     const sender = wallet.address;
+    const initialRecipient = recipient;
+    const initialAmount = amount;
+    const initialSourceId = source.id;
+    const initialDestination = destination;
+    const initialRoute = route;
+    let ownership: ReturnType<typeof claimOperationOwnership>;
+    try {
+      ownership = claimOperationOwnership({
+        account: sender,
+        recipient: validateRecipient(recipient),
+        destination,
+        route,
+        bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
+        stage: reviewedQuote.conversion ? "conversion" : "bridge",
+      });
+    } catch (cause) {
+      setError(errorMessage(cause));
+      setBusy(false);
+      setPhase(null);
+      return;
+    }
+    const isSuperseded = () => {
+      const currentOwner = getOperationOwnership();
+      if (currentOwner?.id !== ownership.id) return true;
+      const current = liveReview.current;
+      if (
+        current.recipient !== initialRecipient ||
+        current.amount !== initialAmount ||
+        current.sourceId !== initialSourceId ||
+        current.destination !== initialDestination ||
+        current.route !== initialRoute
+      )
+        return true;
+      return false;
+    };
     let converted: TransferCheckpoint | null = null;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
       router: TESTNET.router,
@@ -420,22 +920,42 @@ export function Bridge() {
       recipient: validateRecipient(recipient),
       destination,
       route,
-      bridgeAmount: String(quote.bridge.requestedAmount),
+      bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
       stage,
       txHash: hash,
     });
+    const conversionReconcile: SubmissionReconciliation = {
+      expectedAccount: sender,
+      getCurrentAccount: () => liveReview.current.account ?? null,
+      isSuperseded,
+      onAccountSwitch: (hash) => {
+        saveCheckpoint(pending("conversion", hash));
+      },
+    };
+    const bridgeReconcile: SubmissionReconciliation = {
+      expectedAccount: sender,
+      getCurrentAccount: () => liveReview.current.account ?? null,
+      isSuperseded,
+      onAccountSwitch: (hash) => {
+        saveCheckpoint(pending("bridge", hash));
+      },
+    };
     try {
-      if (quote.conversion) {
+      if (reviewedQuote.conversion) {
         setStep("conversion");
         const swap = await submitConversion(
           wallet.address,
-          quote.conversion,
-          wallet.signTransaction,
+          reviewedQuote.conversion,
+          (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "conversion" }),
           (next, hash) => {
             setPhase(next);
             if (hash) saveCheckpoint(pending("conversion", hash));
           },
+          { ...reviewApproval, operation: "conversion" },
+          conversionReconcile,
+          controller.signal,
         );
+        if (generation !== waitGeneration.current) return;
         if (swap.status !== "confirmed") {
           setResult(swap);
           if (swap.status === "failed")
@@ -444,14 +964,16 @@ export function Bridge() {
         }
         converted = pending("conversion", swap.txHash);
         saveCheckpoint(converted);
+        setResult(swap);
+        return;
       }
       setStep("bridge");
       setPhase("preparing");
       const submitted = await submitBridgeOut(
         wallet.address,
-        quote.bridge,
+        reviewedQuote.bridge,
         recipient,
-        wallet.signTransaction,
+        (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "bridge" }),
         (next, hash) => {
           setPhase(next);
           if (hash) {
@@ -459,13 +981,19 @@ export function Bridge() {
             setResult({ status: "pending", txHash: hash });
           }
         },
+        { ...reviewApproval, operation: "bridge" },
+        bridgeReconcile,
+        reviewed.simulation ?? undefined,
+        controller.signal,
       );
+      if (generation !== waitGeneration.current) return;
       setResult(submitted);
     } catch (cause) {
       const message = errorMessage(cause);
       if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(converted);
       setError(message);
     } finally {
+      releaseOperationOwnership(ownership.id);
       setBusy(false);
       setPhase(null);
     }
@@ -474,11 +1002,20 @@ export function Bridge() {
     saveCheckpoint(null);
     setResult(null);
     setError(null);
+    setReviewed(null);
     setAmount("");
+    setSimulatedState(null);
     setRefresh((value) => value + 1);
   };
-  const insufficient =
-    quote && sourceBalance !== undefined && parseUnits(sourceBalance, 7) < quote.sourceAmount;
+  const insufficient = quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
+  // Exceeds route liquidity even when the wallet balance is sufficient.
+  const exceedsFlow =
+    !insufficient &&
+    quote !== null &&
+    conservativeMax !== null &&
+    quote.sourceAmount > conservativeMax &&
+    isUsdcSource;
+
   return (
     <>
       {checkpoint && (
@@ -497,6 +1034,7 @@ export function Bridge() {
             disabled={locked}
             onClick={() => {
               setRefresh((value) => value + 1);
+              invalidateQuote();
             }}
           >
             <RefreshCw size={17} aria-hidden="true" />
@@ -521,9 +1059,31 @@ export function Bridge() {
               disabled={locked}
               onChange={(event) => {
                 setAmount(event.target.value);
+                invalidateQuote();
                 setError(null);
               }}
             />
+            {wallet.address && walletAsset && source.id !== "native" && (
+              <button
+                type="button"
+                className={styles.maxSpend}
+                aria-label="Use spendable balance"
+                disabled={
+                  locked ||
+                  conservativeMax === null ||
+                  activeSource.trustline === "frozen" ||
+                  activeSource.trustline === "unauthorized"
+                }
+                onClick={() => {
+                  if (conservativeMax !== null) {
+                    setAmount(formatUnits(conservativeMax, 7));
+                    setError(null);
+                  }
+                }}
+              >
+                Max
+              </button>
+            )}
             <button
               type="button"
               className={styles.tokenSelector}
@@ -541,9 +1101,15 @@ export function Bridge() {
           <p className={styles.balance}>
             {wallet.address
               ? sourceBalance !== undefined
-                ? `Balance: ${sourceBalance} ${source.code}`
+                ? walletAsset?.sellingLiabilities &&
+                  parseUnits(walletAsset.sellingLiabilities, 7) > 0n
+                  ? `Balance: ${sourceBalance} ${source.code} (Spendable: ${spendableBalance(walletAsset)} ${source.code})`
+                  : `Balance: ${sourceBalance} ${source.code}`
                 : (accounts?.error ?? "Reading your balance...")
               : "Choose any liquid Stellar asset"}
+          </p>
+          <p className={styles.balance}>
+            {issuerVerificationLabel(activeSource)}. {trustlineLabel(activeSource)}.
           </p>
           {source.issuer && source.id !== USDC.id && (
             <a
@@ -624,6 +1190,7 @@ export function Bridge() {
             }}
             onChange={(event) => {
               setRecipient(event.target.value);
+              invalidateQuote();
               setError(null);
             }}
           />
@@ -659,22 +1226,22 @@ export function Bridge() {
                 Fee details <ChevronDown size={13} aria-hidden="true" />
               </span>
             </summary>
-            <QuoteDetails quote={quote.bridge} />
+            <QuoteDetails
+              quote={quote.bridge}
+              simulation={simulation}
+              simulating={simulating}
+              simulationError={simulationError}
+            />
             <RouteComparison
               routes={quote.routes}
               selected={route}
               onSelect={(next) => {
                 setRoute(next);
+                invalidateQuote();
                 setError(null);
               }}
             />
-            {quote.conversion && (
-              <p className={styles.assetNote}>
-                Convert up to {formatUnits(quote.sourceAmount, 7)} {source.code} into{" "}
-                {formatUnits(quote.bridge.requestedAmount, 7)} USDC, then bridge. Price tolerance:
-                0.5%. Two wallet signatures. If bridging stops, USDC stays in your wallet.
-              </p>
-            )}
+            {quote.conversion && <ConversionDetails conversion={quote.conversion} />}
             <p className={styles.assetNote}>
               Quoted at Stellar ledger {quote.bridge.ledger}. Fees are checked again before signing.
             </p>
@@ -702,7 +1269,14 @@ export function Bridge() {
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>
-            Your {source.code} balance is lower than this amount.
+            {walletAsset?.sellingLiabilities && parseUnits(walletAsset.sellingLiabilities, 7) > 0n
+              ? `Your spendable ${source.code} balance (${spendableBalance(walletAsset)} ${source.code}) is lower than this amount due to selling liabilities.`
+              : `Your ${source.code} balance is lower than this amount.`}
+          </p>
+        )}
+        {exceedsFlow && (
+          <p role="alert" className={styles.error}>
+            {`This amount exceeds the available route limit. Maximum bridgeable: ${formatUnits(conservativeMax, 7)} USDC.`}
           </p>
         )}
         {busy && (
@@ -717,6 +1291,30 @@ export function Bridge() {
                   ? "waiting for Stellar confirmation"
                   : "checking the current quote"}
             .
+          </p>
+        )}
+        {busy && phase === "pending" && (
+          <button
+            type="button"
+            className={styles.secondary}
+            onClick={() => waitController.current?.abort()}
+          >
+            Stop waiting
+          </button>
+        )}
+        <button
+          type="button"
+          className={styles.secondary}
+          disabled={busy}
+          onClick={() => {
+            void shareConfiguration();
+          }}
+        >
+          Share transfer configuration
+        </button>
+        {shareStatus && (
+          <p role="status" className={styles.reviewNote}>
+            {shareStatus}
           </p>
         )}
         {!wallet.isConnected ? (
@@ -737,12 +1335,38 @@ export function Bridge() {
             <button
               type="button"
               className={styles.primary}
-              disabled={!quote || busy || !!insufficient || sourceBalance === undefined}
+              disabled={
+                !quote ||
+                (!quote.conversion && !simulation) ||
+                busy ||
+                !!insufficient ||
+                sourceBalance === undefined ||
+                activeSource.trustline === "frozen" ||
+                activeSource.trustline === "unauthorized"
+              }
               onClick={() => {
+                if (!wallet.address || !quote || (!quote.conversion && !simulation)) return;
+                setReviewApproval({
+                  account: wallet.address,
+                  network: TESTNET.networkPassphrase,
+                  operation: quote.conversion ? "conversion" : "bridge",
+                });
+                setReviewed({
+                  key: quoteKey,
+                  quote,
+                  simulation,
+                  addTrustline: !balances.some((asset) => asset.id === USDC.id),
+                });
                 setReviewing(true);
               }}
             >
-              {fetching ? "Finding your route..." : "Review transfer"}
+              {fetching
+                ? "Finding your route..."
+                : simulating
+                  ? "Estimating bridge fees..."
+                  : simulationError
+                    ? "Refresh to retry simulation"
+                    : "Review transfer"}
               <ArrowRight size={18} aria-hidden="true" />
             </button>
           )
@@ -780,6 +1404,7 @@ export function Bridge() {
           balances={balances}
           onSelect={(asset) => {
             setSource(asset);
+            invalidateQuote();
             setError(null);
           }}
           onClose={() => {
@@ -794,6 +1419,7 @@ export function Bridge() {
           onSelect={(next, bridge) => {
             setDestination(next);
             setRoute(bridge);
+            invalidateQuote();
             setError(null);
           }}
           onClose={() => {
@@ -801,58 +1427,101 @@ export function Bridge() {
           }}
         />
       )}
-      {reviewing && quote && (
+      {reviewing && reviewed && (
         <ReviewDialog
           onClose={() => {
             setReviewing(false);
+            setReviewed(null);
           }}
         >
           <div className={styles.reviewTotal}>
-            <span>You send {quote.conversion ? "up to" : ""}</span>
+            <span>You send {reviewed.quote.conversion ? "up to" : ""}</span>
             <strong>
-              {formatUnits(quote.sourceAmount, 7)} {source.code}
+              {formatUnits(reviewed.quote.sourceAmount, 7)} {reviewed.quote.source.code}
             </strong>
             <ArrowDown size={20} aria-hidden="true" />
             <span>You receive at least</span>
             <strong>
-              {formatUnits(quote.bridge.destinationAmount, destinationDecimals(route))}{" "}
-              {receiveSymbol(route)}
+              {formatUnits(
+                reviewed.quote.bridge.destinationAmount,
+                destinationDecimals(reviewed.quote.bridge.route),
+              )}{" "}
+              {receiveSymbol(reviewed.quote.bridge.route)}
             </strong>
           </div>
           <p className={styles.reviewNote}>
-            From Stellar Testnet to {chain.name} via {provider(route)}.
+            From Stellar Testnet to {destinationFor(reviewed.quote.bridge.destination).name} via{" "}
+            {provider(reviewed.quote.bridge.route)}.
           </p>
           <p className={styles.address}>Recipient: {validateRecipient(recipient)}</p>
-          {source.issuer && source.id !== USDC.id && (
-            <p className={styles.address}>Source issuer: {source.issuer}</p>
+          {reviewed.quote.source.issuer && reviewed.quote.source.id !== USDC.id && (
+            <p className={styles.address}>Source issuer: {reviewed.quote.source.issuer}</p>
           )}
-          <QuoteDetails quote={quote.bridge} />
+          {reviewApproval && (
+            <ApprovalDetails
+              approval={reviewApproval}
+              {...(reviewed.quote.source.issuer ? { issuer: reviewed.quote.source.issuer } : {})}
+            />
+          )}
+          <p className={styles.reviewNote}>
+            {issuerVerificationLabel(reviewed.quote.source)}.{" "}
+            {trustlineLabel(reviewed.quote.source)}.
+          </p>
+          {reviewed.quote.conversion && (
+            <ConversionIntent
+              conversion={reviewed.quote.conversion}
+              addTrustline={reviewed.addTrustline}
+            />
+          )}
+          <QuoteDetails quote={reviewed.quote.bridge} simulation={reviewed.simulation} />
           <RouteComparison
-            routes={quote.routes}
-            selected={route}
+            routes={reviewed.quote.routes}
+            selected={reviewed.quote.bridge.route as BridgeRoute}
             onSelect={(next) => {
               setReviewing(false);
+              setReviewed(null);
               setRoute(next);
+              invalidateQuote();
               setError(null);
             }}
           />
-          {quote.conversion && (
+          {reviewed.quote.conversion && (
             <p className={styles.reviewNote}>
-              Two signatures: convert to USDC, then bridge. Price tolerance is 0.5%. If the bridge
-              cannot proceed, your converted USDC remains in your wallet.
+              Two signatures: convert to USDC, then review the bridge simulation and its fees. Price
+              tolerance is 0.5%. If the bridge cannot proceed, your converted USDC remains in your
+              wallet.
             </p>
           )}
           <p className={styles.reviewNote}>
             Source confirmation starts the transfer. Destination delivery is verified separately.
           </p>
+          {reviewed.simulation && (
+            <p className={styles.address}>
+              Operation: bridge_out_with_gas ({formatUnits(reviewed.simulation.totalFee, 7)} XLM
+              total envelope fee)
+            </p>
+          )}
+          {simulationError && (
+            <p role="alert" className={styles.error}>
+              Simulation failed: {simulationError}. Approval blocked.
+            </p>
+          )}
           <button
             type="button"
             className={styles.primary}
+            disabled={
+              !reviewed.quote.conversion && (simulating || !!simulationError || !simulation)
+            }
             onClick={() => {
               void submit();
             }}
           >
-            Confirm in wallet <ArrowUpRight size={17} aria-hidden="true" />
+            {simulating
+              ? "Estimating simulation..."
+              : simulationError
+                ? "Approval blocked"
+                : "Confirm in wallet"}{" "}
+            <ArrowUpRight size={17} aria-hidden="true" />
           </button>
         </ReviewDialog>
       )}
@@ -862,18 +1531,76 @@ export function Bridge() {
 
 export function ClaimRecovery() {
   const wallet = useStellarWallet();
+  const currentAccount = useRef(wallet.address);
+  useLayoutEffect(() => {
+    currentAccount.current = wallet.address;
+  }, [wallet.address]);
   const [id, setId] = useState("");
-  const [claim, setClaim] = useState<PendingClaim | null>(null);
+  const [claims, setClaims] = useState<PendingClaim[]>([]);
+  const [batchSupported, setBatchSupported] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<TransactionResult | null>(null);
+  const claimApproval: WalletApprovalProvenance | null = wallet.address
+    ? {
+        account: wallet.address,
+        network: TESTNET.networkPassphrase,
+        operation: "claim-settlement",
+      }
+    : null;
   const lookup = async () => {
     setBusy(true);
     setError(null);
-    setClaim(null);
+    setClaims([]);
     setResult(null);
     try {
-      setClaim(await getClaim(BigInt(id)));
+      const ids = id
+        .split(/[\s,]+/)
+        .filter(Boolean)
+        .map((value) => BigInt(value));
+      setClaims(await getClaims(ids));
+      setBatchSupported(ids.length > 1 ? await batchClaimSettlementSupport() : null);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const loadOpenClaims = async () => {
+    setBusy(true);
+    setError(null);
+    setClaims([]);
+    setResult(null);
+    try {
+      const response = await fetchClaims({
+        chain: "stellar-testnet",
+        settled: "false",
+        limit: "20",
+      });
+      const ids = response.claims.map((claim) => BigInt(claim.claimId));
+      setId(ids.join(", "));
+      setClaims(await getClaims(ids));
+      setBatchSupported(ids.length > 1 ? await batchClaimSettlementSupport() : null);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const settleOne = async (claim: PendingClaim) => {
+    if (!wallet.address || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const transaction = await submitSettleClaim(
+        wallet.address,
+        claim.id,
+        (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "claim" }),
+        claimApproval ?? undefined,
+        { expectedAccount: wallet.address, getCurrentAccount: () => currentAccount.current },
+      );
+      setResult(transaction);
+      if (transaction.status === "confirmed") setClaims(await getClaims([claim.id]));
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -881,15 +1608,29 @@ export function ClaimRecovery() {
     }
   };
   const settle = async () => {
-    if (!claim || !wallet.address || busy) return;
+    if (claims.length < 2 || !wallet.address || busy) return;
     setBusy(true);
     setError(null);
     try {
-      const transaction = await submitSettleClaim(wallet.address, claim.id, wallet.signTransaction);
+      const transaction = await submitSettleClaims(
+        wallet.address,
+        claims,
+        wallet.signTransaction,
+        claimApproval ?? undefined,
+        { expectedAccount: wallet.address, getCurrentAccount: () => currentAccount.current },
+      );
       setResult(transaction);
-      if (transaction.status === "confirmed") setClaim(await getClaim(claim.id));
+      if (transaction.status === "confirmed")
+        setClaims(await getClaims(claims.map((claim) => claim.id)));
     } catch (cause) {
-      setError(errorMessage(cause));
+      try {
+        setClaims(await getClaims(claims.map((claim) => claim.id)));
+      } catch {
+        // Keep the original contract error when the follow-up read is unavailable.
+      }
+      setError(
+        `Batch settlement was rejected by the router: ${errorMessage(cause)} Review each claim before trying again.`,
+      );
     } finally {
       setBusy(false);
     }
@@ -910,48 +1651,93 @@ export function ClaimRecovery() {
         </summary>
         <div className={styles.recoveryBody}>
           <p>
-            Look up a claim on the deployed Stellar router. Settlement always pays its recorded
-            recipient.
+            Review parked claims from the indexer or enter claim numbers. Every recipient and amount
+            below is re-read from the deployed Stellar router before signing.
           </p>
+          <button type="button" disabled={busy} onClick={() => void loadOpenClaims()}>
+            {busy ? "Checking..." : "Load parked claims"}
+          </button>
           <label htmlFor="claim-id">Claim number</label>
           <input
             id="claim-id"
             inputMode="numeric"
+            placeholder="1, 2, 3"
             value={id}
             onChange={(event) => {
               setId(event.target.value);
-              setClaim(null);
+              setClaims([]);
+              setBatchSupported(null);
             }}
             disabled={busy}
           />
-          <button type="button" disabled={!/^\d+$/.test(id) || busy} onClick={() => void lookup()}>
-            {busy ? "Checking..." : "Look up claim"}
+          <button
+            type="button"
+            disabled={!/^\d+(?:[\s,]+\d+)*$/.test(id.trim()) || busy}
+            onClick={() => void lookup()}
+          >
+            {busy ? "Checking..." : "Review claims"}
           </button>
           {error && (
             <p role="alert" className={styles.error}>
-              {error}
+              {error} Claim settlement remains unavailable until the verified router deployment
+              matches.
             </p>
           )}
-          {claim && (
+          {claims.length > 0 && (
             <>
-              <p className={styles.address}>Recipient: {claim.recipient}</p>
-              <p>
-                Amount:{" "}
-                {claim.token === TESTNET.token
-                  ? `${formatUnits(claim.amount, 7)} USDC`
-                  : `${claim.amount} base units of ${claim.token}`}
-              </p>
-              <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
-              {!claim.settled && (
-                <button
-                  type="button"
-                  disabled={!wallet.address || busy || result?.status === "pending"}
-                  onClick={() => void settle()}
-                >
-                  Sign claim settlement
-                </button>
+              <ul>
+                {claims.map((claim) => (
+                  <li key={claim.id.toString()}>
+                    <p className={styles.address}>
+                      Claim {claim.id.toString()} recipient: {claim.recipient}
+                    </p>
+                    <p>
+                      Amount:{" "}
+                      {claim.token === TESTNET.token
+                        ? `${formatUnits(claim.amount, 7)} USDC`
+                        : `${claim.amount} base units of ${claim.token}`}
+                    </p>
+                    <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
+                    <p className={styles.address}>
+                      Verified router: {claim.deployment.router} (revision {claim.deployment.commit}
+                      , deployed at ledger {claim.deployment.deployedLedger})
+                    </p>
+                    <p className={styles.address}>Router WASM: {claim.deployment.wasmHash}</p>
+                    {(claims.length === 1 || batchSupported === false) &&
+                      !claim.settled &&
+                      claimApproval && (
+                        <>
+                          <ApprovalDetails approval={claimApproval} />
+                          <button
+                            type="button"
+                            disabled={!wallet.address || busy || result?.status === "pending"}
+                            onClick={() => void settleOne(claim)}
+                          >
+                            Sign claim settlement
+                          </button>
+                        </>
+                      )}
+                  </li>
+                ))}
+              </ul>
+              {claims.length > 1 && batchSupported === false && (
+                <p>
+                  Batch settlement is not supported by this router. Settle each claim separately.
+                </p>
               )}
-              {!wallet.address && !claim.settled && (
+              {claims.length > 1 && batchSupported === true && claimApproval && (
+                <>
+                  <ApprovalDetails approval={claimApproval} />
+                  <button
+                    type="button"
+                    disabled={!wallet.address || busy || result?.status === "pending"}
+                    onClick={() => void settle()}
+                  >
+                    Sign batch settlement
+                  </button>
+                </>
+              )}
+              {!wallet.address && claims.some((claim) => !claim.settled) && (
                 <p>Connect your Stellar wallet to pay the settlement network fee.</p>
               )}
             </>
