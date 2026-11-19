@@ -370,7 +370,9 @@ describe("Connection generation tracking", () => {
     );
     const tracker = createGenerationTracker();
     const oldRequest = tracker.run(() => walletAddress("freighter"));
-    await vi.waitFor(() => expect(api.freighter.requestAccess).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(api.freighter.requestAccess).toHaveBeenCalled();
+    });
     tracker.advance();
     await expect(oldRequest).rejects.toThrow("wallet connection changed");
     await expect(tracker.run(() => walletAddress("freighter"))).resolves.toBe(signer.publicKey());
