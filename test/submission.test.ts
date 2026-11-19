@@ -12,6 +12,9 @@ import {
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
 import {
+  classifySubmissionFailure,
+  SubmissionFailure,
+  quoteFreshness,
   quoteBreakdown,
   type LiveQuote,
   submitSettleClaim,
@@ -23,6 +26,7 @@ import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
 
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
+import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
 import {
   planMaxUsdcAmount,
   planMaxSourceAmount,
@@ -82,6 +86,61 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
+    const checkpointKey = "hyperion.testnet.pending-transfer";
+    const values = new Map<string, string>([[checkpointKey, "existing signed hash"]]);
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+      removeItem: (key: string) => void values.delete(key),
+    };
+    expect(inspectCheckpointStorage(storage)).toMatchObject({
+      available: true,
+      persistent: null,
+      kind: "transaction-recovery",
+      reason: null,
+    });
+    expect([...values]).toEqual([[checkpointKey, "existing signed hash"]]);
+    const blocked = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("quota");
+      },
+      removeItem: () => undefined,
+    };
+    expect(inspectCheckpointStorage(blocked)).toMatchObject({
+      available: false,
+      persistent: false,
+      kind: "transaction-recovery",
+    });
+  });
+  it("rejects a store that silently drops writes before an approval can rely on it", () => {
+    expect(
+      inspectCheckpointStorage({
+        getItem: () => null,
+        setItem: () => undefined,
+        removeItem: () => undefined,
+      }),
+    ).toMatchObject({
+      available: false,
+      persistent: false,
+      reason: "The browser did not retain the recovery probe.",
+    });
+  });
+  it("classifies bounded pre-broadcast failures without attaching a fake hash", () => {
+    const failure = classifySubmissionFailure("approval", new Error("declined\nsecret details"));
+    expect(failure).toBeInstanceOf(SubmissionFailure);
+    expect(failure.stage).toBe("approval");
+    expect(failure.message).toBe("declined");
+    expect(failure.txHash).toBeUndefined();
+  });
+  it("labels provider observations by freshness without implying delivery", () => {
+    const observedAt = "2026-11-18T20:00:00.000Z";
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:29.000Z"))).toBe("current");
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:31.000Z"))).toBe("stale");
+    expect(quoteFreshness({ observedAt: "not-a-date" })).toBe("unknown");
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T19:59:59.000Z"))).toBe("unknown");
+  });
   it("recovers the exact precision dust a CCTP route's six-decimal destination truncates", () => {
     // 7-decimal Stellar USDC minus the fee leaves 9,969,995 base units -- not a multiple of
     // the 10-unit quantum that six-decimal Circle USDC can represent, so the trailing 5 base
@@ -132,6 +191,26 @@ describe("Signed Stellar submission failure boundaries", () => {
     });
   });
 
+  it("never broadcasts a valid signature returned after its envelope deadline", async () => {
+    const { send } = setup();
+    const approval = vi.fn(async (envelope: string) => {
+      const signed = await sign(envelope);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 181000);
+      return signed;
+    });
+    const progress = vi.fn();
+    await expect(
+      submitOperation(
+        TESTNET.reader,
+        new Contract(TESTNET.router).call("noop"),
+        approval,
+        progress,
+      ),
+    ).rejects.toThrow(/expired before broadcast/);
+    expect(approval).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
+    expect(progress.mock.calls.some((call) => call[0] === "submitting")).toBe(false);
+  });
   it("rejects a quote whose gross debit includes retained dust or whose payout floors to zero", () => {
     const value: LiveQuote = {
       route: 0,
@@ -154,6 +233,45 @@ describe("Signed Stellar submission failure boundaries", () => {
     expect(() => quoteBreakdown({ ...value, netAmount: 0n, representableAmount: 0n })).toThrow(
       /conserve/,
     );
+  });
+
+  it("classifies simulation transport failure without wallet approval or broadcast", async () => {
+    const { simulation, send } = setup();
+    simulation.mockReset().mockRejectedValue(new Error("Provider unavailable"));
+    const approve = vi.fn();
+    await expect(
+      submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), approve),
+    ).rejects.toMatchObject({ stage: "simulation", txHash: undefined });
+    expect(approve).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("blocks broadcast when required checkpoint persistence fails", async () => {
+    const { send } = setup();
+    const progress = (phase: string) => {
+      if (phase === "submitting") throw new Error("Recovery storage is unavailable");
+    };
+    await expect(
+      submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), sign, progress),
+    ).rejects.toMatchObject({ stage: "checkpoint", txHash: undefined });
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("retains the actual signed hash and broadcast stage for an uncertain network send", async () => {
+    const { send } = setup();
+    send.mockRejectedValueOnce(new Error("Provider timed out"));
+    const result = await submitOperation(
+      TESTNET.reader,
+      new Contract(TESTNET.router).call("noop"),
+      sign,
+    );
+    expect(result.status).toBe("pending");
+    expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.failure).toMatchObject({ stage: "broadcast", txHash: result.txHash });
+  });
+  it("keeps classification bounded and strips hashes from pre-broadcast stages", () => {
+    expect(
+      classifySubmissionFailure("build", new Error("x".repeat(1000)), "a".repeat(64)),
+    ).toMatchObject({ stage: "build", message: "x".repeat(400), txHash: undefined });
+    expect(classifySubmissionFailure("broadcast", "timeout", "fake").txHash).toBeUndefined();
   });
 
   it("never asks the wallet or submits when simulation fails", async () => {
@@ -201,7 +319,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       return Promise.reject(new Error("timeout"));
     });
     const result = await submitSettleClaim(key.publicKey(), 1n, sign);
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
   });
   it("reports a known network rejection instead of source confirmation", async () => {
@@ -333,7 +455,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       undefined,
       sim,
     );
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(wallet).toHaveBeenCalledTimes(1);
     expect(submittedXdr).toBe(sim.envelopeXdr);
     expect(send).toHaveBeenCalledTimes(1);
@@ -744,6 +870,8 @@ describe("Checkpoint staleness guards", () => {
   };
   const sameIntent = {
     account: checkpoint.account,
+    recipient: checkpoint.recipient,
+    source: checkpoint.source,
     destination: checkpoint.destination,
     route: checkpoint.route,
     bridgeAmount: checkpoint.bridgeAmount,
@@ -768,6 +896,12 @@ describe("Checkpoint staleness guards", () => {
   });
   it("rejects a stale confirmation when the amount changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, bridgeAmount: "20000000" })).toBe(false);
+  });
+  it("rejects a stale confirmation when recipient or issuer-specific source identity changes", () => {
+    expect(checkpointMatches(checkpoint, { ...sameIntent, recipient: "0x" + "b".repeat(40) })).toBe(
+      false,
+    );
+    expect(checkpointMatches(checkpoint, { ...sameIntent, source: USDC })).toBe(false);
   });
   it("rejects a stale confirmation when the stage changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, stage: "conversion" })).toBe(false);

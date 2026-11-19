@@ -18,6 +18,9 @@ export function StellarWalletButton() {
     walletId,
     error,
     pendingSigningRequest,
+    rememberedWallet,
+    preferenceError,
+    clearRememberedWallet,
     connect,
     disconnect,
   } = useStellarWallet();
@@ -26,6 +29,24 @@ export function StellarWalletButton() {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const activeCapabilities = isWalletId(walletId) ? walletCapabilities(walletId) : null;
   const walletDisplayName = activeCapabilities?.name ?? "Unknown wallet";
+  const rememberedWalletName = isWalletId(rememberedWallet)
+    ? walletCapabilities(rememberedWallet).name
+    : null;
+  const preference = (rememberedWallet !== null || preferenceError !== null) && (
+    <div className={styles.preference}>
+      <span className={styles.addressLabel}>
+        Remembered wallet: {rememberedWalletName ?? "unavailable"}
+      </span>
+      <button type="button" className={styles.preferenceBtn} onClick={clearRememberedWallet}>
+        clear saved preference
+      </button>
+      {preferenceError && (
+        <p role="alert" className={styles.preferenceError}>
+          {preferenceError}
+        </p>
+      )}
+    </div>
+  );
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -52,18 +73,26 @@ export function StellarWalletButton() {
 
   if (!isConnected) {
     return (
-      <button
-        type="button"
-        className={styles.button}
-        onClick={() => {
-          void connect();
-        }}
-        disabled={isConnecting}
-      >
-        <span className={styles.dot} />
-        <span>{isConnecting ? "connecting..." : "connect stellar"}</span>
-        {error && <span role="alert">{error}</span>}
-      </button>
+      <div className={styles.disconnected}>
+        <button
+          type="button"
+          className={styles.button}
+          onClick={() => {
+            void connect();
+          }}
+          disabled={isConnecting}
+          aria-busy={isConnecting}
+        >
+          <span className={styles.dot} />
+          <span>{isConnecting ? "connecting..." : "connect stellar"}</span>
+        </button>
+        {error && (
+          <p role="alert" className={styles.preferenceError}>
+            {error}
+          </p>
+        )}
+        {preference}
+      </div>
     );
   }
 
@@ -88,6 +117,11 @@ export function StellarWalletButton() {
         <span className={styles.network}>(testnet)</span>
       </button>
 
+      {preferenceError && !menuOpen && (
+        <p role="alert" className={styles.preferenceNotice}>
+          {preferenceError}
+        </p>
+      )}
       {menuOpen && (
         <div id={menuId} className={styles.menu} role="region" aria-label="Wallet details">
           <div className={styles.addressRow}>
@@ -95,6 +129,7 @@ export function StellarWalletButton() {
             <span className={styles.fullAddress}>{address}</span>
           </div>
 
+          {preference}
           <div className={styles.diagnosticsSection}>
             <span className={styles.diagTitle}>adapter diagnostics</span>
 
