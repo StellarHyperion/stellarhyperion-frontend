@@ -1332,6 +1332,14 @@ export function Bridge() {
         {quote?.conversion && needsTrustline && reserveError && (
           <p className={styles.error}>{reserveError}</p>
         )}
+        {result?.failure && (
+          <p role="status" className={styles.assetNote}>
+            {result.failure.stage === "broadcast"
+              ? "The source broadcast outcome is unknown."
+              : "Source confirmation is temporarily unavailable."}{" "}
+            Check the saved source hash before approving another transaction.
+          </p>
+        )}
         {busy && (
           <p role="status" className={styles.progress}>
             <LoaderCircle className={styles.spinner} size={16} aria-hidden="true" />

@@ -379,6 +379,17 @@ function contractMethods(contract: string) {
 }
 
 export function errorMessage(error: unknown): string {
+  if (error instanceof SubmissionFailure) {
+    const label = {
+      build: "Transaction preparation",
+      simulation: "Transaction simulation",
+      approval: "Wallet approval",
+      checkpoint: "Recovery checkpoint",
+      broadcast: "Source broadcast",
+      confirmation: "Source confirmation",
+    }[error.stage];
+    return `${label}: ${error.message}`;
+  }
   const message = error instanceof Error ? error.message : String(error);
   const code = /Error\(Contract, #(\d+)\)/.exec(message)?.[1];
   if (code) {

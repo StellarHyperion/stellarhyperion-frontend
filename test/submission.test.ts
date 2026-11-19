@@ -172,7 +172,7 @@ describe("Signed Stellar submission failure boundaries", () => {
 
   it("classifies simulation transport failure without wallet approval or broadcast", async () => {
     const { simulation, send } = setup();
-    simulation.mockRejectedValueOnce(new Error("Provider unavailable"));
+    simulation.mockReset().mockRejectedValue(new Error("Provider unavailable"));
     const approve = vi.fn();
     await expect(
       submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), approve),
@@ -254,7 +254,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       return Promise.reject(new Error("timeout"));
     });
     const result = await submitSettleClaim(key.publicKey(), 1n, sign);
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
   });
   it("reports a known network rejection instead of source confirmation", async () => {
@@ -386,7 +390,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       undefined,
       sim,
     );
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(wallet).toHaveBeenCalledTimes(1);
     expect(submittedXdr).toBe(sim.envelopeXdr);
     expect(send).toHaveBeenCalledTimes(1);
