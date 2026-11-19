@@ -124,6 +124,7 @@ export function Header({ network }: { readonly network: string }): ReactElement 
             className={styles.navLinks}
             aria-label="Main navigation"
             data-section={transfersActive ? "transfers" : "send"}
+            data-recovery={Boolean(pendingCheckpoint)}
           >
             <Link
               className={styles.navLink}
