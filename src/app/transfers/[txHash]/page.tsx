@@ -9,6 +9,7 @@ import { formatTokenAmount, getExplorerUrl } from "../../../lib/format";
 import { hasVerifiedDestinationEvidence } from "../../../lib/evidence";
 import { EvidenceTimeline } from "../../../components/transfers/EvidenceTimeline";
 import { ActivityRequestGuard } from "../../../lib/activity-request";
+import { useVisibilityPoll } from "../../../lib/visibility-poll";
 import styles from "./page.module.css";
 export default function TransferDetailPage({ params }: { params: Promise<{ txHash: string }> }) {
   const { txHash } = use(params);
@@ -49,12 +50,19 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
       if (guard.isCurrent(token)) setLoading(false);
     };
     void load();
-    const timer = setInterval(() => void load(), 5000);
     return () => {
       guard.invalidate();
-      clearInterval(timer);
     };
   }, [txHash]);
+  useVisibilityPoll(() => {
+    // The signed source hash remains in the URL and is never cleared while polling is paused.
+    void readTransaction(txHash)
+      .then(setOrigin)
+      .catch((cause: unknown) => setError(errorMessage(cause)));
+    void fetchTransferByTx(txHash)
+      .then(setRecord)
+      .catch((cause: unknown) => setIndexerError(errorMessage(cause)));
+  }, 5_000, 60_000);
   return (
     <Column>
       <Link href="/transfers">Back to transfer history</Link>

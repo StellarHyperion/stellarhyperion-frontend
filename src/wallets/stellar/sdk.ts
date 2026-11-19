@@ -65,6 +65,34 @@ function throwWalletError(error: unknown): never {
   throw new Error(message);
 }
 
+export function walletErrorGuidance(error: unknown): { message: string; action: string } {
+  const detail = error instanceof Error ? error.message.toLowerCase() : "";
+  if (detail.includes("popup") || detail.includes("window"))
+    return {
+      message: "The wallet popup was blocked or closed.",
+      action: "Allow the wallet popup, then choose a wallet again.",
+    };
+  if (detail.includes("denied") || detail.includes("reject") || detail.includes("cancel"))
+    return {
+      message: "Wallet access was declined.",
+      action: "Choose the wallet again when you are ready to approve access.",
+    };
+  if (detail.includes("network") || detail.includes("testnet"))
+    return {
+      message: "The wallet is not connected to Stellar Testnet.",
+      action: "Switch the wallet to Stellar Testnet, then choose it again.",
+    };
+  if (detail.includes("install") || detail.includes("connected"))
+    return {
+      message: "This wallet extension is unavailable.",
+      action: "Install or open the wallet, then choose it again.",
+    };
+  return {
+    message: "The wallet could not be connected.",
+    action: "Check the wallet and choose it again.",
+  };
+}
+
 async function albedoClient() {
   const intentModule = await import("@albedo-link/intent");
   const client = intentModule.default;

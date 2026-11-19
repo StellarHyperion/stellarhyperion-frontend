@@ -1,7 +1,18 @@
 import { NextResponse } from "next/server";
 import { relayBudget } from "../../../lib/relay-budget";
+import { feeRequestLimit } from "../../../lib/fee-request-guard";
 // The fee API expects a method in the JSON body. Its /gmp/estimateITSFee path returns help text.
-export async function GET() {
+export async function GET(request: Request) {
+  const limited = feeRequestLimit(request);
+  if (limited)
+    return NextResponse.json(
+      {
+        error: "Fee estimates are being requested too often.",
+        code: "RATE_LIMITED",
+        retryAfter: limited.retryAfter,
+      },
+      { status: 429, headers: { "Retry-After": String(limited.retryAfter) } },
+    );
   try {
     const response = await fetch("https://testnet.api.gmp.axelarscan.io", {
       method: "POST",

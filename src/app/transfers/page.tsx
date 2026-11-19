@@ -11,6 +11,7 @@ import {
 import { TransferList } from "../../components/transfers";
 import { errorMessage } from "../../contracts";
 import { ActivityRequestGuard } from "../../lib/activity-request";
+import { useVisibilityPoll } from "../../lib/visibility-poll";
 import { useStellarWallet } from "../../wallets";
 import styles from "./page.module.css";
 
@@ -122,13 +123,41 @@ function TransfersPageContent({ address }: { address?: string | null }) {
       setLoading(true);
       void load();
     }, 300);
-    const timer = setInterval(() => void load(), 10_000);
     return () => {
       guard.invalidate();
       clearTimeout(delay);
-      clearInterval(timer);
     };
   }, [address, offset, search, scope]);
+  useVisibilityPoll(
+    () =>
+      void (async () => {
+        const token = requestGuard.current.begin();
+        try {
+          const [historyResult, metricsResult] = await Promise.allSettled([
+            fetchTransfers({
+              ...(address ? { sender: address } : {}),
+              search,
+              limit: "20",
+              offset: String(offset),
+            }),
+            fetchIndexerMetrics(),
+          ]);
+          if (!requestGuard.current.isCurrent(token)) return;
+          setSnapshot({
+            scope,
+            response: historyResult.status === "fulfilled" ? historyResult.value : null,
+            error: historyResult.status === "rejected" ? errorMessage(historyResult.reason) : null,
+            metrics: metricsResult.status === "fulfilled" ? metricsResult.value : null,
+            metricsError:
+              metricsResult.status === "rejected" ? errorMessage(metricsResult.reason) : null,
+          });
+        } finally {
+          if (requestGuard.current.isCurrent(token)) setLoading(false);
+        }
+      })(),
+    10_000,
+    60_000,
+  );
   return (
     <Column>
       <h1 className="display">Transfer history</h1>

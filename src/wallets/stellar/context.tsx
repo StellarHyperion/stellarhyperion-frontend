@@ -20,6 +20,7 @@ import {
   walletAddress,
   walletSign,
   createSigningCoordinator,
+  walletErrorGuidance,
   type StellarWalletId,
   type PendingSigningRequest,
 } from "./sdk";
@@ -54,6 +55,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [walletId, setWalletId] = useState<StellarWalletId | null>(null);
   const [isConnecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorAction, setErrorAction] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [availability, setAvailability] = useState<
     Partial<Record<StellarWalletId, WalletAvailabilityStatus>>
@@ -106,6 +108,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     setAuthorizing(null);
     setConnecting(false);
     setError(null);
+    setErrorAction(null);
   }, []);
 
   const connect = useCallback(async () => {
@@ -113,6 +116,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     attempt.current++;
     setConnecting(true);
     setError(null);
+    setErrorAction(null);
     setAvailability({});
     setPickerOpen(true);
     return await new Promise<string | null>((resolve) => {
@@ -136,8 +140,11 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       setPickerOpen(false);
       setConnecting(false);
     } catch (cause) {
-      if (attempt.current === version)
-        setError(cause instanceof Error ? cause.message : "Wallet connection was declined.");
+      if (attempt.current === version) {
+        const guidance = walletErrorGuidance(cause);
+        setError(guidance.message);
+        setErrorAction(guidance.action);
+      }
     } finally {
       if (attempt.current === version) setAuthorizing(null);
     }
@@ -234,9 +241,13 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
             ))}
           </div>
           {error && (
-            <p role="alert" className={styles.error}>
-              {error}
-            </p>
+            <div role="alert" className={styles.error}>
+              <p>{error}</p>
+              {errorAction && <p>{errorAction}</p>}
+              <button type="button" onClick={() => setError(null)}>
+                Choose a wallet again
+              </button>
+            </div>
           )}
         </Dialog>
       )}

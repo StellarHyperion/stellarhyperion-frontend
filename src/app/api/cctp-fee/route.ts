@@ -1,8 +1,19 @@
 import { NextResponse } from "next/server";
 import { destinationFor } from "../../../config/testnet";
 import { relayBudget } from "../../../lib/relay-budget";
+import { feeRequestLimit } from "../../../lib/fee-request-guard";
 
 export async function GET(request: Request) {
+  const limited = feeRequestLimit(request);
+  if (limited)
+    return NextResponse.json(
+      {
+        error: "Fee estimates are being requested too often.",
+        code: "RATE_LIMITED",
+        retryAfter: limited.retryAfter,
+      },
+      { status: 429, headers: { "Retry-After": String(limited.retryAfter) } },
+    );
   let domain: number;
   try {
     domain = destinationFor(new URL(request.url).searchParams.get("destination") ?? "").cctpDomain;
