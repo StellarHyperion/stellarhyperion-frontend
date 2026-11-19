@@ -105,7 +105,8 @@ const history = (item: ReturnType<typeof fixture>, successful = true) => ({
 function mockHistory(body: unknown, status = 200, network: string = TESTNET.networkPassphrase) {
   const fetcher = vi.fn((url: string | URL | Request) =>
     Promise.resolve(
-      String(url) === TESTNET.horizonUrl
+      (typeof url === "string" ? url : url instanceof URL ? url.href : url.url) ===
+        TESTNET.horizonUrl
         ? Response.json({ network_passphrase: network })
         : Response.json(body, { status }),
     ),
@@ -146,7 +147,7 @@ describe("Checkpoint recovery from independently encoded transaction evidence", 
     }
     it(`uses parsed RPC XDR for ${stage} before historical fallback`, async () => {
       const item = fixture(stage);
-      vi.mocked(rpc.Server.prototype.getTransaction).mockResolvedValue({
+      vi.spyOn(rpc.Server.prototype, "getTransaction").mockResolvedValue({
         status: rpc.Api.GetTransactionStatus.SUCCESS,
         txHash: item.checkpoint.txHash,
         latestLedger: 100,
@@ -255,7 +256,7 @@ describe("Checkpoint recovery from independently encoded transaction evidence", 
     await expect(resolveCheckpointTransaction(item.checkpoint)).resolves.toMatchObject({
       status: "unknown",
     });
-    vi.mocked(rpc.Server.prototype.getNetwork).mockResolvedValue({
+    vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
       passphrase: "wrong",
       protocolVersion: "27",
     });
@@ -285,7 +286,12 @@ describe("Checkpoint recovery from independently encoded transaction evidence", 
   it("cancels a stuck RPC read and ignores its late successful response", async () => {
     const item = fixture("bridge");
     const controller = new AbortController();
-    vi.mocked(rpc.Server.prototype.getTransaction).mockImplementation(() => new Promise(() => {}));
+    vi.spyOn(rpc.Server.prototype, "getTransaction").mockImplementation(
+      () =>
+        new Promise(() => {
+          /* This RPC fixture deliberately never resolves. */
+        }),
+    );
     const pending = resolveCheckpointTransaction(item.checkpoint, controller.signal);
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
