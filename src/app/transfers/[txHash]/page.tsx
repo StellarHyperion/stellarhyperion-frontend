@@ -54,15 +54,23 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
       guard.invalidate();
     };
   }, [txHash]);
-  useVisibilityPoll(() => {
-    // The signed source hash remains in the URL and is never cleared while polling is paused.
-    void readTransaction(txHash)
-      .then(setOrigin)
-      .catch((cause: unknown) => setError(errorMessage(cause)));
-    void fetchTransferByTx(txHash)
-      .then(setRecord)
-      .catch((cause: unknown) => setIndexerError(errorMessage(cause)));
-  }, 5_000, 60_000);
+  useVisibilityPoll(
+    () => {
+      // The signed source hash remains in the URL and is never cleared while polling is paused.
+      void readTransaction(txHash)
+        .then(setOrigin)
+        .catch((cause: unknown) => {
+          setError(errorMessage(cause));
+        });
+      void fetchTransferByTx(txHash)
+        .then(setRecord)
+        .catch((cause: unknown) => {
+          setIndexerError(errorMessage(cause));
+        });
+    },
+    5_000,
+    60_000,
+  );
   return (
     <Column>
       <Link href="/transfers">Back to transfer history</Link>

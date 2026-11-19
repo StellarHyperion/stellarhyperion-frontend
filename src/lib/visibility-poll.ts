@@ -7,7 +7,9 @@ export function useVisibilityPoll(
   hiddenInterval = Math.max(visibleInterval * 6, 60_000),
 ) {
   const callbackRef = useRef(callback);
-  callbackRef.current = callback;
+  useEffect(() => {
+    callbackRef.current = callback;
+  });
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let active = true;

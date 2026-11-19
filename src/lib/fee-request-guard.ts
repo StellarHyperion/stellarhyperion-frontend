@@ -3,7 +3,7 @@ const MAX_REQUESTS = 30;
 const requests = new Map<string, { startedAt: number; count: number }>();
 
 export function feeRequestKey(request: Request): string {
-  return request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim() || "anonymous";
+  return request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim() ?? "anonymous";
 }
 
 export function feeRequestLimit(request: Request): { retryAfter: number } | null {
