@@ -161,6 +161,17 @@ export interface TransfersQuery {
   readonly search?: string;
 }
 
+export interface TransferRequestOptions {
+  readonly signal?: AbortSignal;
+}
+
+interface CachedResponse {
+  readonly etag: string;
+  readonly value: unknown;
+}
+
+const responseCache = new Map<string, CachedResponse>();
+
 export function getRouteName(route: number): string {
   switch (route) {
     case 0:
@@ -184,16 +195,33 @@ function getApiBaseUrl(): string {
   ).replace(/\/$/, "");
 }
 
-function request<T>(path: string): Promise<T>;
-function request<T>(path: string, notFoundIsNull: true): Promise<T | null>;
-async function request<T>(path: string, notFoundIsNull = false): Promise<T | null> {
+function request<T>(path: string, options?: TransferRequestOptions): Promise<T>;
+function request<T>(
+  path: string,
+  notFoundIsNull: true,
+  options?: TransferRequestOptions,
+): Promise<T | null>;
+async function request<T>(
+  path: string,
+  notFoundIsNullOrOptions: boolean | TransferRequestOptions = false,
+  options: TransferRequestOptions = {},
+): Promise<T | null> {
+  const notFoundIsNull = notFoundIsNullOrOptions === true;
+  const requestOptions =
+    typeof notFoundIsNullOrOptions === "object" ? notFoundIsNullOrOptions : options;
   const base = getApiBaseUrl();
   if (!base) throw new Error("Transfer history is unavailable: no indexer is configured.");
+  const url = `${base}${path}`;
+  const cached = responseCache.get(url);
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (cached) headers["If-None-Match"] = cached.etag;
   let response: Response;
   try {
-    response = await fetch(`${base}${path}`, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(15_000),
+    response = await fetch(url, {
+      headers,
+      signal: requestOptions.signal
+        ? AbortSignal.any([requestOptions.signal, AbortSignal.timeout(15_000)])
+        : AbortSignal.timeout(15_000),
       cache: "no-store",
     });
   } catch {
@@ -201,12 +229,20 @@ async function request<T>(path: string, notFoundIsNull = false): Promise<T | nul
       "The transfer indexer is unreachable. On-chain transfers and claims still work.",
     );
   }
-  if (response.status === 404 && notFoundIsNull) return null;
+  if (response.status === 304 && cached) return cached.value as T;
+  if (response.status === 404 && notFoundIsNull) {
+    responseCache.delete(url);
+    return null;
+  }
   if (!response.ok)
     throw new Error(
       `The transfer indexer returned HTTP ${response.status}. No sample records are shown.`,
     );
-  return (await response.json()) as T;
+  const value = (await response.json()) as T;
+  const etag = response.headers.get("ETag");
+  if (etag) responseCache.set(url, { etag, value });
+  else responseCache.delete(url);
+  return value;
 }
 
 function params(query?: object): string {
@@ -216,17 +252,29 @@ function params(query?: object): string {
   const encoded = values.toString();
   return encoded ? `?${encoded}` : "";
 }
-export async function fetchTransfers(query?: TransfersQuery): Promise<TransfersResponse> {
-  return await request<TransfersResponse>(`/v1/transfers${params(query)}`);
+export async function fetchTransfers(
+  query?: TransfersQuery,
+  options?: TransferRequestOptions,
+): Promise<TransfersResponse> {
+  return await request<TransfersResponse>(`/v1/transfers${params(query)}`, options);
 }
 export async function fetchClaims(query?: ClaimsQuery): Promise<ClaimsResponse> {
   return await request<ClaimsResponse>(`/v1/claims${params(query)}`);
 }
 
-export async function fetchIndexerMetrics(): Promise<IndexerMetrics> {
-  return await request<IndexerMetrics>("/v1/metrics");
+export async function fetchIndexerMetrics(
+  options?: TransferRequestOptions,
+): Promise<IndexerMetrics> {
+  return await request<IndexerMetrics>("/v1/metrics", options);
 }
 
-export function fetchTransferByTx(hash: string): Promise<FormattedTransfer | null> {
-  return request<FormattedTransfer>(`/v1/transfers/by-tx/${encodeURIComponent(hash)}`, true);
+export function fetchTransferByTx(
+  hash: string,
+  options?: TransferRequestOptions,
+): Promise<FormattedTransfer | null> {
+  return request<FormattedTransfer>(
+    `/v1/transfers/by-tx/${encodeURIComponent(hash)}`,
+    true,
+    options,
+  );
 }

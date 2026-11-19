@@ -18,11 +18,16 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
   const [indexerError, setIndexerError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const requestGuard = useRef(new ActivityRequestGuard());
+  const controller = useRef<AbortController | null>(null);
   useEffect(() => {
     const guard = requestGuard.current;
     guard.setIdentity(txHash);
     guard.invalidate();
+    controller.current?.abort();
     const load = async () => {
+      controller.current?.abort();
+      controller.current = new AbortController();
+      const signal = controller.current.signal;
       const token = guard.begin();
       await Promise.allSettled([
         readTransaction(txHash)
@@ -35,7 +40,7 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
           .catch((cause: unknown) => {
             if (guard.isCurrent(token)) setError(errorMessage(cause));
           }),
-        fetchTransferByTx(txHash)
+        fetchTransferByTx(txHash, { signal })
           .then((result) => {
             if (guard.isCurrent(token)) {
               setRecord(result);
@@ -52,6 +57,7 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
     const timer = setInterval(() => void load(), 5000);
     return () => {
       guard.invalidate();
+      controller.current?.abort();
       clearInterval(timer);
     };
   }, [txHash]);

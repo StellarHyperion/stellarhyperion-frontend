@@ -89,21 +89,29 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   const error = current?.error ?? null;
   const pending = loading || current === null;
   const requestGuard = useRef(new ActivityRequestGuard());
+  const controller = useRef<AbortController | null>(null);
   useEffect(() => {
     const guard = requestGuard.current;
     guard.setIdentity(address ?? null);
     guard.invalidate();
+    controller.current?.abort();
     const load = async () => {
+      controller.current?.abort();
+      controller.current = new AbortController();
+      const signal = controller.current.signal;
       const token = guard.begin();
       try {
         const [historyResult, metricsResult] = await Promise.allSettled([
-          fetchTransfers({
-            ...(address ? { sender: address } : {}),
-            search,
-            limit: "20",
-            offset: String(offset),
-          }),
-          fetchIndexerMetrics(),
+          fetchTransfers(
+            {
+              ...(address ? { sender: address } : {}),
+              search,
+              limit: "20",
+              offset: String(offset),
+            },
+            { signal },
+          ),
+          fetchIndexerMetrics({ signal }),
         ]);
         if (!guard.isCurrent(token)) return;
         setSnapshot({
@@ -125,6 +133,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
     const timer = setInterval(() => void load(), 10_000);
     return () => {
       guard.invalidate();
+      controller.current?.abort();
       clearTimeout(delay);
       clearInterval(timer);
     };
