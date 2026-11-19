@@ -37,13 +37,25 @@ try {
   // This smoke check only reads and never signs. Catch any accidental live submission network
   // call (a Soroban RPC POST or an outbound Horizon transaction broadcast) so a change that makes
   // this read-only pass start spending testnet funds fails loudly instead of going unnoticed.
+  // Matching is done against the parsed hostname (never an unanchored substring test against the
+  // full URL), so an attacker-controlled URL like https://evil.com/soroban-testnet.stellar.org or
+  // https://soroban-testnet.stellar.org.evil.com cannot be mistaken for the real testnet host.
   const submissionCalls = [];
+  const submissionHostname = (url) => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return null;
+    }
+  };
   page.on("request", (request) => {
     const url = request.url();
+    const hostname = submissionHostname(url);
     if (
       request.method() === "POST" &&
-      (/soroban-testnet\.stellar\.org/.test(url) ||
-        (/horizon-testnet\.stellar\.org/.test(url) && /\/transactions/.test(url)))
+      (hostname === "soroban-testnet.stellar.org" ||
+        (hostname === "horizon-testnet.stellar.org" &&
+          new URL(url).pathname.includes("/transactions")))
     )
       submissionCalls.push(url);
   });
