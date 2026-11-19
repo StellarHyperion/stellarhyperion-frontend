@@ -88,6 +88,35 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("refuses fresh claim data that differs from the reviewed amount before wallet approval", async () => {
+    const { send } = setup();
+    const wallet = vi.fn(sign);
+    await expect(
+      submitSettleClaim(key.publicKey(), 1n, wallet, undefined, undefined, undefined, {
+        id: 1n,
+        recipient: key.publicKey(),
+        token: TESTNET.token,
+        amount: 20n,
+        settled: false,
+        eligibility: {
+          status: "eligible",
+          reason: "Generated fixture",
+          previewMethod: "preview_settle_claim",
+          trustline: "not-required",
+        },
+        deployment: {
+          ...STELLAR_DEPLOYMENT,
+          chain: "stellar-testnet",
+          router: TESTNET.router,
+          networkPassphrase: TESTNET.networkPassphrase,
+          commit: "fixture",
+          deployedLedger: 1,
+        },
+      }),
+    ).rejects.toThrow(/claim changed/);
+    expect(wallet).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
   it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
     const checkpointKey = "hyperion.testnet.pending-transfer";
     const values = new Map<string, string>([[checkpointKey, "existing signed hash"]]);
