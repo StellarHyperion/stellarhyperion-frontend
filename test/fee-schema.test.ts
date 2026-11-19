@@ -28,7 +28,6 @@ describe("provider fee response schema", () => {
     { amount: "0" },
     { amount: "9".repeat(100000) },
     { amount: String(1n << 127n) },
-    { finality: 2000 },
   ])("rejects incompatible fee metadata: %j", (change) => {
     expect(() =>
       validateProviderFee(
@@ -40,6 +39,21 @@ describe("provider fee response schema", () => {
 });
 
 describe("live provider endpoint schema boundaries", () => {
+  it("rejects Circle finality metadata on an Axelar signing budget", () => {
+    expect(() =>
+      validateProviderFee(
+        {
+          amount: "1100",
+          estimatedAmount: "1000",
+          token: "XLM",
+          decimals: 7,
+          destination: "ethereum-sepolia",
+          finality: 2000,
+        },
+        { token: "XLM", destination: "ethereum-sepolia" },
+      ),
+    ).toThrow("Provider fee finality is invalid.");
+  });
   it("rejects an oversized Axelar scalar with a bounded public error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('"' + "9".repeat(100000) + '"')));
     const response = await relayFee();

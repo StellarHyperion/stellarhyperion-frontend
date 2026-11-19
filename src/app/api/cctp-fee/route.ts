@@ -30,7 +30,9 @@ export async function GET(request: Request) {
         return (
           entry.finalityThreshold === 2000 &&
           entry.minimumFee === 0 &&
-          typeof entry.forwardFee === "object"
+          entry.forwardFee !== null &&
+          typeof entry.forwardFee === "object" &&
+          !Array.isArray(entry.forwardFee)
         );
       },
     );
