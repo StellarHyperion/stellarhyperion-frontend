@@ -144,7 +144,8 @@ describe("Real indexer client", () => {
     vi.stubGlobal("fetch", fetcher);
 
     await fetchTransfers(undefined, { signal: controller.signal });
-    expect(fetcher.mock.calls[0]?.[1]?.signal).toBeDefined();
+    const init = fetcher.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.signal).toBeDefined();
   });
 });
 
