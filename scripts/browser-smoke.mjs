@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { chromium, firefox } from "@playwright/test";
 
 // Run a local Next server first. This smoke check performs reads only and never signs.
@@ -8,6 +8,18 @@ const engine = process.env.HYPERION_BROWSER ?? "chromium";
 if (engine !== "chromium" && engine !== "firefox")
   throw new Error("Choose chromium or firefox for HYPERION_BROWSER.");
 const executablePath = process.env.HYPERION_BROWSER_EXECUTABLE;
+const providerDelayMs = Number(process.env.HYPERION_PROVIDER_DELAY_MS ?? "75");
+if (!Number.isInteger(providerDelayMs) || providerDelayMs < 0 || providerDelayMs > 5000)
+  throw new Error("HYPERION_PROVIDER_DELAY_MS must be an integer from 0 through 5000.");
+
+const budgets = {
+  landing: 3000,
+  assetSearch: 1500,
+  quoteReview: 5000,
+  pendingRecovery: 1500,
+};
+const traces = [];
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const deployment = JSON.parse(
   await readFile(new URL("../src/config/testnet-deployment.json", import.meta.url), "utf8"),
 );
@@ -18,17 +30,68 @@ const browser = await { chromium, firefox }[engine].launch(
 );
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  // Keep provider latency reproducible while retaining real responses. This exercises loading
+  // and cancellation boundaries without ever enabling wallet signing or transaction submission.
+  await page.route("**/*", async (route) => {
+    const url = route.request().url();
+    if (
+      providerDelayMs > 0 &&
+      /horizon-testnet\.stellar\.org|soroban-testnet\.stellar\.org|axelarscan\.io|circle\.com/i.test(
+        url,
+      )
+    )
+      await sleep(providerDelayMs);
+    await route.continue();
+  });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(origin, { waitUntil: "networkidle" });
-  await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+  const traceFlow = async (name, action) => {
+    await page.evaluate((flow) => performance.mark(`${flow}:start`), name);
+    await action();
+    const sample = await page.evaluate(
+      ({ flow, budgetMs }) => {
+        performance.mark(`${flow}:end`);
+        const measure = performance.measure(flow, `${flow}:start`, `${flow}:end`);
+        const resources = performance
+          .getEntriesByType("resource")
+          .filter(
+            (entry) =>
+              entry.startTime >= measure.startTime &&
+              entry.responseEnd <= measure.startTime + measure.duration,
+          );
+        const networkMs = resources.reduce(
+          (longest, entry) => Math.max(longest, entry.responseEnd - entry.startTime),
+          0,
+        );
+        const totalMs = measure.duration;
+        return {
+          name: flow,
+          totalMs: Math.round(totalMs),
+          networkMs: Math.round(networkMs),
+          mainThreadMs: Math.round(Math.max(totalMs - networkMs, 0)),
+          budgetMs,
+          withinBudget: totalMs <= budgetMs,
+          resourceCount: resources.length,
+        };
+      },
+      { flow: name, budgetMs: budgets[name] },
+    );
+    traces.push(sample);
+  };
+
+  await traceFlow("landing", async () => {
+    await page.goto(origin, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+  });
 
   // Opening a shared link loads bounded form state without any submission intent.
   const recipient = "0x" + "a".repeat(40);
-  await page.goto(`${origin}?a=1&r=${recipient}&d=sepolia&t=0&s=native`, {
-    waitUntil: "networkidle",
+  await traceFlow("quoteReview", async () => {
+    await page.goto(`${origin}?a=1&r=${recipient}&d=sepolia&t=0&s=native`, {
+      waitUntil: "networkidle",
+    });
+    await page.getByLabel("Amount to send").waitFor();
   });
-  await page.getByLabel("Amount to send").waitFor();
   assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), "1");
   assert.strictEqual(
     await page.getByLabel("Recipient on Ethereum Sepolia").inputValue(),
@@ -60,25 +123,27 @@ try {
   assert.equal(await themeToggle.getAttribute("aria-pressed"), "true");
   assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
   assert.equal(await page.getByRole("button", { name: "Toggle dark theme" }).count(), 1);
-  await page.getByRole("button", { name: "Choose source token", exact: true }).click();
-  await page.getByRole("dialog", { name: "Choose a token" }).waitFor();
-  await page.getByLabel("Search Stellar assets").waitFor();
-  await page.getByLabel("Search Stellar assets").fill("USDC");
-  await page.keyboard.press("Escape");
-  await page.getByRole("dialog").waitFor({ state: "hidden" });
-  await page.getByRole("button", { name: "Choose destination network and token" }).click();
-  const destinationDialog = page.getByRole("dialog", { name: "Choose a destination" });
-  for (const name of ["Ethereum Sepolia", "Base Sepolia", "Arc Testnet"])
-    await destinationDialog.getByRole("button", { name: new RegExp(name, "i") }).waitFor();
-  const itsOption = destinationDialog.getByRole("button", { name: /USDC \(ITS\)/ });
-  assert.equal(await itsOption.isEnabled(), true);
-  for (const name of ["Base Sepolia", "Arc Testnet"]) {
-    await destinationDialog.getByRole("button", { name: new RegExp(name, "i") }).click();
-    assert.equal(await itsOption.isDisabled(), true);
-  }
-  await destinationDialog.getByRole("button", { name: /Ethereum Sepolia/i }).click();
-  assert.equal(await itsOption.isEnabled(), true);
-  await page.keyboard.press("Escape");
+  await traceFlow("assetSearch", async () => {
+    await page.getByRole("button", { name: "Choose source token", exact: true }).click();
+    await page.getByRole("dialog", { name: "Choose a token" }).waitFor();
+    await page.getByLabel("Search Stellar assets").waitFor();
+    await page.getByLabel("Search Stellar assets").fill("USDC");
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "Choose destination network and token" }).click();
+    const destinationDialog = page.getByRole("dialog", { name: "Choose a destination" });
+    for (const name of ["Ethereum Sepolia", "Base Sepolia", "Arc Testnet"])
+      await destinationDialog.getByRole("button", { name: new RegExp(name, "i") }).waitFor();
+    const itsOption = destinationDialog.getByRole("button", { name: /USDC \(ITS\)/ });
+    assert.equal(await itsOption.isEnabled(), true);
+    for (const name of ["Base Sepolia", "Arc Testnet"]) {
+      await destinationDialog.getByRole("button", { name: new RegExp(name, "i") }).click();
+      assert.equal(await itsOption.isDisabled(), true);
+    }
+    await destinationDialog.getByRole("button", { name: /Ethereum Sepolia/i }).click();
+    assert.equal(await itsOption.isEnabled(), true);
+    await page.keyboard.press("Escape");
+  });
   assert.doesNotMatch(
     await page.locator("footer").innerText(),
     /Built by|Contracts|Backend|This app/,
@@ -88,28 +153,30 @@ try {
   await page.getByText("Freighter", { exact: true }).waitFor();
   await page.getByText("Albedo", { exact: true }).waitFor();
   await page.keyboard.press("Escape");
-  await page.evaluate((router) => {
-    localStorage.setItem(
-      "hyperion.testnet.pending-transfer",
-      JSON.stringify({
-        router,
-        account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
-        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
-        destination: "sepolia",
-        route: 1,
-        bridgeAmount: "10000000",
-        stage: "bridge",
-        txHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      }),
-    );
-    window.dispatchEvent(new Event("hyperion:pending-transfer"));
-  }, router);
-  await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
-  await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
-  await page.getByRole("button", { name: "Check status" }).waitFor();
-  await page.evaluate(() => {
-    localStorage.removeItem("hyperion.testnet.pending-transfer");
-    window.dispatchEvent(new Event("hyperion:pending-transfer"));
+  await traceFlow("pendingRecovery", async () => {
+    await page.evaluate((router) => {
+      localStorage.setItem(
+        "hyperion.testnet.pending-transfer",
+        JSON.stringify({
+          router,
+          account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "10000000",
+          stage: "bridge",
+          txHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        }),
+      );
+      window.dispatchEvent(new Event("hyperion:pending-transfer"));
+    }, router);
+    await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+    await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
+    await page.getByRole("button", { name: "Check status" }).waitFor();
+    await page.evaluate(() => {
+      localStorage.removeItem("hyperion.testnet.pending-transfer");
+      window.dispatchEvent(new Event("hyperion:pending-transfer"));
+    });
   });
   for (const route of ["/", "/transfers"]) {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -121,6 +188,15 @@ try {
     );
   }
   assert.deepEqual(errors, [], "Uncaught browser errors");
+  const traceReport = {
+    providerDelayMs,
+    generatedAt: new Date().toISOString(),
+    traces,
+  };
+  if (process.env.HYPERION_TRACE_FILE) {
+    await writeFile(process.env.HYPERION_TRACE_FILE, `${JSON.stringify(traceReport, null, 2)}\n`);
+  }
+  console.log(`Performance traces: ${JSON.stringify(traceReport)}`);
   console.log(
     "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history and mobile layout.",
   );
