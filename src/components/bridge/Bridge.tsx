@@ -26,6 +26,7 @@ import {
   getClaim,
   quoteTransfer,
   readLane,
+  readBalance,
   readTransaction,
   submitBridgeOut,
   submitSettleClaim,
@@ -46,6 +47,7 @@ import {
 } from "../../contracts/assets";
 import {
   saveCheckpoint,
+  hasVerifiedBridgeBalance,
   useTransferCheckpoint,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
@@ -100,6 +102,7 @@ function PendingTransferCard({
   const [checked, setChecked] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<LiveQuote | null>(null);
+  const [availableUsdc, setAvailableUsdc] = useState<bigint | null>(null);
   const current =
     checked?.txHash === checkpoint.txHash
       ? checked
@@ -114,14 +117,20 @@ function PendingTransferCard({
     try {
       const result = await readTransaction(checkpoint.txHash);
       setChecked(result);
-      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount)
-        setReview(
-          await quoteTransfer(
-            checkpoint.destination,
-            BigInt(checkpoint.bridgeAmount),
-            checkpoint.route,
-          ),
-        );
+      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+        const balance = await readBalance(checkpoint.account);
+        setAvailableUsdc(balance);
+        const requested = BigInt(checkpoint.bridgeAmount);
+        if (!hasVerifiedBridgeBalance(balance, checkpoint.bridgeAmount)) {
+          setReview(null);
+          setError(
+            `The conversion is confirmed, but only ${formatUnits(balance, 7)} USDC is available. ` +
+              `The planned bridge requires ${formatUnits(requested, 7)} USDC; no bridge was submitted.`,
+          );
+          return;
+        }
+        setReview(await quoteTransfer(checkpoint.destination, requested, checkpoint.route));
+      }
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -187,6 +196,14 @@ function PendingTransferCard({
           Track transfer <ArrowRight size={14} aria-hidden="true" />
         </Link>
       )}
+      {checkpoint.stage === "conversion" &&
+        availableUsdc !== null &&
+        current?.status === "confirmed" && (
+          <p>
+            Verified available USDC: {formatUnits(availableUsdc, 7)}. The balance was checked before
+            preparing the bridge review.
+          </p>
+        )}
       {!sameAccount && (
         <p>
           Reconnect {checkpoint.account.slice(0, 7)}...{checkpoint.account.slice(-7)} to continue
@@ -206,7 +223,7 @@ function PendingTransferCard({
           onClick={onReset}
           disabled={busy || checking}
         >
-          Start another transfer
+          {current.status === "failed" ? "Release failed checkpoint" : "Start another transfer"}
         </button>
       ) : (
         <button

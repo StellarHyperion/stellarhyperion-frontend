@@ -12,6 +12,12 @@ export interface TransferCheckpoint {
   stage: "conversion" | "bridge";
   txHash: string;
 }
+
+/** A confirmed conversion may produce less USDC than the original quote. */
+export function hasVerifiedBridgeBalance(available: bigint, bridgeAmount: string): boolean {
+  if (available < 0n || !/^\d+$/.test(bridgeAmount)) return false;
+  return available >= BigInt(bridgeAmount);
+}
 const key = "hyperion.testnet.pending-transfer";
 const event = "hyperion:pending-transfer";
 function snapshot(): string | null {

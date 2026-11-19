@@ -8,7 +8,11 @@ import {
   USDC,
   XLM,
 } from "../src/contracts/assets";
-import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
+import {
+  hasVerifiedBridgeBalance,
+  parseCheckpoint,
+  type TransferCheckpoint,
+} from "../src/contracts/checkpoint";
 import { TESTNET } from "../src/config/testnet";
 import { relayBudget } from "../src/lib/relay-budget";
 afterEach(() => {
@@ -82,6 +86,11 @@ describe("Interrupted transfer recovery", () => {
   };
   it("preserves a real conversion hash and the intended second leg", () => {
     expect(parseCheckpoint(JSON.stringify(checkpoint))).toEqual(checkpoint);
+  });
+  it("requires the confirmed conversion balance to cover the planned bridge", () => {
+    expect(hasVerifiedBridgeBalance(1000000n, checkpoint.bridgeAmount)).toBe(true);
+    expect(hasVerifiedBridgeBalance(999999n, checkpoint.bridgeAmount)).toBe(false);
+    expect(hasVerifiedBridgeBalance(1000000n, "not-an-amount")).toBe(false);
   });
   it.each([
     { router: "different" },
