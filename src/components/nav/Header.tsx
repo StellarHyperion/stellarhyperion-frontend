@@ -141,9 +141,23 @@ export function Header({ network }: { readonly network: string }): ReactElement 
               Activity
             </Link>
             {pendingCheckpoint && (
-              <Link className={styles.navLink} href="/#pending-recovery">
+              <a
+                className={styles.navLink}
+                href="/#pending-recovery"
+                onClick={(event) => {
+                  if (
+                    event.button === 0 &&
+                    !event.metaKey &&
+                    !event.ctrlKey &&
+                    !event.shiftKey &&
+                    !event.altKey
+                  ) {
+                    window.dispatchEvent(new Event("hyperion:recovery-focus"));
+                  }
+                }}
+              >
                 Recovery
-              </Link>
+              </a>
             )}
           </nav>
         </div>

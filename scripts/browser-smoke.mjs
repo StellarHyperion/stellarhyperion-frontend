@@ -145,6 +145,10 @@ try {
   await page.getByRole("link", { name: "Recovery" }).click();
   await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
   await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
+  // Selecting the current recovery fragment again restores focus without resetting its identity.
+  await page.getByRole("link", { name: "Activity" }).focus();
+  await page.getByRole("link", { name: "Recovery" }).click();
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
   assert.equal(
     await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
     checkpointBeforeNavigation,
