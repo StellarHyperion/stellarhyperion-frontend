@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Account, Asset, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { TESTNET } from "../src/config/testnet";
-import { walletAddress, walletSign } from "../src/wallets/stellar/sdk";
+import { walletAddress, walletCurrentAddress, walletSign } from "../src/wallets/stellar/sdk";
 
 const api = vi.hoisted(() => ({
   freighter: {
@@ -62,6 +62,19 @@ describe("Direct Stellar wallet adapters", () => {
     expect(api.freighter.requestAccess).not.toHaveBeenCalled();
     expect(await walletAddress("freighter")).toBe(signer.publicKey());
     expect(api.freighter.requestAccess).toHaveBeenCalledOnce();
+  });
+  it("detects a changed Freighter account without requesting access", async () => {
+    const changed = Keypair.random().publicKey();
+    api.freighter.getAddress.mockResolvedValue({ address: changed });
+    expect(await walletCurrentAddress("freighter")).toBe(changed);
+    expect(api.freighter.requestAccess).not.toHaveBeenCalled();
+  });
+  it("detects a changed LOBSTR account and reports unsupported silent checks", async () => {
+    const changed = Keypair.random().publicKey();
+    api.lobstr.getPublicKey.mockResolvedValue(changed);
+    expect(await walletCurrentAddress("lobstr")).toBe(changed);
+    expect(await walletCurrentAddress("albedo")).toBeUndefined();
+    expect(await walletCurrentAddress("xbull")).toBeUndefined();
   });
   it("preserves an explicit wallet rejection", async () => {
     api.freighter.requestAccess.mockResolvedValue({

@@ -18,6 +18,7 @@ import {
   STELLAR_WALLETS,
   isWalletId,
   walletAddress,
+  walletCurrentAddress,
   walletSign,
   type StellarWalletId,
 } from "./sdk";
@@ -41,6 +42,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [authorizing, setAuthorizing] = useState<StellarWalletId | null>(null);
   const pending = useRef<((address: string | null) => void) | null>(null);
   const attempt = useRef(0);
+  const addressRef = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -61,6 +63,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       void walletAddress(saved, false)
         .then((value) => {
           if (active && attempt.current === version) {
+            addressRef.current = value;
             setAddress(value);
             setWalletId(saved);
           }
@@ -72,6 +75,65 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       active = false;
     };
   }, []);
+
+  const invalidateAccount = useCallback((expectedAddress: string, message: string) => {
+    if (addressRef.current !== expectedAddress) return;
+    attempt.current++;
+    addressRef.current = null;
+    pending.current?.(null);
+    pending.current = null;
+    setAddress(null);
+    setWalletId(null);
+    setConnecting(false);
+    setPickerOpen(false);
+    setAuthorizing(null);
+    setError(message);
+  }, []);
+
+  useEffect(() => {
+    if (!address || !walletId) return;
+    let active = true;
+    let checking = false;
+    const verifyAccount = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const current = await walletCurrentAddress(walletId);
+        if (!active || addressRef.current !== address || current === undefined) return;
+        setError((message) =>
+          message?.startsWith("Could not verify your wallet account:") ? null : message,
+        );
+        if (current === address) return;
+        invalidateAccount(
+          address,
+          current
+            ? "Your Stellar wallet account changed. Reconnect before reviewing or signing."
+            : "Your Stellar wallet disconnected. Reconnect before reviewing or signing.",
+        );
+      } catch (cause) {
+        if (active && addressRef.current === address)
+          setError(
+            `Could not verify your wallet account: ${
+              cause instanceof Error ? cause.message : "unknown wallet error"
+            }`,
+          );
+      } finally {
+        checking = false;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void verifyAccount();
+    };
+    window.addEventListener("focus", verifyAccount);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    const timer = window.setInterval(() => void verifyAccount(), 5000);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", verifyAccount);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.clearInterval(timer);
+    };
+  }, [address, walletId, invalidateAccount]);
 
   const closePicker = useCallback(() => {
     attempt.current++;
@@ -102,6 +164,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     try {
       const value = await walletAddress(id);
       if (attempt.current !== version) return;
+      addressRef.current = value;
       setAddress(value);
       setWalletId(id);
       const storageError = saveWalletPreference(id);
@@ -124,6 +187,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(() => {
     closePicker();
+    addressRef.current = null;
     setAddress(null);
     setWalletId(null);
     const storageError = saveWalletPreference(null);
@@ -150,9 +214,19 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       if (!address || !walletId) throw new Error("Connect your Stellar wallet first.");
       if (opts?.networkPassphrase && opts.networkPassphrase !== TESTNET.networkPassphrase)
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
+      if (addressRef.current !== address)
+        throw new Error("Your wallet account changed. Connect again.");
+      const currentAddress = await walletCurrentAddress(walletId);
+      if (currentAddress !== undefined && currentAddress !== address) {
+        invalidateAccount(
+          address,
+          "Your Stellar wallet account changed. Reconnect before reviewing or signing.",
+        );
+        throw new Error("Your wallet account changed. Connect again.");
+      }
       return walletSign(walletId, transaction, address);
     },
-    [address, walletId],
+    [address, walletId, invalidateAccount],
   );
 
   const value = useMemo(

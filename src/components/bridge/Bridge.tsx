@@ -289,6 +289,7 @@ function PendingTransferCard({
           this transfer.
         </p>
       )}
+      <p className={styles.address}>This recoverable operation belongs to {checkpoint.account}.</p>
       {checking && (
         <p role="status" aria-live="polite">
           Checking Stellar RPC and Testnet transaction history...
@@ -374,6 +375,7 @@ export function Bridge() {
   const [touched, setTouched] = useState(false);
   const [picker, setPicker] = useState<"source" | "destination" | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  const [reviewedAccount, setReviewedAccount] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [quoteVersion, setQuoteVersion] = useState(0);
   const [laneState, setLaneState] = useState<{
@@ -396,6 +398,12 @@ export function Bridge() {
   const [step, setStep] = useState<"conversion" | "bridge">("bridge");
   const [result, setResult] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (reviewedAccount && reviewedAccount !== wallet.address) {
+      setReviewedAccount(null);
+      setReviewing(false);
+    }
+  }, [reviewedAccount, wallet.address]);
   const laneKey = `${destination}:${route}:${refresh}`;
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
@@ -480,8 +488,16 @@ export function Bridge() {
     };
   }, [valid, lane, locked, destination, source, amount, route, quoteKey]);
   const submit = async () => {
-    if (!quote || !wallet.address || busy || checkpoint) return;
+    if (
+      !quote ||
+      !wallet.address ||
+      reviewedAccount !== wallet.address ||
+      busy ||
+      checkpoint
+    )
+      return;
     setReviewing(false);
+    setReviewedAccount(null);
     setBusy(true);
     setError(null);
     setResult(null);
@@ -804,6 +820,7 @@ export function Bridge() {
               className={styles.primary}
               disabled={!quote || busy || !!insufficient || sourceBalance === undefined}
               onClick={() => {
+                setReviewedAccount(wallet.address);
                 setReviewing(true);
               }}
             >
@@ -868,12 +885,14 @@ export function Bridge() {
           }}
         />
       )}
-      {reviewing && quote && (
+      {reviewing && quote && reviewedAccount === wallet.address && (
         <ReviewDialog
           onClose={() => {
             setReviewing(false);
+            setReviewedAccount(null);
           }}
         >
+          <p className={styles.reviewNote}>Reviewing as Stellar account {reviewedAccount}.</p>
           <div className={styles.reviewTotal}>
             <span>You send {quote.conversion ? "up to" : ""}</span>
             <strong>

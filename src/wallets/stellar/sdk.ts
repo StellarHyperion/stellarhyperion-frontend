@@ -65,13 +65,37 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true): 
   }
 }
 
+export async function walletCurrentAddress(
+  id: StellarWalletId,
+): Promise<string | null | undefined> {
+  switch (id) {
+    case "freighter": {
+      const api = await import("@stellar/freighter-api");
+      if (!(await api.isConnected()).isConnected) return null;
+      const result = await api.getAddress();
+      if (result.error) throwWalletError(result.error);
+      return account(result.address);
+    }
+    case "lobstr": {
+      const api = await import("@lobstrco/signer-extension-api");
+      if (!(await api.isConnected())) return null;
+      return account(await api.getPublicKey());
+    }
+    case "albedo":
+    case "xbull":
+      return undefined;
+  }
+}
+
 export async function walletSign(id: StellarWalletId, xdr: string, address: string) {
+  const currentAddress = await walletCurrentAddress(id);
+  if (currentAddress !== undefined && currentAddress !== address)
+    throw new Error("Your wallet account changed. Connect again.");
+
   let signed: string;
   switch (id) {
     case "freighter": {
       const api = await import("@stellar/freighter-api");
-      const actual = await walletAddress(id, false);
-      if (actual !== address) throw new Error("Your wallet account changed. Connect again.");
       const network = await api.getNetworkDetails();
       if (network.error) throwWalletError(network.error);
       if (network.networkPassphrase !== TESTNET.networkPassphrase)
@@ -108,8 +132,6 @@ export async function walletSign(id: StellarWalletId, xdr: string, address: stri
     }
     case "lobstr": {
       const api = await import("@lobstrco/signer-extension-api");
-      if ((await walletAddress(id, false)) !== address)
-        throw new Error("Your wallet account changed. Connect again.");
       signed = await api.signTransaction(xdr);
       break;
     }

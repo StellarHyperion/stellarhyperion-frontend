@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium, firefox } from "@playwright/test";
 
 // Run a local Next server first. This smoke check performs reads only and never signs.
 const origin = process.env.HYPERION_BROWSER_URL ?? "http://127.0.0.1:3100";
 const engine = process.env.HYPERION_BROWSER ?? "chromium";
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const deployment = JSON.parse(
+  await readFile(resolve(root, "src/config/testnet-deployment.json"), "utf8"),
+);
+const router = deployment.networks["stellar-testnet"].router;
 if (engine !== "chromium" && engine !== "firefox")
   throw new Error("Choose chromium or firefox for HYPERION_BROWSER.");
 const executablePath = process.env.HYPERION_BROWSER_EXECUTABLE;
@@ -69,6 +77,28 @@ try {
   await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
   await page.getByText("Freighter", { exact: true }).waitFor();
   await page.getByText("Albedo", { exact: true }).waitFor();
+  const checkpoint = {
+    router,
+    account: "GDXRQQETEZHGRJTE3U7DYGIWGGYGMM6EAS5NWGPGN2WXFXZYZ6QZIANA",
+    recipient: "0x1111111111111111111111111111111111111111",
+    destination: "sepolia",
+    route: 1,
+    bridgeAmount: "1000000",
+    stage: "bridge",
+    txHash: "a".repeat(64),
+  };
+  await page.evaluate((value) => {
+    localStorage.setItem("hyperion.testnet.pending-transfer", JSON.stringify(value));
+  }, checkpoint);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+  await page.getByText(`This recoverable operation belongs to ${checkpoint.account}.`).waitFor();
+  assert.deepEqual(
+    await page.evaluate(() => JSON.parse(localStorage.getItem("hyperion.testnet.pending-transfer"))),
+    checkpoint,
+  );
+  await page.evaluate(() => localStorage.removeItem("hyperion.testnet.pending-transfer"));
+  await page.reload({ waitUntil: "networkidle" });
   for (const route of ["/", "/transfers"]) {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}${route}`, { waitUntil: "networkidle" });
