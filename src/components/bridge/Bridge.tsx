@@ -386,14 +386,20 @@ function PendingTransferCard({
       if (action && !action.disabled) action.focus();
       else recoveryMessageRef.current?.focus();
     };
-    const frame = requestAnimationFrame(focus);
+    let frame = requestAnimationFrame(focus);
+    const requestFocus = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(focus);
+    };
     const onHashChange = () => {
-      if (window.location.hash === "#pending-recovery") focus();
+      if (window.location.hash === "#pending-recovery") requestFocus();
     };
     window.addEventListener("hashchange", onHashChange);
+    window.addEventListener("hyperion:recovery-focus", requestFocus);
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener("hashchange", onHashChange);
+      window.removeEventListener("hyperion:recovery-focus", requestFocus);
     };
   }, [busy, checking, checkpoint.txHash]);
   const recoveryOwner = JSON.stringify([checkpoint, wallet.address]);
