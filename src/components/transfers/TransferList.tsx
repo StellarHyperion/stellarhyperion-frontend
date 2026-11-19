@@ -4,7 +4,13 @@ import Link from "next/link";
 import { type ReactElement } from "react";
 import { ExternalLink } from "lucide-react";
 import { getRouteName, type FormattedTransfer, type TransferLifecycleStage } from "../../api";
-import { formatTokenAmount, getExplorerUrl, shortenAddress, shortenTxHash } from "../../lib/format";
+import {
+  formatTokenAmount,
+  formatTokenIdentity,
+  getExplorerUrl,
+  shortenAddress,
+  shortenTxHash,
+} from "../../lib/format";
 import { getEvidenceAwareStage, hasVerifiedDestinationEvidence } from "../../lib/evidence";
 import { EvidenceTimeline } from "./EvidenceTimeline";
 import styles from "./TransferList.module.css";
@@ -88,6 +94,21 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
             <div className={styles.legBlock}>
               <span className={styles.legLabel}>destination</span>
               <span className={styles.chainName}>{t.destination.chain}</span>
+              <span
+                className={styles.addressMono}
+                title={formatTokenIdentity(
+                  t.destination.token,
+                  t.destination.symbol,
+                  t.destination.decimals,
+                )}
+              >
+                token:{" "}
+                {formatTokenIdentity(
+                  t.destination.token,
+                  t.destination.symbol,
+                  t.destination.decimals,
+                )}
+              </span>
               <span className={styles.addressMono}>
                 <span>to {shortenAddress(t.destination.recipient)}</span>
                 <a

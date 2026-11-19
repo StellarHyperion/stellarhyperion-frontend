@@ -142,6 +142,7 @@ const ownershipKey = "hyperion.testnet.operation-ownership";
 const ownershipEvent = "hyperion:operation-ownership";
 
 let memoryOwnership: string | null = null;
+const OWNERSHIP_TTL_MS = 15 * 60 * 1000;
 
 export function parseOwnership(raw: string | null): OperationOwnership | null {
   if (!raw) return null;
@@ -213,6 +214,16 @@ export function claimOperationOwnership(
     timestamp: ownership.timestamp ?? Date.now(),
   };
   const serialized = JSON.stringify(record);
+  const storedOwnership =
+    typeof localStorage !== "undefined" && typeof localStorage.getItem === "function"
+      ? localStorage.getItem(ownershipKey)
+      : memoryOwnership;
+  const current = parseOwnership(storedOwnership);
+  if (current && current.id !== record.id && Date.now() - current.timestamp < OWNERSHIP_TTL_MS) {
+    throw new Error(
+      `Another tab owns this transfer (checkpoint ${current.id}). Finish or recover it before trying again.`,
+    );
+  }
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.setItem(ownershipKey, serialized);

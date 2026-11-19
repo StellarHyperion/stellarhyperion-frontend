@@ -5,7 +5,7 @@ import { Column } from "../../../components/chrome";
 import { fetchTransferByTx, getRouteName, type FormattedTransfer } from "../../../api";
 import { readTransaction, errorMessage, type TransactionResult } from "../../../contracts";
 import { STELLAR_DEPLOYMENT } from "../../../config/testnet";
-import { formatTokenAmount, getExplorerUrl } from "../../../lib/format";
+import { formatTokenAmount, formatTokenIdentity, getExplorerUrl } from "../../../lib/format";
 import { hasVerifiedDestinationEvidence } from "../../../lib/evidence";
 import { EvidenceTimeline } from "../../../components/transfers/EvidenceTimeline";
 import { ActivityRequestGuard } from "../../../lib/activity-request";
@@ -100,6 +100,14 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
           <p>
             Sent from {record.origin.chain} to {record.destination.chain}
           </p>
+          <p style={{ overflowWrap: "anywhere" }}>
+            Destination token:{" "}
+            {formatTokenIdentity(
+              record.destination.token,
+              record.destination.symbol,
+              record.destination.decimals,
+            )}
+          </p>
           <p>
             Bridged before relay fees:{" "}
             {formatTokenAmount(record.origin.netAmount, record.origin.decimals)}{" "}
@@ -109,8 +117,10 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
           </p>
           {hasVerifiedDestinationEvidence(record) && record.destination.amount && (
             <p>
-              Received: {formatTokenAmount(record.destination.amount, record.destination.decimals)}{" "}
-              {record.destination.symbol ?? ""}.
+              Actual received:{" "}
+              {formatTokenAmount(record.destination.amount, record.destination.decimals)}{" "}
+              {record.destination.symbol ?? "token"}. The source net and quote minimum are separate
+              values.
             </p>
           )}
           <p style={{ overflowWrap: "anywhere" }}>Recipient: {record.destination.recipient}</p>

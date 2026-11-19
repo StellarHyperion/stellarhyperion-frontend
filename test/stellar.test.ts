@@ -3,6 +3,7 @@ import {
   claimOperationOwnership,
   getOperationOwnership,
   releaseOperationOwnership,
+  parseCheckpoint,
   saveCheckpoint,
   type TransferCheckpoint,
 } from "../src/contracts/checkpoint";
@@ -332,19 +333,62 @@ describe("Real Stellar transaction encoding", () => {
       });
       expect(getOperationOwnership()?.id).toBe(op1.id);
 
-      const op2 = claimOperationOwnership({
+      expect(() =>
+        claimOperationOwnership({
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "2000000",
+          stage: "bridge",
+        }),
+      ).toThrow("Another tab owns this transfer");
+      expect(getOperationOwnership()?.id).toBe(op1.id);
+
+      releaseOperationOwnership(op1.id);
+      expect(getOperationOwnership()).toBeNull();
+    });
+
+    it("rejects a second live tab from replacing the unresolved owner", () => {
+      const first = claimOperationOwnership({
         account: TESTNET.reader,
         recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
         destination: "sepolia",
         route: 1,
-        bridgeAmount: "2000000",
+        bridgeAmount: "1000000",
         stage: "bridge",
+        id: "tab-a",
       });
-      expect(getOperationOwnership()?.id).toBe(op2.id);
-      expect(getOperationOwnership()?.id).not.toBe(op1.id);
+      expect(() =>
+        claimOperationOwnership({
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "2000000",
+          stage: "bridge",
+          id: "tab-b",
+        }),
+      ).toThrow("Another tab owns this transfer");
+      expect(getOperationOwnership()?.id).toBe(first.id);
+      releaseOperationOwnership(first.id);
+    });
 
-      releaseOperationOwnership(op2.id);
-      expect(getOperationOwnership()).toBeNull();
+    it("accepts the browser harness checkpoint", () => {
+      expect(
+        parseCheckpoint(
+          JSON.stringify({
+            router: TESTNET.router,
+            account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+            recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            destination: "sepolia",
+            route: 1,
+            bridgeAmount: "10000000",
+            stage: "bridge",
+            txHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          }),
+        ),
+      ).not.toBeNull();
     });
 
     it("diagnoses matching sequence between constructed intent and ledger state", () => {

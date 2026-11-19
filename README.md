@@ -46,6 +46,8 @@ Hyperion charges 30 basis points (0.3%) on the bridged USDC amount. The source t
 
 Claim recovery reads `get_claim` and signs `settle_claim` on the Stellar router. It pays the recorded recipient. A claim exists only when a destination router has parked funds for recovery; completed transfers have no claim number. Activity displays genuine claim numbers and settlement status, while transfer details explain when no claim exists. A delayed outbound transfer does not automatically become a Stellar claim.
 
+Transfer history keeps destination token identity, precision and the actual paid amount separate from the source net amount and quote minimum. If an indexer record omits token metadata, the UI shows base units and the raw token address rather than guessing a symbol or decimal precision. Claim approval performs a final on-chain refresh immediately before building the wallet request; settled or changed claims remain visible but cannot be signed. A live operation lock prevents a second browser tab from replacing an unresolved signing intent. Run `npm run test:browser:faults` with a local server to exercise checkpoint recovery after closing one tab.
+
 ## Deploy
 
 The production alias is [stellarhyperion.vercel.app](https://stellarhyperion.vercel.app/), attached to the Vercel project `hyperion`. Set `NEXT_PUBLIC_HYPERION_API_URL=https://stellarhyperion-backend.vercel.app` in its production environment, then deploy from this repository with `vercel deploy --prod`. The app requires a Next.js server for its live bridge-fee API routes.

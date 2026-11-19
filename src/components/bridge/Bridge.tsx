@@ -1530,6 +1530,20 @@ export function ClaimRecovery() {
     setBusy(true);
     setError(null);
     try {
+      const refreshed = (await getClaims([claim.id]))[0];
+      if (!refreshed) throw new Error("The claim could not be refreshed. Review it again.");
+      setClaims((current) => current.map((item) => (item.id === claim.id ? refreshed : item)));
+      if (
+        refreshed.settled ||
+        refreshed.recipient !== claim.recipient ||
+        refreshed.token !== claim.token ||
+        refreshed.amount !== claim.amount ||
+        refreshed.deployment.wasmHash !== claim.deployment.wasmHash
+      ) {
+        throw new Error(
+          "The claim changed while it was open. Review the refreshed claim before signing.",
+        );
+      }
       const transaction = await submitSettleClaim(
         wallet.address,
         claim.id,
@@ -1643,6 +1657,7 @@ export function ClaimRecovery() {
                     <p className={styles.address}>Router WASM: {claim.deployment.wasmHash}</p>
                     {(claims.length === 1 || batchSupported === false) &&
                       !claim.settled &&
+                      claim.eligibility.status !== "unknown" &&
                       claimApproval && (
                         <>
                           <ApprovalDetails approval={claimApproval} />

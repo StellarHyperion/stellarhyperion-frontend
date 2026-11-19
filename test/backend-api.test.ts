@@ -8,6 +8,7 @@ import {
   type FormattedTransfer,
 } from "../src/api/backend";
 import { getEvidenceTimeline, hasVerifiedDestinationEvidence } from "../src/lib/evidence";
+import { formatTokenAmount, formatTokenIdentity } from "../src/lib/format";
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -70,6 +71,29 @@ describe("Real indexer client", () => {
     };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))));
     expect((await fetchTransfers()).coverage).toEqual(payload.coverage);
+  });
+
+  it("preserves destination token metadata and formats missing precision as base units", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const payload = {
+      transfers: [],
+      count: 0,
+      limit: 20,
+      offset: 0,
+      destination: {
+        token: "0x0000000000000000000000000000000000000001",
+        symbol: "USDC",
+        decimals: 6,
+        amount: "1234567",
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))));
+    const result = await fetchTransfers();
+    expect(result).toEqual(payload);
+    expect(formatTokenAmount("1234567", 6)).toBe("1.234567");
+    expect(formatTokenIdentity(payload.destination.token, payload.destination.symbol, null)).toBe(
+      "USDC · base units · 0x0000000000000000000000000000000000000001",
+    );
   });
 
   it("reads indexer cursors for freshness without conflating metrics failure with empty history", async () => {

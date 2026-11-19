@@ -96,3 +96,18 @@ export function formatTokenAmount(value: string, decimals?: number | null): stri
     ? `${value} base units`
     : formatUnits(BigInt(value), decimals);
 }
+
+export function formatTokenIdentity(
+  token: string | null | undefined,
+  symbol: string | null | undefined,
+  decimals: number | null | undefined,
+): string {
+  const trimmedSymbol = symbol?.trim();
+  const trimmedAddress = token?.trim();
+  const name = trimmedSymbol && trimmedSymbol.length > 0 ? trimmedSymbol : "Unknown token";
+  const address =
+    trimmedAddress && trimmedAddress.length > 0 ? trimmedAddress : "address unavailable";
+  const precision =
+    decimals === null || decimals === undefined ? "base units" : `${decimals} decimals`;
+  return `${name} · ${precision} · ${address}`;
+}
