@@ -41,9 +41,17 @@ const quote: LiveQuote = {
   fee: 30000n,
   netAmount: 9970009n,
   destinationAmount: 9970009n,
+  representableAmount: 9970009n,
   flowAvailable: 10000000000n,
   ledger: 1,
   relayGas: 1051082n,
+  observedAt: "2026-11-18T20:00:00.000Z",
+  scope: {
+    destination: "sepolia",
+    route: 1,
+    adapter: TESTNET.router,
+    ledger: 1,
+  },
 };
 afterEach(() => vi.unstubAllGlobals());
 describe("Real Stellar transaction encoding", () => {
