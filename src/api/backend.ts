@@ -238,14 +238,20 @@ export interface ReconciliationResult {
 }
 
 /** Reconcile a bounded set without replacing locally known hashes when the API has no record. */
-export async function reconcileTransfers(hashes: readonly string[]): Promise<ReconciliationResult[]> {
+export async function reconcileTransfers(
+  hashes: readonly string[],
+): Promise<ReconciliationResult[]> {
   const unique = [...new Set(hashes)].filter((hash) => /^[0-9a-f]{64}$/i.test(hash)).slice(0, 20);
   return await Promise.all(
     unique.map(async (hash) => {
       try {
         return { hash, transfer: await fetchTransferByTx(hash), error: null };
       } catch (cause) {
-        return { hash, transfer: null, error: cause instanceof Error ? cause.message : "Lookup failed." };
+        return {
+          hash,
+          transfer: null,
+          error: cause instanceof Error ? cause.message : "Lookup failed.",
+        };
       }
     }),
   );
