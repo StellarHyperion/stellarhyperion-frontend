@@ -7,6 +7,7 @@ export type CheckpointSource = Pick<SourceAsset, "id" | "code" | "issuer">;
 
 export interface TransferCheckpoint {
   router: string;
+  token?: string;
   account: string;
   recipient: string;
   destination: DestinationKey;
@@ -19,6 +20,58 @@ export interface TransferCheckpoint {
 }
 const key = "hyperion.testnet.pending-transfer";
 const event = "hyperion:pending-transfer";
+let probeGeneration = 0;
+export interface CheckpointStorageDiagnostics {
+  readonly available: boolean;
+  readonly persistent: boolean | null;
+  readonly kind: "transaction-recovery";
+  readonly reason: string | null;
+}
+
+export function inspectCheckpointStorage(
+  storage: Pick<Storage, "getItem" | "setItem" | "removeItem">,
+): CheckpointStorageDiagnostics {
+  const probeKey = `${key}.probe.${Date.now()}.${++probeGeneration}.${Math.random().toString(36).slice(2)}`;
+  try {
+    storage.setItem(probeKey, "ok");
+    const retained = storage.getItem(probeKey) === "ok";
+    storage.removeItem(probeKey);
+    return {
+      available: retained,
+      persistent: retained ? null : false,
+      kind: "transaction-recovery",
+      reason: retained ? null : "The browser did not retain the recovery probe.",
+    };
+  } catch {
+    return {
+      available: false,
+      persistent: false,
+      kind: "transaction-recovery",
+      reason: "Browser recovery storage is blocked or full.",
+    };
+  } finally {
+    try {
+      storage.removeItem(probeKey);
+    } catch {
+      /* Storage failure is reported above. */
+    }
+  }
+}
+
+export function assertCheckpointStorage(): void {
+  if (typeof window === "undefined")
+    throw new Error("Transaction recovery storage is unavailable.");
+  let diagnostics: CheckpointStorageDiagnostics;
+  try {
+    diagnostics = inspectCheckpointStorage(window.localStorage);
+  } catch {
+    throw new Error(
+      "Browser recovery storage is blocked. No transaction will be signed or broadcast.",
+    );
+  }
+  if (!diagnostics.available)
+    throw new Error(`${diagnostics.reason} No transaction will be signed or broadcast.`);
+}
 let memoryCheckpoint: string | null = null;
 let checkpointPersistenceFailed = false;
 function snapshot(): string | null {
@@ -63,6 +116,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
   try {
     const value = JSON.parse(raw) as {
       router: string;
+      token?: string;
       account: string;
       recipient: string;
       destination: string;
@@ -74,6 +128,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     };
     if (
       value.router !== TESTNET.router ||
+      (value.token !== undefined && value.token !== TESTNET.token) ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
       !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||
       /^0x0{40}$/.test(value.recipient) ||
@@ -88,6 +143,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     destinationFor(value.destination);
     return {
       ...value,
+      token: TESTNET.token,
       destination: destinationFor(value.destination).key,
       route: value.route,
       stage: value.stage,
@@ -127,8 +183,25 @@ export function checkpointForAsset(
   if (checkpoint?.source.id !== asset.id) return null;
   return checkpoint;
 }
-export function saveCheckpoint(value: TransferCheckpoint | null) {
+export function getTransferCheckpoint(): TransferCheckpoint | null {
+  return parseCheckpoint(snapshot());
+}
+export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
+  return JSON.stringify([
+    checkpoint.router,
+    checkpoint.account,
+    checkpoint.recipient,
+    checkpoint.destination,
+    checkpoint.route,
+    checkpoint.bridgeAmount,
+    checkpoint.stage,
+    checkpoint.txHash,
+  ]);
+}
+export function saveCheckpoint(value: TransferCheckpoint | null, expected?: TransferCheckpoint) {
   const existing = parseCheckpoint(snapshot());
+  if (expected && (!existing || checkpointIdentity(existing) !== checkpointIdentity(expected)))
+    throw new Error("The pending transaction changed in another tab. Check its current outcome.");
   if (
     value &&
     existing &&
@@ -148,9 +221,19 @@ export function saveCheckpoint(value: TransferCheckpoint | null) {
     );
   if (value) memoryCheckpoint = JSON.stringify(value);
   try {
+    if (typeof window !== "undefined" && typeof localStorage === "undefined")
+      throw new Error("Transaction recovery storage is unavailable.");
     if (typeof localStorage !== "undefined") {
-      if (value) localStorage.setItem(key, JSON.stringify(value));
-      else localStorage.removeItem(key);
+      if (value) {
+        const serialized = JSON.stringify(value);
+        localStorage.setItem(key, serialized);
+        if (localStorage.getItem(key) !== serialized)
+          throw new Error("Recovery checkpoint did not persist.");
+      } else {
+        localStorage.removeItem(key);
+        if (localStorage.getItem(key) !== null)
+          throw new Error("Recovery checkpoint was not removed.");
+      }
     }
     checkpointPersistenceFailed = false;
   } catch {
