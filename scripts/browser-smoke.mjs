@@ -120,7 +120,35 @@ try {
   }, router);
   await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
   await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
+  await page
+    .getByText(
+      "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer.",
+    )
+    .waitFor();
   await page.getByRole("button", { name: "Check status" }).waitFor();
+  const checkpointBeforeNavigation = await page.evaluate(() =>
+    localStorage.getItem("hyperion.testnet.pending-transfer"),
+  );
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
+    checkpointBeforeNavigation,
+  );
+  assert.equal(
+    await page.getByRole("link", { name: "Recovery" }).getAttribute("href"),
+    "/#pending-recovery",
+  );
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
+  await page.getByRole("link", { name: "Activity" }).click();
+  await page.getByRole("heading", { name: "Transfer history" }).waitFor();
+  await page.getByRole("link", { name: "Recovery" }).click();
+  await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
+    checkpointBeforeNavigation,
+  );
   await page.evaluate(() => {
     localStorage.removeItem("hyperion.testnet.pending-transfer");
     window.dispatchEvent(new Event("hyperion:pending-transfer"));
