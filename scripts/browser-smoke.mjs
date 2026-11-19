@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { chromium, firefox } from "@playwright/test";
 
 // Run a local Next server first. This smoke check performs reads only and never signs.
@@ -7,6 +8,11 @@ const engine = process.env.HYPERION_BROWSER ?? "chromium";
 if (engine !== "chromium" && engine !== "firefox")
   throw new Error("Choose chromium or firefox for HYPERION_BROWSER.");
 const executablePath = process.env.HYPERION_BROWSER_EXECUTABLE;
+const deployment = JSON.parse(
+  await readFile(new URL("../src/config/testnet-deployment.json", import.meta.url), "utf8"),
+);
+const router =
+  process.env.NEXT_PUBLIC_STELLAR_ROUTER?.trim() || deployment.networks["stellar-testnet"].router;
 const browser = await { chromium, firefox }[engine].launch(
   executablePath ? { executablePath } : {},
 );
@@ -51,11 +57,11 @@ try {
   await page.getByText("Freighter", { exact: true }).waitFor();
   await page.getByText("Albedo", { exact: true }).waitFor();
   await page.keyboard.press("Escape");
-  await page.evaluate(() => {
+  await page.evaluate((router) => {
     localStorage.setItem(
       "hyperion.testnet.pending-transfer",
       JSON.stringify({
-        router: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        router,
         account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
         recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
         destination: "sepolia",
@@ -66,7 +72,7 @@ try {
       }),
     );
     window.dispatchEvent(new Event("hyperion:pending-transfer"));
-  });
+  }, router);
   await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
   await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
   await page.getByRole("button", { name: "Check status" }).waitFor();
