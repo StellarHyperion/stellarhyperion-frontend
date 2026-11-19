@@ -18,6 +18,7 @@ const checkpoint: TransferCheckpoint = {
   bridgeAmount: "9007199254740993123456789",
   stage: "bridge",
   txHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
 };
 
 function createStorage() {

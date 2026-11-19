@@ -509,6 +509,7 @@ describe("Real Stellar transaction encoding", () => {
           bridgeAmount: "1000000",
           stage: "bridge",
           txHash: "a".repeat(64),
+          source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
         };
         saveCheckpoint(null);
         vi.stubGlobal("window", {});
