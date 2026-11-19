@@ -5,6 +5,7 @@ import { Column } from "../../../components/chrome";
 import { fetchTransferByTx, getRouteName, type FormattedTransfer } from "../../../api";
 import { readTransaction, errorMessage, type TransactionResult } from "../../../contracts";
 import { formatTokenAmount, getExplorerUrl } from "../../../lib/format";
+import { deliveryProofState } from "../../../lib/proof-state";
 import styles from "./page.module.css";
 export default function TransferDetailPage({ params }: { params: Promise<{ txHash: string }> }) {
   const { txHash } = use(params);
@@ -88,6 +89,7 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
         <section className={styles.legPanel} aria-label="Indexed transfer status">
           <h2>{getRouteName(record.route)}</h2>
           <p role="status">Status: {record.stage}</p>
+          <p role="status">Delivery proof: {deliveryProofState(record, origin)}</p>
           <p>
             Sent from {record.origin.chain} to {record.destination.chain}
           </p>

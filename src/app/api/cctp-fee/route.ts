@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { destinationFor } from "../../../config/testnet";
 import { relayBudget } from "../../../lib/relay-budget";
+import { selectFinalizedCctpFee } from "../../../lib/cctp-fee";
 
 export async function GET(request: Request) {
   let domain: number;
@@ -17,27 +18,13 @@ export async function GET(request: Request) {
         cache: "no-store",
       },
     );
-    const body: unknown = await response.json();
-    if (!response.ok || !Array.isArray(body)) throw new Error("Invalid Circle fee response.");
-    const fee = body.find(
-      (
-        item: unknown,
-      ): item is { finalityThreshold: number; minimumFee: number; forwardFee: { med: number } } => {
-        if (!item || typeof item !== "object") return false;
-        const entry = item as Record<string, unknown>;
-        return (
-          entry.finalityThreshold === 2000 &&
-          entry.minimumFee === 0 &&
-          typeof entry.forwardFee === "object"
-        );
-      },
-    );
-    if (!fee || !Number.isSafeInteger(fee.forwardFee.med) || fee.forwardFee.med <= 0)
-      throw new Error("No finalized forwarding estimate.");
+    const fee = selectFinalizedCctpFee(await response.json());
+    if (!response.ok || fee === null)
+      throw new Error("No unambiguous finalized forwarding estimate.");
     return NextResponse.json(
       {
-        amount: String(relayBudget(BigInt(fee.forwardFee.med)) * 10n),
-        estimatedAmount: String(BigInt(fee.forwardFee.med) * 10n),
+        amount: String(relayBudget(fee.amount) * 10n),
+        estimatedAmount: String(fee.amount * 10n),
         token: "USDC",
         decimals: 7,
         finality: 2000,
