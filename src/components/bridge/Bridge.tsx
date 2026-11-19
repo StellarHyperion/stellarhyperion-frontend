@@ -28,6 +28,8 @@ import {
   batchClaimSettlementSupport,
   getClaims,
   quoteTransfer,
+  TRANSACTION_TIMEOUT_SECONDS,
+  quoteFreshness,
   readLane,
   readTransaction,
   simulateBridgeOut,
@@ -69,6 +71,7 @@ import {
   getOperationOwnership,
   releaseOperationOwnership,
   saveCheckpoint,
+  assertCheckpointStorage,
   useTransferCheckpoint,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
@@ -200,6 +203,16 @@ function QuoteDetails({
   const networkFee = simulation?.networkFee;
   const breakdown = quoteBreakdown(quote);
 
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+  const freshness = quoteFreshness(quote, now);
   return (
     <dl className={styles.summary}>
       <div>
@@ -257,6 +270,30 @@ function QuoteDetails({
         <dd>
           {formatUnits(quote.destinationAmount, destinationDecimals(quote.route))}{" "}
           {receiveSymbol(quote.route)}
+        </dd>
+      </div>
+      <div>
+        <dt>Provider observation</dt>
+        <dd>
+          {freshness === "current" ? "Current" : freshness === "stale" ? "Stale" : "Unknown"} ·{" "}
+          {quote.observedAt ? new Date(quote.observedAt).toLocaleString() : "Not observed"}
+        </dd>
+      </div>
+      <div>
+        <dt>Contract observation</dt>
+        <dd>
+          {quote.observations?.contractAt
+            ? new Date(quote.observations.contractAt).toLocaleString()
+            : "Not observed"}{" "}
+          · ledger {quote.ledger}
+        </dd>
+      </div>
+      <div>
+        <dt>Quote scope</dt>
+        <dd>
+          {quote.destination} · {quote.route === 0 ? "Circle CCTP" : "Axelar ITS"} · {quote.adapter}{" "}
+          · ledger {quote.ledger}
+          <span> · Stellar Testnet</span>
         </dd>
       </div>
     </dl>
@@ -380,6 +417,12 @@ function PendingTransferCard({
   const continueBridge = async () => {
     if (!review || !sameAccount || checking || cardSimulating || !!cardSimError || !cardSimulation)
       return;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setChecking(true);
     setError(null);
     try {
@@ -416,16 +459,18 @@ function PendingTransferCard({
             : checkpoint.stage === "conversion"
               ? current?.status === "confirmed"
                 ? "Conversion confirmed"
-                : "Conversion submitted"
+                : "Conversion source status unknown"
               : current?.status === "confirmed"
                 ? "Transfer confirmed on Stellar"
-                : "Transfer submitted"}
+                : "Transfer source status unknown"}
         </h2>
       </div>
       <p>
         {checkpoint.stage === "conversion"
           ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
-          : "Follow destination delivery in your transfer activity. A Stellar confirmation starts the bridge journey."}
+          : current?.status === "confirmed"
+            ? "The source transaction is confirmed. Follow destination delivery separately in transfer activity."
+            : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
       <a
         className={styles.transactionLink}
@@ -864,6 +909,12 @@ export function Bridge() {
       return;
     }
     const reviewedQuote = reviewed.quote;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setReviewing(false);
     const controller = new AbortController();
     waitController.current?.abort();
@@ -1300,6 +1351,14 @@ export function Bridge() {
         {quote?.conversion && needsTrustline && reserveError && (
           <p className={styles.error}>{reserveError}</p>
         )}
+        {result?.failure && (
+          <p role="status" className={styles.assetNote}>
+            {result.failure.stage === "broadcast"
+              ? "The source broadcast outcome is unknown."
+              : "Source confirmation is temporarily unavailable."}{" "}
+            Check the saved source hash before approving another transaction.
+          </p>
+        )}
         {busy && (
           <p role="status" className={styles.progress}>
             <LoaderCircle className={styles.spinner} size={16} aria-hidden="true" />
@@ -1520,7 +1579,15 @@ export function Bridge() {
             </p>
           )}
           <p className={styles.reviewNote}>
+            Recovery saves source hashes in this browser. Private sessions and browser cleanup can
+            remove them; keep a copy of the signed source hash before leaving.
+          </p>
+          <p className={styles.reviewNote}>
             Source confirmation starts the transfer. Destination delivery is verified separately.
+          </p>
+          <p className={styles.reviewNote}>
+            The signed transaction expires after {TRANSACTION_TIMEOUT_SECONDS} seconds. Expired
+            signatures are never broadcast; review again to create a fresh envelope.
           </p>
           {reviewed.simulation && (
             <p className={styles.address}>
