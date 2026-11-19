@@ -11,11 +11,22 @@ import {
   type xdr,
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
-import { submitSettleClaim, submitOperation, simulateOperation } from "../src/contracts/stellar";
+import {
+  classifySubmissionFailure,
+  SubmissionFailure,
+  quoteFreshness,
+  quoteBreakdown,
+  type LiveQuote,
+  submitSettleClaim,
+  submitOperation,
+  simulateOperation,
+} from "../src/contracts/stellar";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
+
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
+import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
 import {
   planMaxUsdcAmount,
   planMaxSourceAmount,
@@ -75,6 +86,194 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
+    const checkpointKey = "hyperion.testnet.pending-transfer";
+    const values = new Map<string, string>([[checkpointKey, "existing signed hash"]]);
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+      removeItem: (key: string) => void values.delete(key),
+    };
+    expect(inspectCheckpointStorage(storage)).toMatchObject({
+      available: true,
+      persistent: null,
+      kind: "transaction-recovery",
+      reason: null,
+    });
+    expect([...values]).toEqual([[checkpointKey, "existing signed hash"]]);
+    const blocked = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("quota");
+      },
+      removeItem: () => undefined,
+    };
+    expect(inspectCheckpointStorage(blocked)).toMatchObject({
+      available: false,
+      persistent: false,
+      kind: "transaction-recovery",
+    });
+  });
+  it("rejects a store that silently drops writes before an approval can rely on it", () => {
+    expect(
+      inspectCheckpointStorage({
+        getItem: () => null,
+        setItem: () => undefined,
+        removeItem: () => undefined,
+      }),
+    ).toMatchObject({
+      available: false,
+      persistent: false,
+      reason: "The browser did not retain the recovery probe.",
+    });
+  });
+  it("classifies bounded pre-broadcast failures without attaching a fake hash", () => {
+    const failure = classifySubmissionFailure("approval", new Error("declined\nsecret details"));
+    expect(failure).toBeInstanceOf(SubmissionFailure);
+    expect(failure.stage).toBe("approval");
+    expect(failure.message).toBe("declined");
+    expect(failure.txHash).toBeUndefined();
+  });
+  it("labels provider observations by freshness without implying delivery", () => {
+    const observedAt = "2026-11-18T20:00:00.000Z";
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:29.000Z"))).toBe("current");
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:31.000Z"))).toBe("stale");
+    expect(quoteFreshness({ observedAt: "not-a-date" })).toBe("unknown");
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T19:59:59.000Z"))).toBe("unknown");
+  });
+  it("recovers the exact precision dust a CCTP route's six-decimal destination truncates", () => {
+    // 7-decimal Stellar USDC minus the fee leaves 9,969,995 base units -- not a multiple of
+    // the 10-unit quantum that six-decimal Circle USDC can represent, so the trailing 5 base
+    // units (0.0000005 USDC) stay in the source account and are never debited or bridged.
+    const value: LiveQuote = {
+      route: 0,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000000n,
+      grossAmount: 9999995n,
+      fee: 30005n,
+      netAmount: 9969990n,
+      representableAmount: 996999n,
+      destinationAmount: 946999n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 500000n,
+    };
+    expect(quoteBreakdown(value)).toEqual({
+      requestedSourceAmount: 10000000n,
+      actualSourceDebit: 9999995n,
+      protocolFee: 30005n,
+      representableBridgeAmount: 9969990n,
+      retainedDust: 5n,
+    });
+  });
+  it("retains no dust on Axelar ITS, whose seven-decimal destination matches Stellar exactly", () => {
+    const value: LiveQuote = {
+      route: 1,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000009n,
+      grossAmount: 10000009n,
+      fee: 30000n,
+      netAmount: 9970009n,
+      representableAmount: 9970009n,
+      destinationAmount: 9970009n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 1051082n,
+    };
+    expect(quoteBreakdown(value)).toEqual({
+      requestedSourceAmount: 10000009n,
+      actualSourceDebit: 10000009n,
+      protocolFee: 30000n,
+      representableBridgeAmount: 9970009n,
+      retainedDust: 0n,
+    });
+  });
+
+  it("never broadcasts a valid signature returned after its envelope deadline", async () => {
+    const { send } = setup();
+    const approval = vi.fn(async (envelope: string) => {
+      const signed = await sign(envelope);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 181000);
+      return signed;
+    });
+    const progress = vi.fn();
+    await expect(
+      submitOperation(
+        TESTNET.reader,
+        new Contract(TESTNET.router).call("noop"),
+        approval,
+        progress,
+      ),
+    ).rejects.toThrow(/expired before broadcast/);
+    expect(approval).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
+    expect(progress.mock.calls.some((call) => call[0] === "submitting")).toBe(false);
+  });
+  it("rejects a quote whose gross debit includes retained dust or whose payout floors to zero", () => {
+    const value: LiveQuote = {
+      route: 0,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000000n,
+      grossAmount: 9999995n,
+      fee: 30005n,
+      netAmount: 9969990n,
+      representableAmount: 996999n,
+      destinationAmount: 946999n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 500000n,
+    };
+    expect(() => quoteBreakdown({ ...value, grossAmount: value.requestedAmount })).toThrow(
+      /conserve/,
+    );
+    expect(() => quoteBreakdown({ ...value, destinationAmount: 0n })).toThrow(/conserve/);
+    expect(() => quoteBreakdown({ ...value, netAmount: 0n, representableAmount: 0n })).toThrow(
+      /conserve/,
+    );
+  });
+
+  it("classifies simulation transport failure without wallet approval or broadcast", async () => {
+    const { simulation, send } = setup();
+    simulation.mockReset().mockRejectedValue(new Error("Provider unavailable"));
+    const approve = vi.fn();
+    await expect(
+      submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), approve),
+    ).rejects.toMatchObject({ stage: "simulation", txHash: undefined });
+    expect(approve).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("blocks broadcast when required checkpoint persistence fails", async () => {
+    const { send } = setup();
+    const progress = (phase: string) => {
+      if (phase === "submitting") throw new Error("Recovery storage is unavailable");
+    };
+    await expect(
+      submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), sign, progress),
+    ).rejects.toMatchObject({ stage: "checkpoint", txHash: undefined });
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("retains the actual signed hash and broadcast stage for an uncertain network send", async () => {
+    const { send } = setup();
+    send.mockRejectedValueOnce(new Error("Provider timed out"));
+    const result = await submitOperation(
+      TESTNET.reader,
+      new Contract(TESTNET.router).call("noop"),
+      sign,
+    );
+    expect(result.status).toBe("pending");
+    expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.failure).toMatchObject({ stage: "broadcast", txHash: result.txHash });
+  });
+  it("keeps classification bounded and strips hashes from pre-broadcast stages", () => {
+    expect(
+      classifySubmissionFailure("build", new Error("x".repeat(1000)), "a".repeat(64)),
+    ).toMatchObject({ stage: "build", message: "x".repeat(400), txHash: undefined });
+    expect(classifySubmissionFailure("broadcast", "timeout", "fake").txHash).toBeUndefined();
+  });
+
   it("never asks the wallet or submits when simulation fails", async () => {
     const { simulation, send } = setup();
     simulation.mockResolvedValueOnce({
@@ -120,7 +319,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       return Promise.reject(new Error("timeout"));
     });
     const result = await submitSettleClaim(key.publicKey(), 1n, sign);
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
   });
   it("reports a known network rejection instead of source confirmation", async () => {
@@ -252,7 +455,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       undefined,
       sim,
     );
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(wallet).toHaveBeenCalledTimes(1);
     expect(submittedXdr).toBe(sim.envelopeXdr);
     expect(send).toHaveBeenCalledTimes(1);
