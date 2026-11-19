@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-let config: typeof import("../src/config/testnet");
+import type * as TestnetConfig from "../src/config/testnet";
+let config: typeof TestnetConfig;
 let values: Map<string, string>;
 beforeEach(async () => {
   vi.resetModules();
@@ -131,7 +132,9 @@ describe("deployment-aware asset metadata", () => {
       metadata: { stale: true },
     });
     expect(cached[0]).not.toHaveProperty("balance");
-    expect(issuerVerificationLabel(cached[0]!)).toContain("stale; verify before signing");
+    const first = cached[0];
+    if (!first) throw new Error("Missing cached asset.");
+    expect(issuerVerificationLabel(first)).toContain("stale; verify before signing");
     await expect(searchAssets("UNSEEN")).rejects.toThrow("offline");
   });
 });
