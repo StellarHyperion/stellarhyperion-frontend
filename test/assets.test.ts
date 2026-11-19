@@ -18,7 +18,6 @@ import {
   searchAssets,
   spendableBalance,
   stellarAsset,
-  submitConversion,
   suggestSourceSpend,
   USDC,
   XLM,
@@ -401,6 +400,15 @@ describe("Independently verified testnet bridge lanes", () => {
   });
 });
 describe("Trustline reserve and network fee disclosure", () => {
+  it("uses observed base reserve and liabilities, rejecting invalid reserve counters", () => {
+    const reserve = trustlineReservePreview(40000000n, 2, 1, 1, 6000000n, 10000000n);
+    expect(reserve.currentMinimumBalance).toBe(24000000n);
+    expect(reserve.availableAfterTrustline).toBe(0n);
+    expect(() => trustlineReservePreview(40000000n, Number.NaN)).toThrow(/Invalid/);
+    expect(() => trustlineReservePreview(40000000n, 2.5)).toThrow(/Invalid/);
+    expect(() => trustlineReservePreview(40000000n, 0, 0, 9)).toThrow(/Invalid/);
+  });
+
   it("reads the account reserve needed for an atomic trustline from real Horizon balances", async () => {
     // Horizon's account resource has no top-level `balance` field; the native balance lives in
     // `balances` alongside every other trustline, exactly like a real funded testnet account.
