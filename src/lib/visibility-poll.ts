@@ -1,37 +1,31 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createVisibilityPollBudget, type PollWork } from "./visibility-poll-budget";
 
 /** Run background work less often in hidden tabs and immediately refresh on return. */
 export function useVisibilityPoll(
-  callback: () => void,
+  callback: PollWork,
   visibleInterval: number,
   hiddenInterval = Math.max(visibleInterval * 6, 60_000),
+  scope = "",
+  initialDelay?: number,
 ) {
   const callbackRef = useRef(callback);
   callbackRef.current = callback;
+  const [refreshing, setRefreshing] = useState(false);
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let active = true;
-
-    const schedule = () => {
-      if (!active) return;
-      const interval = document.visibilityState === "hidden" ? hiddenInterval : visibleInterval;
-      timer = setTimeout(() => {
-        callbackRef.current();
-        schedule();
-      }, interval);
-    };
-    const refresh = () => {
-      if (document.visibilityState === "visible") callbackRef.current();
-      if (timer) clearTimeout(timer);
-      schedule();
-    };
-
-    schedule();
-    document.addEventListener("visibilitychange", refresh);
+    const budget = createVisibilityPollBudget({
+      callback: (signal) => callbackRef.current(signal),
+      visible: () => document.visibilityState === "visible",
+      visibleInterval,
+      hiddenInterval,
+      onRefreshing: setRefreshing,
+      ...(initialDelay === undefined ? {} : { initialDelay }),
+    });
+    document.addEventListener("visibilitychange", budget.visibilityChanged);
     return () => {
-      active = false;
-      if (timer) clearTimeout(timer);
-      document.removeEventListener("visibilitychange", refresh);
+      budget.stop();
+      document.removeEventListener("visibilitychange", budget.visibilityChanged);
     };
-  }, [hiddenInterval, visibleInterval]);
+  }, [hiddenInterval, visibleInterval, scope, initialDelay]);
+  return refreshing;
 }

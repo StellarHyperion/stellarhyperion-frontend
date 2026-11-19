@@ -13,56 +13,59 @@ import { useVisibilityPoll } from "../../../lib/visibility-poll";
 import styles from "./page.module.css";
 export default function TransferDetailPage({ params }: { params: Promise<{ txHash: string }> }) {
   const { txHash } = use(params);
+  return <TransferDetailContent key={txHash} txHash={txHash} />;
+}
+function TransferDetailContent({ txHash }: { txHash: string }) {
   const [record, setRecord] = useState<FormattedTransfer | null>(null);
   const [origin, setOrigin] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [indexerError, setIndexerError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [indexerFresh, setIndexerFresh] = useState(false);
   const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
     const guard = requestGuard.current;
     guard.setIdentity(txHash);
     guard.invalidate();
-    const load = async () => {
+    return () => guard.invalidate();
+  }, [txHash]);
+  const refreshing = useVisibilityPoll(
+    async (signal) => {
+      setIndexerFresh(false);
+      const guard = requestGuard.current;
       const token = guard.begin();
+      const current = () => !signal.aborted && guard.isCurrent(token);
       await Promise.allSettled([
-        readTransaction(txHash)
+        readTransaction(txHash, signal)
           .then((result) => {
-            if (guard.isCurrent(token)) {
+            if (current()) {
               setOrigin(result);
               setError(null);
             }
           })
           .catch((cause: unknown) => {
-            if (guard.isCurrent(token)) setError(errorMessage(cause));
+            if (current()) setError(errorMessage(cause));
           }),
-        fetchTransferByTx(txHash)
+        fetchTransferByTx(txHash, signal)
           .then((result) => {
-            if (guard.isCurrent(token)) {
+            if (current()) {
               setRecord(result);
               setIndexerError(null);
+              setIndexerFresh(true);
             }
           })
           .catch((cause: unknown) => {
-            if (guard.isCurrent(token)) setIndexerError(errorMessage(cause));
+            if (current()) setIndexerError(errorMessage(cause));
           }),
       ]);
-      if (guard.isCurrent(token)) setLoading(false);
-    };
-    void load();
-    return () => {
-      guard.invalidate();
-    };
-  }, [txHash]);
-  useVisibilityPoll(() => {
-    // The signed source hash remains in the URL and is never cleared while polling is paused.
-    void readTransaction(txHash)
-      .then(setOrigin)
-      .catch((cause: unknown) => setError(errorMessage(cause)));
-    void fetchTransferByTx(txHash)
-      .then(setRecord)
-      .catch((cause: unknown) => setIndexerError(errorMessage(cause)));
-  }, 5_000, 60_000);
+      if (current()) setLoading(false);
+    },
+    5_000,
+    60_000,
+    txHash,
+    0,
+  );
+
   return (
     <Column>
       <Link href="/transfers">Back to transfer history</Link>
@@ -70,7 +73,7 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
       <p className="mono" style={{ overflowWrap: "anywhere" }}>
         {txHash}
       </p>
-      {loading && <p role="status">Checking chain and indexer...</p>}
+      {(loading || refreshing) && <p role="status">Checking fresh chain and indexer status...</p>}
       {error && <p role="alert">{error}</p>}
       {origin && (
         <section className={styles.legPanel} aria-label="Stellar transaction status">
@@ -143,6 +146,9 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
                   : `Funds are parked on the ${record.destination.chain} router for the recorded recipient.`}
               </p>
               {!record.claim.settled &&
+                indexerFresh &&
+                !refreshing &&
+                !loading &&
                 (record.claim.deployment?.chain === STELLAR_DEPLOYMENT.chain &&
                 record.claim.deployment.router === STELLAR_DEPLOYMENT.router &&
                 record.claim.deployment.revision === STELLAR_DEPLOYMENT.wasmHash ? (

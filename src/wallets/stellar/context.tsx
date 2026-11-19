@@ -26,6 +26,8 @@ import {
   type PendingSigningRequest,
 } from "./sdk";
 import styles from "./WalletPicker.module.css";
+import { WalletConnectionRecovery } from "./WalletConnectionRecovery";
+import type { WalletConnectionGuidance } from "./sdk";
 
 import {
   walletAvailability,
@@ -49,7 +51,11 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [walletId, setWalletId] = useState<StellarWalletId | null>(null);
   const [isConnecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [errorAction, setErrorAction] = useState<string | null>(null);
+  const [connectionFailure, setConnectionFailure] = useState<{
+    wallet: StellarWalletId;
+    guidance: WalletConnectionGuidance;
+  } | null>(null);
+  const firstWallet = useRef<HTMLButtonElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [availability, setAvailability] = useState<
     Partial<Record<StellarWalletId, WalletAvailabilityStatus>>
@@ -132,7 +138,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     setAuthorizing(null);
     setConnecting(false);
     setError(null);
-    setErrorAction(null);
+    setConnectionFailure(null);
   }, []);
 
   const connect = useCallback(async () => {
@@ -144,7 +150,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     attempt.current++;
     setConnecting(true);
     setError(null);
-    setErrorAction(null);
+    setConnectionFailure(null);
     setAvailability({});
     setPickerOpen(true);
     return await new Promise<string | null>((resolve) => {
@@ -157,6 +163,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     const version = attempt.current;
     setAuthorizing(id);
     setError(null);
+    setConnectionFailure(null);
     try {
       const value = await connectionGeneration.current.run((signal) =>
         walletAddress(id, true, signal),
@@ -176,7 +183,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       if (attempt.current === version) {
         const guidance = walletErrorGuidance(cause);
         setError(guidance.message);
-        setErrorAction(guidance.action);
+        setConnectionFailure({ wallet: id, guidance });
       }
     } finally {
       if (attempt.current === version) setAuthorizing(null);
@@ -307,6 +314,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
             {STELLAR_WALLETS.map((wallet) => (
               <div key={wallet.id} className={styles.row}>
                 <button
+                  ref={wallet.id === STELLAR_WALLETS[0]?.id ? firstWallet : undefined}
                   type="button"
                   disabled={authorizing !== null}
                   onClick={() => void chooseWallet(wallet.id)}
@@ -327,14 +335,17 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
               </div>
             ))}
           </div>
-          {error && (
-            <div role="alert" className={styles.error}>
-              <p>{error}</p>
-              {errorAction && <p>{errorAction}</p>}
-              <button type="button" onClick={() => setError(null)}>
-                Choose a wallet again
-              </button>
-            </div>
+          {connectionFailure && (
+            <WalletConnectionRecovery
+              guidance={connectionFailure.guidance}
+              wallet={STELLAR_WALLETS.find((wallet) => wallet.id === connectionFailure.wallet)!}
+              onRetry={() => void chooseWallet(connectionFailure.wallet)}
+              onChoose={() => {
+                setError(null);
+                setConnectionFailure(null);
+                firstWallet.current?.focus();
+              }}
+            />
           )}
         </Dialog>
       )}

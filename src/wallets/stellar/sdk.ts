@@ -194,31 +194,64 @@ function withTimeout<T>(
   );
 }
 
-export function walletErrorGuidance(error: unknown): { message: string; action: string } {
-  const detail = error instanceof Error ? error.message.toLowerCase() : "";
-  if (detail.includes("popup") || detail.includes("window"))
+export interface WalletConnectionGuidance {
+  category:
+    | "popup_blocked"
+    | "access_denied"
+    | "network_mismatch"
+    | "extension_unavailable"
+    | "connection_timeout"
+    | "connection_failed";
+  message: string;
+  action: string;
+  install: boolean;
+}
+
+export function walletErrorGuidance(error: unknown): WalletConnectionGuidance {
+  const detail = friendlyMessage(error).slice(0, 512).toLowerCase();
+  if (
+    EXTENSION_LOST_PATTERN.test(detail) ||
+    /extension.*(removed|reload|unavailable)|install and open/.test(detail)
+  )
     return {
-      message: "The wallet popup was blocked or closed.",
-      action: "Allow the wallet popup, then choose a wallet again.",
-    };
-  if (detail.includes("denied") || detail.includes("reject") || detail.includes("cancel"))
-    return {
-      message: "Wallet access was declined.",
-      action: "Choose the wallet again when you are ready to approve access.",
-    };
-  if (detail.includes("network") || detail.includes("testnet"))
-    return {
-      message: "The wallet is not connected to Stellar Testnet.",
-      action: "Switch the wallet to Stellar Testnet, then choose it again.",
-    };
-  if (detail.includes("install") || detail.includes("connected"))
-    return {
+      category: "extension_unavailable",
       message: "This wallet extension is unavailable.",
-      action: "Install or open the wallet, then choose it again.",
+      action: "Install or reopen the wallet from its official website, then retry the connection.",
+      install: true,
+    };
+  if (/popup|pop-up|window.*(blocked|closed)/.test(detail))
+    return {
+      category: "popup_blocked",
+      message: "The wallet popup was blocked or closed.",
+      action: "Allow popups for this site in your browser, then retry the connection.",
+      install: false,
+    };
+  if (/denied|reject|cancel/.test(detail))
+    return {
+      category: "access_denied",
+      message: "Wallet access was declined.",
+      action: "Retry when you are ready to approve access, or choose another wallet.",
+      install: false,
+    };
+  if (/network|testnet/.test(detail))
+    return {
+      category: "network_mismatch",
+      message: "The wallet is not connected to Stellar Testnet.",
+      action: "Switch your wallet to Stellar Testnet, then retry the connection.",
+      install: false,
+    };
+  if (/did not respond|did not return.*in time|timed? ?out/.test(detail))
+    return {
+      category: "connection_timeout",
+      message: "The wallet did not respond in time.",
+      action: "Open the wallet, close any old connection prompt, then retry when ready.",
+      install: false,
     };
   return {
+    category: "connection_failed",
     message: "The wallet could not be connected.",
-    action: "Check the wallet and choose it again.",
+    action: "Open the wallet and check its site permissions, then retry or choose another wallet.",
+    install: false,
   };
 }
 

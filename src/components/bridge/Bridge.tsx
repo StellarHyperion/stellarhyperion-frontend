@@ -16,6 +16,7 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import { fetchClaims } from "../../api";
+import { useVisibilityPoll } from "../../lib/visibility-poll";
 import {
   TESTNET,
   destinationFor,
@@ -222,14 +223,7 @@ function QuoteDetails({
   const breakdown = quoteBreakdown(quote);
 
   const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
-    return () => {
-      clearInterval(timer);
-    };
-  }, []);
+  useVisibilityPoll(() => setNow(Date.now()), 1000, 60_000);
   const freshness = quoteFreshness(quote, now);
   return (
     <dl className={styles.summary}>
@@ -867,10 +861,26 @@ export function Bridge() {
   const [reserve, setReserve] = useState<TrustlineReservePreview | null>(null);
   const [reserveError, setReserveError] = useState<string | null>(null);
   const laneKey = `${destination}:${route}:${refresh}`;
+  const laneRefreshing = useVisibilityPoll(
+    async (signal) => {
+      try {
+        const value = await readLane(destination, route);
+        if (!signal.aborted) setLaneState({ key: laneKey, value, error: null });
+      } catch (cause) {
+        if (!signal.aborted)
+          setLaneState({ key: laneKey, value: null, error: errorMessage(cause) });
+      }
+    },
+    30_000,
+    60_000,
+    laneKey,
+    0,
+  );
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
   const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
-  const quote = quoted?.key === quoteKey && lane?.available ? quoted.value : null;
+  const quote =
+    quoted?.key === quoteKey && lane?.available && !laneRefreshing ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
   const quoteDiagnostic = quoted?.key === quoteKey ? quoted.diagnostic : null;
   const simKey = `${quoteKey}:${wallet.address}`;
@@ -1017,24 +1027,7 @@ export function Bridge() {
     setQuoteVersion((version) => version + 1);
     setQuoted(null);
   };
-  useEffect(() => {
-    let active = true;
-    const load = () => {
-      void readLane(destination, route)
-        .then((value) => {
-          if (active) setLaneState({ key: laneKey, value, error: null });
-        })
-        .catch((cause: unknown) => {
-          if (active) setLaneState({ key: laneKey, value: null, error: errorMessage(cause) });
-        });
-    };
-    load();
-    const timer = setInterval(load, 30000);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, [destination, route, laneKey]);
+
   useEffect(() => {
     if (!wallet.address) return;
     const account = wallet.address;
@@ -1993,6 +1986,8 @@ export function Bridge() {
             className={styles.primary}
             disabled={
               busy ||
+              laneRefreshing ||
+              !lane?.available ||
               reviewedReserveInsufficient ||
               (!!reviewed.quote.conversion && !reserve) ||
               (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
