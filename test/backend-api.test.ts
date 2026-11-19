@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cursorFreshness,
@@ -12,6 +15,89 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
+const TESTNET_USDC = "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+const origin = (
+  overrides: Partial<FormattedTransfer["origin"]> = {},
+): FormattedTransfer["origin"] => ({
+  chain: "stellar-testnet",
+  nonce: "1",
+  sender: "GABC",
+  token: TESTNET_USDC,
+  symbol: "USDC",
+  decimals: 7,
+  grossAmount: "1000000",
+  fee: "3000",
+  netAmount: "997000",
+  block: "100",
+  txHash: "a".repeat(64),
+  observedAt: "2026-10-29T00:00:00.000Z",
+  ...overrides,
+});
+const destination = (
+  overrides: Partial<FormattedTransfer["destination"]> = {},
+): FormattedTransfer["destination"] => ({
+  token: "0xFd5a146686d16060ef9c595B37C30b248402304c",
+  amount: "997000",
+  symbol: "USDC",
+  decimals: 7,
+  chain: "sepolia",
+  recipient: `0x${"1".repeat(40)}`,
+  delivered: true,
+  block: "200",
+  txHash: "b".repeat(64),
+  deliveredAt: "2026-10-29T00:05:00.000Z",
+  ...overrides,
+});
+function record(
+  originOverrides: Partial<FormattedTransfer["origin"]> = {},
+  destinationOverrides: Partial<FormattedTransfer["destination"]> | null = {},
+): FormattedTransfer {
+  const sourceOnly = destinationOverrides === null || destinationOverrides.delivered === false;
+  return {
+    id: "1",
+    stage: sourceOnly ? "attested" : "delivered",
+    route: 1,
+    origin: origin(originOverrides),
+    destination:
+      destinationOverrides === null
+        ? destination({
+            delivered: false,
+            txHash: null,
+            amount: null,
+            block: null,
+            deliveredAt: null,
+          })
+        : destination(destinationOverrides),
+    rail: null,
+    claim: null,
+  };
+}
+/**
+ * Enforces the public acceptance proof schema: a real signed source transaction is not enough on
+ * its own, every reported amount is an exact integer (never a float or scientific-notation string),
+ * and destination evidence always names the issuer-specific token that actually paid out.
+ */
+function assertAcceptedProofSchema(transfer: FormattedTransfer | null, sourceHash?: string): void {
+  if (!transfer)
+    throw new Error("The indexer has not recorded this signed source transaction yet.");
+  if (sourceHash && transfer.origin.txHash !== sourceHash)
+    throw new Error("The indexed origin hash does not match the real signed source transaction.");
+  if (!/^[0-9a-f]{64}$/i.test(transfer.origin.txHash))
+    throw new Error("The origin transaction hash is not a real Stellar transaction hash.");
+  for (const amount of [
+    transfer.origin.grossAmount,
+    transfer.origin.fee,
+    transfer.origin.netAmount,
+  ])
+    if (!/^\d+$/.test(amount))
+      throw new Error("Origin amounts must be exact integers, never fabricated or rounded.");
+  if (!transfer.destination.delivered || !transfer.destination.txHash)
+    throw new Error("Source confirmation alone cannot satisfy cross-chain acceptance.");
+  if (transfer.destination.amount != null && !/^\d+$/.test(transfer.destination.amount))
+    throw new Error("The destination amount must be an exact integer.");
+  if (!transfer.destination.token)
+    throw new Error("Destination evidence is missing issuer-specific token identity.");
+}
 describe("Real indexer client", () => {
   it("does not manufacture records when no indexer is configured", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "");
@@ -179,4 +265,64 @@ describe("transfer evidence", () => {
     });
     expect(getEvidenceTimeline(record)[2]?.status).toBe("unknown");
   });
+});
+describe("Public acceptance proof schema", () => {
+  it("rejects source-only completion as insufficient for cross-chain acceptance", () => {
+    const sourceOnly = record({}, null);
+    expect(sourceOnly.destination.delivered).toBe(false);
+    expect(sourceOnly.destination.txHash).toBeNull();
+    expect(() => {
+      assertAcceptedProofSchema(sourceOnly);
+    }).toThrow("cannot satisfy cross-chain acceptance");
+  });
+  it("rejects amounts that are not exact integers", () => {
+    expect(() => {
+      assertAcceptedProofSchema(record({ grossAmount: "1.5" }));
+    }).toThrow("exact integers");
+    expect(() => {
+      assertAcceptedProofSchema(record({ fee: "3e3" }));
+    }).toThrow("exact integers");
+    expect(() => {
+      assertAcceptedProofSchema(record({}, { amount: "997000.0" }));
+    }).toThrow("exact integer");
+  });
+  it("rejects destination evidence missing issuer-specific token identity", () => {
+    expect(() => {
+      assertAcceptedProofSchema(record({}, { token: null }));
+    }).toThrow("issuer-specific token identity");
+  });
+  it("rejects evidence that does not match the real signed source transaction", () => {
+    expect(() => {
+      assertAcceptedProofSchema(record(), "f".repeat(64));
+    }).toThrow("does not match the real signed source transaction");
+  });
+  it("accepts a fully delivered record with exact integer amounts and real token identity", () => {
+    const delivered = record();
+    expect(() => {
+      assertAcceptedProofSchema(delivered, delivered.origin.txHash);
+    }).not.toThrow();
+    expect(delivered.destination.token).toBe("0xFd5a146686d16060ef9c595B37C30b248402304c");
+    expect(delivered.origin.grossAmount).toBe("1000000");
+  });
+  // Explicit opt-in only: reads the real indexer configured by NEXT_PUBLIC_HYPERION_API_URL and
+  // checks the proof file a prior live-transfer run saved. Normal checks never need credentials
+  // or reach a real indexer, and this suite is skipped unless the live gate is set.
+  const liveEnabled = process.env.HYPERION_LIVE_TESTNET === "1";
+  it.skipIf(!liveEnabled)(
+    "validates real indexed evidence for a real signed transfer against the public proof schema",
+    async () => {
+      const file =
+        process.env.HYPERION_TESTNET_PROOF ?? join(tmpdir(), "hyperion-live-transfer.json");
+      if (!existsSync(file))
+        throw new Error(
+          "Run the live transfer suite first (HYPERION_LIVE_TESTNET=1) so a real source hash is recorded.",
+        );
+      const proof = JSON.parse(readFileSync(file, "utf8")) as { sourceHash?: string };
+      if (!proof.sourceHash)
+        throw new Error("The saved proof has no signed source transaction hash yet.");
+      const transfer = await fetchTransferByTx(proof.sourceHash);
+      assertAcceptedProofSchema(transfer, proof.sourceHash);
+    },
+    30_000,
+  );
 });

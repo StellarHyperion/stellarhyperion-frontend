@@ -20,6 +20,19 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  // This smoke check only reads and never signs. Catch any accidental live submission network
+  // call (a Soroban RPC POST or an outbound Horizon transaction broadcast) so a change that makes
+  // this read-only pass start spending testnet funds fails loudly instead of going unnoticed.
+  const submissionCalls = [];
+  page.on("request", (request) => {
+    const url = request.url();
+    if (
+      request.method() === "POST" &&
+      (/soroban-testnet\.stellar\.org/.test(url) ||
+        (/horizon-testnet\.stellar\.org/.test(url) && /\/transactions/.test(url)))
+    )
+      submissionCalls.push(url);
+  });
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
 
@@ -121,8 +134,13 @@ try {
     );
   }
   assert.deepEqual(errors, [], "Uncaught browser errors");
+  assert.deepEqual(
+    submissionCalls,
+    [],
+    "This read-only smoke check must never submit or broadcast a signed transaction.",
+  );
   console.log(
-    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history and mobile layout.",
+    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history, mobile layout and no live submission calls.",
   );
 } finally {
   await browser.close();

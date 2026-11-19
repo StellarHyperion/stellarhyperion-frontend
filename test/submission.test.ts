@@ -67,6 +67,45 @@ function setup() {
   const send = vi.spyOn(rpc.Server.prototype, "sendTransaction");
   return { simulation, send };
 }
+// Unlike setup(), the claim read is answered the same way on every call. Each independent
+// submitSettleClaim call reads the claim before submitting its own operation, so a test that
+// drives the function more than once (a retry, or two overlapping calls) needs that read to stay
+// valid every time rather than only for the very first simulateTransaction call in the test.
+function repeatableSetup() {
+  vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
+    passphrase: TESTNET.networkPassphrase,
+    protocolVersion: "27",
+  });
+  // Each call must see a fresh, unmutated Account: the SDK's TransactionBuilder increments the
+  // sequence number on the very instance it is given, so reusing one Account across getAccount
+  // calls would make the post-construction sequence check see its own earlier mutation as a
+  // real on-chain sequence change. A retry or a second overlapping call must start from "0" too.
+  vi.spyOn(rpc.Server.prototype, "getAccount").mockImplementation(() =>
+    Promise.resolve(new Account(key.publicKey(), "0")),
+  );
+  vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
+    executable: {
+      type: "contractExecutableWasm",
+      wasmHash: Uint8Array.from({ length: 32 }, (_, index) =>
+        parseInt(STELLAR_DEPLOYMENT.wasmHash.slice(index * 2, index * 2 + 2), 16),
+      ),
+    },
+    storage: null,
+  } as never);
+  vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue(
+    success(
+      nativeToScVal({
+        id: 1n,
+        recipient: key.publicKey(),
+        token: TESTNET.token,
+        amount: 10n,
+        settled: false,
+      }),
+    ),
+  );
+  const send = vi.spyOn(rpc.Server.prototype, "sendTransaction");
+  return { send };
+}
 const sign = (value: string) => {
   const tx = TransactionBuilder.fromXdr(value, TESTNET.networkPassphrase);
   tx.sign(key);
@@ -737,5 +776,60 @@ describe("Source identity and explorer access", () => {
     expect(parsed.txHash).toBe(realHash);
     // The checkpoint itself carries no status; confirmation comes only from readTransaction.
     expect(parsed.stage).toBe("bridge");
+  });
+});
+describe("Concurrent and repeated submission boundaries", () => {
+  it("requires a fresh explicit wallet approval rather than reusing an earlier ambiguous signature", async () => {
+    const { send } = repeatableSetup();
+    send.mockImplementationOnce(() => Promise.reject(new Error("timeout")));
+    const first = await submitSettleClaim(key.publicKey(), 1n, sign);
+    expect(first.status).toBe("pending");
+    // A caller retrying after an ambiguous outcome must trigger a brand new wallet request; the
+    // function never resubmits the earlier signed envelope on its own.
+    const retryWallet = vi.fn(sign);
+    send.mockResolvedValueOnce({
+      status: "ERROR",
+      hash: "c".repeat(64),
+      latestLedger: 1,
+      latestLedgerCloseTime: 1,
+    });
+    await expect(submitSettleClaim(key.publicKey(), 1n, retryWallet)).rejects.toThrow(
+      "network rejected",
+    );
+    expect(retryWallet).toHaveBeenCalledTimes(1);
+  });
+  it("keeps two overlapping submissions independent, each with its own explicit wallet approval", async () => {
+    const { send } = repeatableSetup();
+    let attempt = 0;
+    send.mockImplementation((tx) => {
+      attempt += 1;
+      if (attempt === 1) return Promise.reject(new Error("timeout"));
+      return Promise.resolve({
+        status: "ERROR",
+        hash: toHex(tx.hash()).slice(2),
+        latestLedger: 1,
+        latestLedgerCloseTime: 1,
+      });
+    });
+    const walletA = vi.fn(sign);
+    const walletB = vi.fn(sign);
+    const [outcomeA, outcomeB] = await Promise.allSettled([
+      submitSettleClaim(key.publicKey(), 1n, walletA),
+      submitSettleClaim(key.publicKey(), 1n, walletB),
+    ]);
+    const outcomes = [outcomeA, outcomeB];
+    // Exactly one side of the race lands on the ambiguous pending outcome, and the other is
+    // rejected by the network rather than silently merged with, or auto-resubmitted after, it.
+    expect(outcomes.filter((o) => o.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((o) => o.status === "rejected")).toHaveLength(1);
+    const fulfilled = outcomes.find(
+      (o): o is PromiseFulfilledResult<Awaited<ReturnType<typeof submitSettleClaim>>> =>
+        o.status === "fulfilled",
+    );
+    expect(fulfilled?.value.status).toBe("pending");
+    const rejected = outcomes.find((o): o is PromiseRejectedResult => o.status === "rejected");
+    expect((rejected?.reason as Error).message).toMatch("network rejected");
+    expect(walletA).toHaveBeenCalledTimes(1);
+    expect(walletB).toHaveBeenCalledTimes(1);
   });
 });
