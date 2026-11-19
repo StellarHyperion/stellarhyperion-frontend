@@ -429,3 +429,36 @@ describe("Live relay fee headroom", () => {
     expect(() => relayBudget(0n)).toThrow();
   });
 });
+
+describe("Native reserve-aware balances", () => {
+  it("subtracts live subentry and sponsorship reserves before suggesting spendable XLM", async () => {
+    const payload = {
+      subentry_count: 20,
+      num_sponsoring: 2,
+      num_sponsored: 4,
+      balances: [{ asset_type: "native", balance: "12.0000000", selling_liabilities: "1.0000000" }],
+    };
+    const ledger = { _embedded: { records: [{ base_reserve_in_stroops: 5000000 }] } };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(payload)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(ledger)));
+    vi.stubGlobal("fetch", fetcher);
+    const native = (await accountAssets(TESTNET.reader))[0];
+    expect(native?.nativeMinimumReserve).toBe("10.0000000");
+    expect(native?.available).toBe("1.0000000");
+  });
+  it("does not invent native spendable funds when reserve metadata is absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ balances: [{ asset_type: "native", balance: "99.0000000" }] }),
+          ),
+        ),
+    );
+    expect((await accountAssets(TESTNET.reader))[0]?.available).toBe("0.0000000");
+  });
+});
