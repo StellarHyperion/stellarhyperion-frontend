@@ -7,6 +7,7 @@ import { useEffect, useSyncExternalStore, type ReactElement } from "react";
 
 import { HyperionMark } from "../brand/HyperionMark";
 import { StellarWalletButton } from "../wallet";
+import { useTransferCheckpoint } from "../../contracts/checkpoint";
 import styles from "../chrome/Chrome.module.css";
 
 export type ThemeChoice = "system" | "dark" | "light";
@@ -110,6 +111,7 @@ export function ThemeSelector(): ReactElement {
 
 export function Header({ network }: { readonly network: string }): ReactElement {
   const transfersActive = usePathname().startsWith("/transfers");
+  const pendingCheckpoint = useTransferCheckpoint();
   return (
     <header className={styles.header}>
       <div className={styles.headerInner}>
@@ -122,6 +124,7 @@ export function Header({ network }: { readonly network: string }): ReactElement 
             className={styles.navLinks}
             aria-label="Main navigation"
             data-section={transfersActive ? "transfers" : "send"}
+            data-recovery={Boolean(pendingCheckpoint)}
           >
             <Link
               className={styles.navLink}
@@ -137,6 +140,26 @@ export function Header({ network }: { readonly network: string }): ReactElement 
             >
               Activity
             </Link>
+            {pendingCheckpoint && (
+              <Link
+                className={styles.navLink}
+                href="/#pending-recovery"
+                scroll={false}
+                onClick={(event) => {
+                  if (
+                    event.button === 0 &&
+                    !event.metaKey &&
+                    !event.ctrlKey &&
+                    !event.shiftKey &&
+                    !event.altKey
+                  ) {
+                    window.dispatchEvent(new Event("hyperion:recovery-focus"));
+                  }
+                }}
+              >
+                Recovery
+              </Link>
+            )}
           </nav>
         </div>
         {/*
