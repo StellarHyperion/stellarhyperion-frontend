@@ -71,6 +71,7 @@ import {
   getOperationOwnership,
   releaseOperationOwnership,
   saveCheckpoint,
+  assertCheckpointStorage,
   useTransferCheckpoint,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
@@ -416,6 +417,12 @@ function PendingTransferCard({
   const continueBridge = async () => {
     if (!review || !sameAccount || checking || cardSimulating || !!cardSimError || !cardSimulation)
       return;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setChecking(true);
     setError(null);
     try {
@@ -902,6 +909,12 @@ export function Bridge() {
       return;
     }
     const reviewedQuote = reviewed.quote;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setReviewing(false);
     const controller = new AbortController();
     waitController.current?.abort();
@@ -1565,6 +1578,10 @@ export function Bridge() {
               wallet.
             </p>
           )}
+          <p className={styles.reviewNote}>
+            Recovery saves source hashes in this browser. Private sessions and browser cleanup can
+            remove them; keep a copy of the signed source hash before leaving.
+          </p>
           <p className={styles.reviewNote}>
             Source confirmation starts the transfer. Destination delivery is verified separately.
           </p>

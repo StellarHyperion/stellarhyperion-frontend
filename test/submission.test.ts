@@ -26,6 +26,7 @@ import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
 
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
+import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
 import {
   planMaxUsdcAmount,
   planMaxSourceAmount,
@@ -85,6 +86,47 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
+    const checkpointKey = "hyperion.testnet.pending-transfer";
+    const values = new Map<string, string>([[checkpointKey, "existing signed hash"]]);
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+      removeItem: (key: string) => void values.delete(key),
+    };
+    expect(inspectCheckpointStorage(storage)).toMatchObject({
+      available: true,
+      persistent: null,
+      kind: "transaction-recovery",
+      reason: null,
+    });
+    expect([...values]).toEqual([[checkpointKey, "existing signed hash"]]);
+    const blocked = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("quota");
+      },
+      removeItem: () => undefined,
+    };
+    expect(inspectCheckpointStorage(blocked)).toMatchObject({
+      available: false,
+      persistent: false,
+      kind: "transaction-recovery",
+    });
+  });
+  it("rejects a store that silently drops writes before an approval can rely on it", () => {
+    expect(
+      inspectCheckpointStorage({
+        getItem: () => null,
+        setItem: () => undefined,
+        removeItem: () => undefined,
+      }),
+    ).toMatchObject({
+      available: false,
+      persistent: false,
+      reason: "The browser did not retain the recovery probe.",
+    });
+  });
   it("classifies bounded pre-broadcast failures without attaching a fake hash", () => {
     const failure = classifySubmissionFailure("approval", new Error("declined\nsecret details"));
     expect(failure).toBeInstanceOf(SubmissionFailure);
