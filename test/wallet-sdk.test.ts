@@ -478,6 +478,26 @@ describe("Bounded wallet adapter request timeouts", () => {
     await vi.advanceTimersByTimeAsync(0);
   });
 
+  it.each([true, false])(
+    "normalizes string abort reasons before or during a request (%s)",
+    async (alreadyAborted) => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      if (alreadyAborted) controller.abort("Connection superseded");
+      const pending = withTimeout(
+        stalled(),
+        20_000,
+        "timed out",
+        WalletTimeoutError,
+        controller.signal,
+      );
+      if (!alreadyAborted) controller.abort("Connection superseded");
+      await expect(pending).rejects.toBeInstanceOf(Error);
+      await expect(pending).rejects.toThrow("Connection superseded");
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("cancels a stalled xBull account request and closes the old bridge", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
