@@ -2,6 +2,8 @@ import { createPublicClient, http, parseAbi } from "viem";
 import {
   Account,
   Address,
+  Asset,
+  StrKey,
   BASE_FEE,
   Contract,
   TransactionBuilder,
@@ -26,9 +28,11 @@ import {
   CIRCLE_STELLAR,
   destinationFor,
   destinationDecimals,
+  deploymentIdentityMismatch,
   type BridgeRoute,
   type DestinationKey,
 } from "../config/testnet";
+import type { TransferCheckpoint } from "./checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 import { validateProviderFee } from "../lib/fee-schema";
@@ -87,6 +91,12 @@ export interface TransactionResult {
   txHash: string;
   nonce?: string;
   failure?: SubmissionFailure;
+  reason?: string;
+}
+export interface CheckpointRecoveryResult {
+  status: "confirmed" | "failed" | "unknown";
+  source: "rpc" | "horizon" | "unknown";
+  message: string;
 }
 export interface LiveQuote {
   route: number;
@@ -508,6 +518,15 @@ export async function readLane(
   route: BridgeRoute = 1,
 ): Promise<LaneState> {
   const destination = destinationFor(destinationKey);
+  const deploymentMismatch = deploymentIdentityMismatch(TESTNET.router, TESTNET.token);
+  if (deploymentMismatch)
+    return {
+      available: false,
+      reason: deploymentMismatch,
+      feeBps: null,
+      ledger: 0,
+      adapter: null,
+    };
   if (!destination.routes.includes(route))
     return {
       available: false,
@@ -831,20 +850,426 @@ export function bridgeOperation(sender: string, quote: LiveQuote, recipientInput
   );
 }
 
-export async function readTransaction(hash: string): Promise<TransactionResult | null> {
-  if (!/^[0-9a-fA-F]{64}$/.test(hash)) return null;
-  const result = await server().getTransaction(hash);
-  if (result.status === rpc.Api.GetTransactionStatus.FAILED)
-    return { status: "failed", txHash: hash };
-  if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-    const value: unknown = result.returnValue ? scValToNative(result.returnValue) : undefined;
-    return {
-      status: "confirmed",
+const MAX_TRANSACTION_READ_SOURCES = 3;
+function transactionReadSources(): string[] {
+  const configuration = process.env.NEXT_PUBLIC_STELLAR_READ_RPC_URLS ?? "";
+  if (configuration.length > 4096)
+    throw new Error("Stellar transaction read source configuration is too large.");
+  const configured = configuration
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+  const sources: string[] = [];
+  const origins = new Set<string>();
+  for (const endpoint of [TESTNET.rpcUrl, ...configured]) {
+    const url = new URL(endpoint);
+    if (
+      endpoint.length > 2048 ||
+      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      url.username ||
+      url.password ||
+      url.hash
+    )
+      throw new Error("Stellar transaction read sources must be public HTTP(S) endpoints.");
+    if (origins.has(url.origin)) continue;
+    origins.add(url.origin);
+    sources.push(url.toString());
+    if (sources.length === MAX_TRANSACTION_READ_SOURCES) break;
+  }
+  return sources;
+}
+class ConflictingTransactionEvidence extends Error {}
+interface RpcReadEvidence {
+  response: rpc.Api.GetTransactionResponse;
+  transaction: TransactionResult;
+  fingerprint: string | null;
+}
+async function readTransactionFrom(
+  url: string,
+  hash: string,
+  signal: AbortSignal,
+): Promise<RpcReadEvidence> {
+  const client = new rpc.Server(url, { timeout: 5000, allowHttp: url.startsWith("http:") });
+  const network = await abortable(client.getNetwork(), signal);
+  if (network.passphrase !== TESTNET.networkPassphrase)
+    throw new ConflictingTransactionEvidence("The RPC endpoint is not Stellar Testnet.");
+  const response = await abortable(client.getTransaction(hash), signal);
+  if (response.status === rpc.Api.GetTransactionStatus.NOT_FOUND)
+    return { response, transaction: { status: "pending", txHash: hash }, fingerprint: null };
+  const envelopeXdr = response.envelopeXdr.toXdr("base64");
+  const resultXdr = response.resultXdr.toXdr("base64");
+  if (envelopeXdr.length > 200000 || resultXdr.length > 200000)
+    throw new ConflictingTransactionEvidence("RPC transaction evidence exceeds the size limit.");
+  const envelope = TransactionBuilder.fromXdr(envelopeXdr, TESTNET.networkPassphrase);
+  const succeeded = response.status === rpc.Api.GetTransactionStatus.SUCCESS;
+  if (
+    response.txHash.toLowerCase() !== hash ||
+    response.feeBump ||
+    "innerTransaction" in envelope ||
+    toHex(envelope.hash()).slice(2).toLowerCase() !== hash ||
+    (response.resultXdr.result.type === "txSuccess") !== succeeded ||
+    response.resultXdr.result.type === "txFeeBumpInnerSuccess" ||
+    response.resultXdr.result.type === "txFeeBumpInnerFailed"
+  )
+    throw new ConflictingTransactionEvidence("RPC returned conflicting transaction evidence.");
+  const returnValue =
+    response.status === rpc.Api.GetTransactionStatus.SUCCESS ? response.returnValue : undefined;
+  const value: unknown = returnValue ? scValToNative(returnValue) : undefined;
+  return {
+    response,
+    transaction: {
+      status: succeeded ? "confirmed" : "failed",
       txHash: hash,
       ...(typeof value === "bigint" ? { nonce: String(value) } : {}),
-    };
+    },
+    fingerprint: resultXdr + ":" + (returnValue?.toXdr("base64") ?? ""),
+  };
+}
+async function collectTransactionEvidence(hash: string, signal?: AbortSignal) {
+  if (signal?.aborted) throw new DOMException("Transaction lookup cancelled.", "AbortError");
+  const readSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(5000)])
+    : AbortSignal.timeout(5000);
+  const sources = transactionReadSources();
+  const reads = await Promise.allSettled(
+    sources.map((url) => readTransactionFrom(url, hash, readSignal)),
+  );
+  if (signal?.aborted) throw new DOMException("Transaction lookup cancelled.", "AbortError");
+  const results = reads.flatMap((read) => (read.status === "fulfilled" ? [read.value] : []));
+  const invalid = reads.some(
+    (read) => read.status === "rejected" && read.reason instanceof ConflictingTransactionEvidence,
+  );
+  const complete = results.length === sources.length;
+  const statuses = new Set(results.map((result) => result.transaction.status));
+  const fingerprints = new Set(results.map((result) => result.fingerprint));
+  const agreed = !invalid && complete && statuses.size === 1 && fingerprints.size === 1;
+  return { results, invalid, complete, agreed };
+}
+export async function readTransaction(
+  hash: string,
+  signal?: AbortSignal,
+): Promise<TransactionResult | null> {
+  if (!/^[0-9a-fA-F]{64}$/.test(hash)) return null;
+  hash = hash.toLowerCase();
+  const evidence = await collectTransactionEvidence(hash, signal);
+  const result = evidence.results[0];
+  if (evidence.agreed && result) return result.transaction;
+  return {
+    status: "pending",
+    txHash: hash,
+    reason:
+      evidence.invalid || evidence.complete
+        ? "Stellar transaction sources disagree; its outcome remains unknown."
+        : "A Stellar transaction source is unavailable; its outcome remains unknown.",
+  };
+}
+
+function unknownRecovery(message: string): CheckpointRecoveryResult {
+  return { status: "unknown", source: "unknown", message };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+type ParsedOperation = Transaction["operations"][number];
+
+function matchesConversion(checkpoint: TransferCheckpoint, operations: ParsedOperation[]) {
+  const payments = operations.filter((operation) => operation.type === "pathPaymentStrictReceive");
+  if (
+    payments.length !== 1 ||
+    operations.length > 2 ||
+    operations.some((operation) => operation.source && operation.source !== checkpoint.account)
+  )
+    return false;
+  if (
+    operations.some(
+      (operation) =>
+        operation.type !== "pathPaymentStrictReceive" &&
+        (operation.type !== "changeTrust" ||
+          !(operation.line instanceof Asset) ||
+          operation.line.getCode() !== TESTNET.usdcCode ||
+          operation.line.getIssuer() !== TESTNET.usdcIssuer),
+    )
+  )
+    return false;
+  const payment = payments[0];
+  return (
+    payment?.type === "pathPaymentStrictReceive" &&
+    (!payment.source || payment.source === checkpoint.account) &&
+    payment.destination === checkpoint.account &&
+    payment.destAsset.getCode() === TESTNET.usdcCode &&
+    payment.destAsset.getIssuer() === TESTNET.usdcIssuer &&
+    parseUnits(payment.destAmount, 7) === BigInt(checkpoint.bridgeAmount)
+  );
+}
+
+function numericValue(value: unknown, expected: bigint): boolean {
+  return (
+    value === expected ||
+    (typeof value === "number" && Number.isSafeInteger(value) && BigInt(value) === expected)
+  );
+}
+
+function matchesBridge(checkpoint: TransferCheckpoint, operation: ParsedOperation | undefined) {
+  if (
+    operation?.type !== "invokeHostFunction" ||
+    (operation.source !== undefined && operation.source !== checkpoint.account) ||
+    operation.func.type !== "hostFunctionTypeInvokeContract"
+  )
+    return false;
+  const invocation = operation.func.invokeContract;
+  if (invocation.functionName.toString() !== "bridge_out_with_gas") return false;
+  if (
+    invocation.contractAddress.type !== "scAddressTypeContract" ||
+    StrKey.encodeContract(invocation.contractAddress.contractId.toBytes()) !== TESTNET.router
+  )
+    return false;
+  const args = invocation.args;
+  if (args.length !== 3 || !args[0] || !args[1] || !args[2]) return false;
+  const sender: unknown = scValToNative(args[0]);
+  const request: unknown = scValToNative(args[1]);
+  const relayGas: unknown = scValToNative(args[2]);
+  if (!isRecord(request) || !isRecord(request.destination)) return false;
+  const destination = destinationFor(checkpoint.destination);
+  const expectedRecipient = fromHex(`0x${checkpoint.recipient.slice(2).padStart(64, "0")}`);
+  const actualRecipient = request.destination.address;
+  return (
+    sender === checkpoint.account &&
+    request.token === TESTNET.token &&
+    numericValue(request.amount, BigInt(checkpoint.bridgeAmount)) &&
+    numericValue(request.route, BigInt(checkpoint.route)) &&
+    request.destination.chain === destination.key &&
+    actualRecipient instanceof Uint8Array &&
+    toHex(actualRecipient) === toHex(expectedRecipient) &&
+    numericValue(request.destination_decimals, BigInt(destinationDecimals(checkpoint.route))) &&
+    typeof request.min_destination_amount === "bigint" &&
+    request.min_destination_amount > 0n &&
+    typeof relayGas === "bigint" &&
+    relayGas > 0n
+  );
+}
+
+function inspectCheckpointEnvelope(
+  checkpoint: TransferCheckpoint,
+  envelopeXdr: string,
+  resultXdr: string,
+  successful: boolean | null,
+): "confirmed" | "failed" | null {
+  try {
+    if (
+      checkpoint.router !== TESTNET.router ||
+      envelopeXdr.length > 200_000 ||
+      resultXdr.length > 200_000
+    )
+      return null;
+    const transaction = TransactionBuilder.fromXdr(envelopeXdr, TESTNET.networkPassphrase);
+    if (
+      "innerTransaction" in transaction ||
+      transaction.source !== checkpoint.account ||
+      toHex(transaction.hash()).slice(2).toLowerCase() !== checkpoint.txHash
+    )
+      return null;
+    const matches =
+      checkpoint.stage === "conversion"
+        ? matchesConversion(checkpoint, transaction.operations)
+        : transaction.operations.length === 1 &&
+          matchesBridge(checkpoint, transaction.operations[0]);
+    if (!matches) return null;
+    const transactionResult = xdr.TransactionResult.fromXdr(resultXdr, "base64");
+    const resultSucceeded = transactionResult.result.type === "txSuccess";
+    if (successful !== null && successful !== resultSucceeded) return null;
+    if (
+      transactionResult.result.type === "txFeeBumpInnerSuccess" ||
+      transactionResult.result.type === "txFeeBumpInnerFailed"
+    )
+      return null;
+    if (transactionResult.result.type === "txSuccess") {
+      const results = transactionResult.result.results;
+      if (results.length !== transaction.operations.length) return null;
+      for (const [index, operation] of transaction.operations.entries()) {
+        const result = results[index];
+        if (result?.type !== "opInner" || result.tr.type !== operation.type) return null;
+        if (result.tr.type === "pathPaymentStrictReceive") {
+          const payment = result.tr.pathPaymentStrictReceiveResult;
+          if (payment.type !== "pathPaymentStrictReceiveSuccess") return null;
+          const last = payment.success.last;
+          const asset = Asset.fromOperation(last.asset);
+          if (
+            StrKey.encodeEd25519PublicKey(last.destination.ed25519.toBytes()) !==
+              checkpoint.account ||
+            asset.getCode() !== TESTNET.usdcCode ||
+            asset.getIssuer() !== TESTNET.usdcIssuer ||
+            last.amount !== BigInt(checkpoint.bridgeAmount)
+          )
+            return null;
+        } else if (result.tr.type === "changeTrust") {
+          if (result.tr.changeTrustResult.type !== "changeTrustSuccess") return null;
+        } else if (
+          result.tr.type !== "invokeHostFunction" ||
+          result.tr.invokeHostFunctionResult.type !== "invokeHostFunctionSuccess"
+        )
+          return null;
+      }
+    }
+    return resultSucceeded ? "confirmed" : "failed";
+  } catch {
+    return null;
   }
-  return { status: "pending", txHash: hash };
+}
+
+function recoveryResult(
+  status: "confirmed" | "failed",
+  source: "rpc" | "horizon",
+): CheckpointRecoveryResult {
+  return {
+    status,
+    source,
+    message:
+      source === "horizon"
+        ? `The transaction ${status === "confirmed" ? "was confirmed" : "failed"} in Stellar Testnet history.`
+        : `The transaction ${status === "confirmed" ? "was confirmed" : "failed"} on Stellar Testnet.`,
+  };
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted)
+    return Promise.reject(new DOMException("Recovery lookup cancelled.", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Recovery lookup cancelled.", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (cause: unknown) => {
+        cleanup();
+        reject(cause instanceof Error ? cause : new Error("Recovery read failed."));
+      },
+    );
+  });
+}
+
+async function boundedHistoryJson(response: Response, signal: AbortSignal): Promise<unknown> {
+  const limit = 512_000;
+  if (Number(response.headers.get("content-length")) > limit || !response.body)
+    throw new Error("Historical evidence is too large or unavailable.");
+  const reader = response.body.getReader();
+  let bytes = 0;
+  let text = "";
+  const decoder = new TextDecoder();
+  try {
+    for (;;) {
+      const chunk = await abortable(reader.read(), signal);
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > limit) throw new Error("Historical evidence exceeds the size limit.");
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    return JSON.parse(text + decoder.decode()) as unknown;
+  } finally {
+    void reader.cancel().catch(() => {
+      // The finished or aborted stream has already been released.
+    });
+  }
+}
+
+export async function resolveCheckpointTransaction(
+  checkpoint: TransferCheckpoint,
+  signal?: AbortSignal,
+): Promise<CheckpointRecoveryResult> {
+  if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
+  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || checkpoint.router !== TESTNET.router)
+    return unknownRecovery("The saved checkpoint does not match the configured Stellar Testnet.");
+  const lookupSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+    : AbortSignal.timeout(15000);
+  try {
+    const evidence = await collectTransactionEvidence(checkpoint.txHash, lookupSignal);
+    const final = evidence.results.filter((result) => result.transaction.status !== "pending");
+    if (evidence.invalid || (final.length > 0 && !evidence.agreed))
+      return unknownRecovery(
+        "Stellar RPC sources disagree or returned unverified evidence. The saved checkpoint is unchanged.",
+      );
+    if (evidence.agreed && final.length > 0) {
+      for (const result of final) {
+        if (result.response.status === rpc.Api.GetTransactionStatus.NOT_FOUND)
+          return unknownRecovery("Stellar RPC history is incomplete.");
+        const verified = inspectCheckpointEnvelope(
+          checkpoint,
+          result.response.envelopeXdr.toXdr("base64"),
+          result.response.resultXdr.toXdr("base64"),
+          result.transaction.status === "confirmed",
+        );
+        if (!verified)
+          return unknownRecovery("RPC returned conflicting or invalid checkpoint evidence.");
+      }
+      const result = final[0];
+      if (result && result.transaction.status !== "pending")
+        return recoveryResult(result.transaction.status, "rpc");
+    }
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    return unknownRecovery(
+      "Stellar RPC read configuration could not be verified. The saved checkpoint is unchanged.",
+    );
+  }
+
+  try {
+    const networkResponse = await fetch(TESTNET.horizonUrl, {
+      signal: lookupSignal,
+      cache: "no-store",
+    });
+    const network: unknown = networkResponse.ok
+      ? await boundedHistoryJson(networkResponse, lookupSignal)
+      : null;
+    if (!isRecord(network) || network.network_passphrase !== TESTNET.networkPassphrase)
+      return unknownRecovery("Historical evidence does not establish the Stellar Testnet network.");
+    const response = await fetch(
+      `${TESTNET.horizonUrl}/transactions/${encodeURIComponent(checkpoint.txHash)}`,
+      {
+        signal: lookupSignal,
+        cache: "no-store",
+      },
+    );
+    if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
+    if (response.status === 404)
+      return unknownRecovery("No matching transaction is available in Stellar Testnet history.");
+    if (!response.ok)
+      return unknownRecovery("Stellar Testnet transaction history is temporarily unavailable.");
+    const body: unknown = await boundedHistoryJson(response, lookupSignal);
+    if (
+      !isRecord(body) ||
+      body.hash !== checkpoint.txHash ||
+      body.source_account !== checkpoint.account ||
+      typeof body.successful !== "boolean" ||
+      typeof body.envelope_xdr !== "string" ||
+      typeof body.result_xdr !== "string"
+    )
+      return unknownRecovery("Historical transaction evidence is incomplete or does not match.");
+    const verified = inspectCheckpointEnvelope(
+      checkpoint,
+      body.envelope_xdr,
+      body.result_xdr,
+      body.successful,
+    );
+    if (!verified)
+      return unknownRecovery("Historical transaction evidence conflicts with this checkpoint.");
+    return recoveryResult(verified, "horizon");
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    return unknownRecovery(
+      "Stellar Testnet history could not be checked. The saved checkpoint is unchanged.",
+    );
+  }
 }
 
 export interface ReviewSnapshot {
@@ -1233,7 +1658,7 @@ async function signAndSubmit(
     if (signal?.aborted) return { status: "pending", txHash: hash };
     let result: TransactionResult | null;
     try {
-      result = await readTransaction(hash);
+      result = await readTransaction(hash, signal);
     } catch (error) {
       return {
         status: "pending",

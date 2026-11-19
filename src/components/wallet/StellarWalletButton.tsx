@@ -23,6 +23,7 @@ export function StellarWalletButton() {
     clearRememberedWallet,
     connect,
     disconnect,
+    cancelSignature,
   } = useStellarWallet();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuId = useId();
@@ -114,7 +115,7 @@ export function StellarWalletButton() {
       >
         <span className={styles.dot} />
         <span>{shortAddress}</span>
-        <span className={styles.network}>(testnet)</span>
+        <span className={styles.network}>{pendingSigningRequest ? "signing..." : "(testnet)"}</span>
       </button>
 
       {preferenceError && !menuOpen && (
@@ -168,6 +169,23 @@ export function StellarWalletButton() {
             </div>
           </div>
 
+          {pendingSigningRequest && (
+            <>
+              <p role="status" className={styles.addressLabel}>
+                Waiting on your wallet to approve the request. If it closed, was removed, or stopped
+                responding, stop waiting, close the wallet prompt and review before trying again.
+              </p>
+              <button
+                type="button"
+                className={styles.disconnectBtn}
+                onClick={() => {
+                  cancelSignature();
+                }}
+              >
+                stop waiting for signature
+              </button>
+            </>
+          )}
           <button
             type="button"
             className={styles.disconnectBtn}
