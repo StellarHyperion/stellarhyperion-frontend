@@ -102,6 +102,9 @@ export function SourceAssetPicker({
           const currentAsset = walletAsset ?? asset;
           const hasLiabilities =
             walletAsset?.sellingLiabilities && parseUnits(walletAsset.sellingLiabilities, 7) > 0n;
+          // Native XLM always carries a live protocol reserve, independent of selling
+          // liabilities, so its spendable figure is shown whenever it is known.
+          const showSpendable = asset.id === XLM.id || hasLiabilities;
           return (
             <div className={styles.assetChoice} key={asset.id}>
               <button
@@ -126,7 +129,7 @@ export function SourceAssetPicker({
                 </span>
                 <span className={styles.balance}>
                   {walletAsset
-                    ? hasLiabilities
+                    ? showSpendable
                       ? (walletAsset.available ?? walletAsset.balance)
                       : walletAsset.balance
                     : undefined}
@@ -162,7 +165,13 @@ export function SourceAssetPicker({
                       <dd>{walletAsset.sellingLiabilities}</dd>
                     </div>
                   )}
-                  {hasLiabilities && walletAsset.available && (
+                  {asset.id === XLM.id && walletAsset?.nativeMinimumReserve && (
+                    <div>
+                      <dt>Minimum reserve</dt>
+                      <dd>{walletAsset.nativeMinimumReserve}</dd>
+                    </div>
+                  )}
+                  {showSpendable && walletAsset?.available && (
                     <div>
                       <dt>Spendable balance</dt>
                       <dd>{walletAsset.available}</dd>

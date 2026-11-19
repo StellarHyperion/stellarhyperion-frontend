@@ -55,6 +55,7 @@ import {
   submitConversion,
   stellarAsset,
   trustlineLabel,
+  xlmShortfall,
   type Conversion,
   type SourceAsset,
   type TradeQuote,
@@ -826,6 +827,24 @@ export function Bridge() {
       return;
     }
     const reviewedQuote = reviewed.quote;
+    const requiredXlm =
+      (reviewedQuote.source.id === XLM.id ? reviewedQuote.sourceAmount : 0n) +
+      (reviewedQuote.bridge.route === 1 ? reviewedQuote.bridge.relayGas : 0n);
+    const nativeStatus = xlmShortfall(
+      balances.find((asset) => asset.id === XLM.id),
+      requiredXlm,
+    );
+    if (nativeStatus !== "ok") {
+      setReviewing(false);
+      setReviewed(null);
+      setReviewApproval(null);
+      setError(
+        nativeStatus === "unknown"
+          ? "Stellar reserve and fee parameters could not be confirmed. Refresh and try again."
+          : "Your spendable XLM no longer covers this transfer plus its reserve.",
+      );
+      return;
+    }
     setReviewing(false);
     const controller = new AbortController();
     waitController.current?.abort();
@@ -973,7 +992,13 @@ export function Bridge() {
     conservativeMax !== null &&
     quote.sourceAmount > conservativeMax &&
     isUsdcSource;
-
+  // The sender's XLM must cover any amount drawn directly from it (when XLM is the source) plus
+  // the live relay gas budget Axelar ITS bridging already quotes, on top of its own live reserve.
+  const xlmRequired = quote
+    ? (source.id === XLM.id ? quote.sourceAmount : 0n) +
+      (quote.bridge.route === 1 ? quote.bridge.relayGas : 0n)
+    : 0n;
+  const xlmStatus = quote ? xlmShortfall(xlmAsset, xlmRequired) : "ok";
   return (
     <>
       {checkpoint && (
@@ -1059,10 +1084,16 @@ export function Bridge() {
           <p className={styles.balance}>
             {wallet.address
               ? sourceBalance !== undefined
-                ? walletAsset?.sellingLiabilities &&
-                  parseUnits(walletAsset.sellingLiabilities, 7) > 0n
-                  ? `Balance: ${sourceBalance} ${source.code} (Spendable: ${spendableBalance(walletAsset)} ${source.code})`
-                  : `Balance: ${sourceBalance} ${source.code}`
+                ? source.id === XLM.id
+                  ? xlmAsset?.nativeMinimumReserve !== undefined
+                    ? `Balance: ${sourceBalance} XLM (${xlmAsset.available} spendable after reserve and fees)`
+                    : "Balance: " +
+                      sourceBalance +
+                      " XLM (spendable amount unconfirmed. Refresh to retry.)"
+                  : walletAsset?.sellingLiabilities &&
+                      parseUnits(walletAsset.sellingLiabilities, 7) > 0n
+                    ? `Balance: ${sourceBalance} ${source.code} (Spendable: ${spendableBalance(walletAsset)} ${source.code})`
+                    : `Balance: ${sourceBalance} ${source.code}`
                 : (accounts?.error ?? "Reading your balance...")
               : "Choose any liquid Stellar asset"}
           </p>
@@ -1228,6 +1259,19 @@ export function Bridge() {
             {`This amount exceeds the available route limit. Maximum bridgeable: ${formatUnits(conservativeMax, 7)} USDC.`}
           </p>
         )}
+        {xlmStatus === "insufficient" && (
+          <p role="alert" className={styles.error}>
+            Your spendable XLM will not cover {source.id === XLM.id ? "this amount plus" : ""} the
+            required reserve
+            {quote?.bridge.route === 1 ? " and the Axelar relay gas budget" : ""}.
+          </p>
+        )}
+        {xlmStatus === "unknown" && (
+          <p role="alert" className={styles.error}>
+            Stellar reserve and fee parameters for your account could not be confirmed. Refresh to
+            try again before sending.
+          </p>
+        )}
         {busy && (
           <p role="status" className={styles.progress}>
             <LoaderCircle className={styles.spinner} size={16} aria-hidden="true" />
@@ -1289,6 +1333,7 @@ export function Bridge() {
                 (!quote.conversion && !simulation) ||
                 busy ||
                 !!insufficient ||
+                xlmStatus !== "ok" ||
                 sourceBalance === undefined ||
                 activeSource.trustline === "frozen" ||
                 activeSource.trustline === "unauthorized"

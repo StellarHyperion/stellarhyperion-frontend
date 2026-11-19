@@ -8,15 +8,18 @@ import {
   conversionOperations,
   revalidateConversion,
   issuerVerificationLabel,
+  minimumXlmReserve,
   quoteTrade,
   searchAssets,
   spendableBalance,
+  spendableXlm,
   stellarAsset,
   submitConversion,
   suggestSourceSpend,
   USDC,
   XLM,
   trustlineLabel,
+  xlmShortfall,
 } from "../src/contracts/assets";
 import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
 import { DESTINATIONS, TESTNET } from "../src/config/testnet";
@@ -421,6 +424,90 @@ describe("Interrupted transfer recovery", () => {
     expect(parseCheckpoint(JSON.stringify({ ...checkpoint, ...change }))).toBeNull();
   });
 });
+describe("Spendable XLM accounts for reserves and fees", () => {
+  it("computes the minimum reserve and spendable figures with exact stroop arithmetic", () => {
+    // (2 base entries + 3 subentries + 1 sponsoring - 0 sponsored) * 5,000,000 stroop reserve.
+    expect(minimumXlmReserve(3, 1, 0, 5000000n)).toBe(30000000n);
+    expect(() => minimumXlmReserve(0, 0, 1, 5000000n)).toThrow(
+      "Invalid Stellar reserve accounting.",
+    );
+    expect(spendableXlm(100000000n, 1000000n, 30000000n, 200n)).toBe(68999800n);
+    // Never goes negative: a balance already below the reserve and fee margin clamps to zero.
+    expect(spendableXlm(1000000n, 0n, 30000000n, 200n)).toBe(0n);
+  });
+  it("never assumes safety when the spendable figure is unconfirmed", () => {
+    expect(xlmShortfall(undefined, 100n)).toBe("unknown");
+    // available alone, without a confirmed nativeMinimumReserve, is not trusted.
+    expect(xlmShortfall({ ...XLM, available: "0.0000100" }, 100n)).toBe("unknown");
+    const confirmed = { ...XLM, nativeMinimumReserve: "3.0000000", available: "0.0000100" };
+    expect(xlmShortfall(confirmed, 0n)).toBe("ok");
+    expect(xlmShortfall(confirmed, 100n)).toBe("ok");
+    expect(xlmShortfall(confirmed, 101n)).toBe("insufficient");
+  });
+  it("derives spendable XLM from live balances, liabilities and the account's real reserve count", async () => {
+    const request = vi.fn((input: string) => {
+      if (input.includes("/ledgers"))
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              _embedded: {
+                records: [{ base_fee_in_stroops: 100, base_reserve_in_stroops: 5000000 }],
+              },
+            }),
+            { status: 200 },
+          ),
+        );
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            subentry_count: 4,
+            num_sponsoring: 0,
+            num_sponsored: 0,
+            balances: [
+              { asset_type: "native", balance: "100.0000000", selling_liabilities: "1.0000000" },
+              {
+                asset_type: "credit_alphanum4",
+                asset_code: "FOO",
+                asset_issuer: TESTNET.reader,
+                balance: "5.0000000",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", request);
+    const assets = await accountAssets(TESTNET.reader);
+    const native = assets.find((asset) => asset.id === XLM.id);
+    // balance 100 - liabilities 1 - reserve (2+4)*0.5 = 3 - fee margin 2*0.00001 = 95.99998 XLM
+    expect(native?.nativeMinimumReserve).toBe("3.0000000");
+    expect(native?.available).toBe("95.9999800");
+    expect(assets.find((asset) => asset.code === "FOO")?.balance).toBe("5.0000000");
+  });
+  it("surfaces unknown reserve information explicitly instead of defaulting to the raw balance", async () => {
+    const request = vi.fn((input: string) => {
+      if (input.includes("/ledgers")) return Promise.resolve(new Response("", { status: 503 }));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            subentry_count: 0,
+            num_sponsoring: 0,
+            num_sponsored: 0,
+            balances: [{ asset_type: "native", balance: "50.0000000" }],
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", request);
+    const assets = await accountAssets(TESTNET.reader);
+    const native = assets.find((asset) => asset.id === XLM.id);
+    expect(native?.nativeMinimumReserve).toBeUndefined();
+    expect(native?.available).toBe("0.0000000");
+    expect(native?.balance).toBe("50.0000000");
+  });
+});
 describe("Live relay fee headroom", () => {
   it("rounds upward without losing precision or introducing token dust", () => {
     expect(relayBudget(1n)).toBe(2n);
@@ -438,7 +525,11 @@ describe("Native reserve-aware balances", () => {
       num_sponsored: 4,
       balances: [{ asset_type: "native", balance: "12.0000000", selling_liabilities: "1.0000000" }],
     };
-    const ledger = { _embedded: { records: [{ base_reserve_in_stroops: 5000000 }] } };
+    const ledger = {
+      _embedded: {
+        records: [{ base_fee_in_stroops: 100, base_reserve_in_stroops: 5000000 }],
+      },
+    };
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(payload)))
@@ -446,7 +537,8 @@ describe("Native reserve-aware balances", () => {
     vi.stubGlobal("fetch", fetcher);
     const native = (await accountAssets(TESTNET.reader))[0];
     expect(native?.nativeMinimumReserve).toBe("10.0000000");
-    expect(native?.available).toBe("1.0000000");
+    // 12 - 1 liability - 10 reserve - fee margin (2 * 0.00001) = 0.9999800.
+    expect(native?.available).toBe("0.9999800");
   });
   it("does not invent native spendable funds when reserve metadata is absent", async () => {
     vi.stubGlobal(
