@@ -494,6 +494,46 @@ describe("Real Stellar transaction encoding", () => {
       saveCheckpoint(null);
     });
 
+    it.each(["unavailable", "discarded"] as const)(
+      "retains the signed hash and blocks another transaction when checkpoint storage is %s",
+      (failure) => {
+        const checkpoint: TransferCheckpoint = {
+          router: TESTNET.router,
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "1000000",
+          stage: "bridge",
+          txHash: "a".repeat(64),
+        };
+        saveCheckpoint(null);
+        vi.stubGlobal("window", {});
+        vi.stubGlobal(
+          "localStorage",
+          failure === "unavailable"
+            ? undefined
+            : {
+                getItem: () => null,
+                setItem: () => {
+                  /* Simulate a browser discarding writes. */
+                },
+                removeItem: () => {
+                  /* No value was retained. */
+                },
+              },
+        );
+        expect(() => {
+          saveCheckpoint(checkpoint);
+        }).toThrow("Browser storage is unavailable");
+        expect(() => {
+          saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) });
+        }).toThrow("previous transaction remains pending");
+        vi.unstubAllGlobals();
+        saveCheckpoint(null);
+      },
+    );
+
     it("blocks ownership creation before signing when storage is unavailable", () => {
       vi.stubGlobal("localStorage", {
         setItem: () => {

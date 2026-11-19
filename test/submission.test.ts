@@ -87,7 +87,8 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
   it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
-    const values = new Map<string, string>();
+    const checkpointKey = "hyperion.testnet.pending-transfer";
+    const values = new Map<string, string>([[checkpointKey, "existing signed hash"]]);
     const storage = {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => void values.set(key, value),
@@ -99,6 +100,7 @@ describe("Signed Stellar submission failure boundaries", () => {
       kind: "transaction-recovery",
       reason: null,
     });
+    expect([...values]).toEqual([[checkpointKey, "existing signed hash"]]);
     const blocked = {
       getItem: () => null,
       setItem: () => {
@@ -110,6 +112,19 @@ describe("Signed Stellar submission failure boundaries", () => {
       available: false,
       persistent: false,
       kind: "transaction-recovery",
+    });
+  });
+  it("rejects a store that silently drops writes before an approval can rely on it", () => {
+    expect(
+      inspectCheckpointStorage({
+        getItem: () => null,
+        setItem: () => undefined,
+        removeItem: () => undefined,
+      }),
+    ).toMatchObject({
+      available: false,
+      persistent: false,
+      reason: "The browser did not retain the recovery probe.",
     });
   });
   it("classifies bounded pre-broadcast failures without attaching a fake hash", () => {
@@ -196,10 +211,33 @@ describe("Signed Stellar submission failure boundaries", () => {
     expect(send).not.toHaveBeenCalled();
     expect(progress.mock.calls.some((call) => call[0] === "submitting")).toBe(false);
   });
+  it("rejects a quote whose gross debit includes retained dust or whose payout floors to zero", () => {
+    const value: LiveQuote = {
+      route: 0,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000000n,
+      grossAmount: 9999995n,
+      fee: 30005n,
+      netAmount: 9969990n,
+      representableAmount: 996999n,
+      destinationAmount: 946999n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 500000n,
+    };
+    expect(() => quoteBreakdown({ ...value, grossAmount: value.requestedAmount })).toThrow(
+      /conserve/,
+    );
+    expect(() => quoteBreakdown({ ...value, destinationAmount: 0n })).toThrow(/conserve/);
+    expect(() => quoteBreakdown({ ...value, netAmount: 0n, representableAmount: 0n })).toThrow(
+      /conserve/,
+    );
+  });
 
   it("classifies simulation transport failure without wallet approval or broadcast", async () => {
     const { simulation, send } = setup();
-    simulation.mockRejectedValueOnce(new Error("Provider unavailable"));
+    simulation.mockReset().mockRejectedValue(new Error("Provider unavailable"));
     const approve = vi.fn();
     await expect(
       submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), approve),
@@ -281,7 +319,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       return Promise.reject(new Error("timeout"));
     });
     const result = await submitSettleClaim(key.publicKey(), 1n, sign);
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
   });
   it("reports a known network rejection instead of source confirmation", async () => {
@@ -413,7 +455,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       undefined,
       sim,
     );
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(wallet).toHaveBeenCalledTimes(1);
     expect(submittedXdr).toBe(sim.envelopeXdr);
     expect(send).toHaveBeenCalledTimes(1);

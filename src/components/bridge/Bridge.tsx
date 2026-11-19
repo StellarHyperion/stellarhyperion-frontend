@@ -205,8 +205,12 @@ function QuoteDetails({
 
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+    };
   }, []);
   const freshness = quoteFreshness(quote, now);
   return (
@@ -455,16 +459,18 @@ function PendingTransferCard({
             : checkpoint.stage === "conversion"
               ? current?.status === "confirmed"
                 ? "Conversion confirmed"
-                : "Conversion submitted"
+                : "Conversion source status unknown"
               : current?.status === "confirmed"
                 ? "Transfer confirmed on Stellar"
-                : "Transfer submitted"}
+                : "Transfer source status unknown"}
         </h2>
       </div>
       <p>
         {checkpoint.stage === "conversion"
           ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
-          : "Follow destination delivery in your transfer activity. A Stellar confirmation starts the bridge journey."}
+          : current?.status === "confirmed"
+            ? "The source transaction is confirmed. Follow destination delivery separately in transfer activity."
+            : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
       <a
         className={styles.transactionLink}
@@ -1344,6 +1350,14 @@ export function Bridge() {
         )}
         {quote?.conversion && needsTrustline && reserveError && (
           <p className={styles.error}>{reserveError}</p>
+        )}
+        {result?.failure && (
+          <p role="status" className={styles.assetNote}>
+            {result.failure.stage === "broadcast"
+              ? "The source broadcast outcome is unknown."
+              : "Source confirmation is temporarily unavailable."}{" "}
+            Check the saved source hash before approving another transaction.
+          </p>
         )}
         {busy && (
           <p role="status" className={styles.progress}>
