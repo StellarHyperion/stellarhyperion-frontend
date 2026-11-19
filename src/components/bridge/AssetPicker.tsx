@@ -23,17 +23,18 @@ export function AssetIcon({ code, network = false }: { code: string; network?: b
   );
 }
 export function CopyableAddress({ value, label }: { value: string; label: string }) {
-  const [copyError, setCopyError] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<{
+    value: string;
+    state: "copied" | "failed";
+  } | null>(null);
   const copy = async () => {
-    setCopied(false);
-    setCopyError(false);
+    setCopyStatus(null);
     try {
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
       await navigator.clipboard.writeText(value);
-      setCopied(true);
+      setCopyStatus({ value, state: "copied" });
     } catch {
-      setCopyError(true);
+      setCopyStatus({ value, state: "failed" });
     }
   };
   return (
@@ -42,8 +43,12 @@ export function CopyableAddress({ value, label }: { value: string; label: string
       <button type="button" aria-label={`Copy ${label}`} onClick={() => void copy()}>
         <Copy size={13} aria-hidden="true" />
       </button>
-      {copied && <span role="status">Copied</span>}
-      {copyError && <span role="alert">Copy failed; select the address to copy it.</span>}
+      {copyStatus?.value === value && copyStatus.state === "copied" && (
+        <span role="status">Copied</span>
+      )}
+      {copyStatus?.value === value && copyStatus.state === "failed" && (
+        <span role="alert">Copy failed; select the address to copy it.</span>
+      )}
     </span>
   );
 }

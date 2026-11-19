@@ -200,6 +200,8 @@
   user-select: all;
 }
 .copyAddress button {
+  min-inline-size: 44px;
+  min-block-size: 44px;
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;

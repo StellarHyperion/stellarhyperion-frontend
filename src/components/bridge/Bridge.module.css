@@ -178,10 +178,12 @@
   gap: 8px;
   padding-top: 4px;
   color: var(--text-secondary);
-  font-size: 0.6875rem;
+  font-size: 0.875rem;
   line-height: 1.55;
 }
 .identityDetails summary {
+  min-block-size: 44px;
+  padding-block: 12px;
   width: fit-content;
   cursor: pointer;
 }
@@ -211,7 +213,7 @@
   display: flex;
 }
 .identityDetails dd [role="alert"] {
-  color: var(--status-error, #e06a63);
+  color: var(--state-failed);
 }
 .connector {
   display: grid;
