@@ -330,6 +330,30 @@
   font-size: var(--type-mono-sm-size);
 }
 
+.pathComparison {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--type-mono-sm-size);
+}
+
+.pathComparison summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.pathComparison p,
+.pathComparison ul {
+  margin: 0;
+}
+
+.pathComparison ul {
+  display: grid;
+  gap: var(--space-1);
+  padding-inline-start: 1.25rem;
+}
+
 .conversionPath {
   display: flex;
   align-items: center;

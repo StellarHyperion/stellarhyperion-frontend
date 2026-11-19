@@ -56,6 +56,7 @@ import {
   stellarAsset,
   trustlineLabel,
   type Conversion,
+  type ConversionPathComparison,
   type SourceAsset,
   type TradeQuote,
 } from "../../contracts/assets";
@@ -269,12 +270,56 @@ function ConversionIntent({
           </li>
         ))}
       </ol>
+      <PathComparisonEvidence
+        comparison={conversion.pathComparison}
+        sourceMax={intent.sourceMax}
+        sourceCode={intent.source.code}
+      />
       <p>
         {intent.addTrustline
           ? "This transaction also creates the canonical USDC trustline."
           : "The canonical USDC trustline already exists."}
       </p>
     </section>
+  );
+}
+
+function PathComparisonEvidence({
+  comparison,
+  sourceMax,
+  sourceCode,
+}: {
+  comparison: ConversionPathComparison;
+  sourceMax: bigint;
+  sourceCode: string;
+}) {
+  return (
+    <details className={styles.pathComparison}>
+      <summary>
+        Compared {comparison.eligiblePaths} valid of {comparison.returnedPaths} Horizon paths;{" "}
+        {comparison.excludedPaths} excluded
+      </summary>
+      <p>
+        Selected exact output: {formatUnits(comparison.selectedOutput, 7)} USDC. Candidates had to
+        match the requested source amount, source identity, and canonical USDC destination; the
+        reviewed transaction still spends no more than {formatUnits(sourceMax, 7)} {sourceCode}.
+        Equal outputs are resolved by issuer-qualified path identity.
+      </p>
+      {comparison.diagnostics.length > 0 ? (
+        <ul>
+          {comparison.diagnostics.map(({ responseIndex, reason }) => (
+            <li key={`${responseIndex}-${reason}`}>
+              {responseIndex === null ? reason : `Path ${responseIndex + 1} excluded: ${reason}`}
+            </li>
+          ))}
+          {comparison.omittedDiagnostics > 0 && (
+            <li>{comparison.omittedDiagnostics} additional exclusions omitted.</li>
+          )}
+        </ul>
+      ) : (
+        <p>No returned paths were excluded.</p>
+      )}
+    </details>
   );
 }
 
@@ -287,12 +332,19 @@ function ConversionDetails({ conversion }: { conversion: NonNullable<TradeQuote[
     )
     .join(" -> ");
   return (
-    <p className={styles.assetNote}>
-      Convert up to {formatUnits(conversion.sourceMax, 7)} {conversion.source.code} into at least{" "}
-      {formatUnits(conversion.usdcAmount, 7)} Stellar USDC. Quoted path: {path}. Liquidity is
-      rechecked immediately before wallet approval; signing is blocked if this minimum cannot be
-      met.
-    </p>
+    <>
+      <p className={styles.assetNote}>
+        Convert up to {formatUnits(conversion.sourceMax, 7)} {conversion.source.code} into at least{" "}
+        {formatUnits(conversion.usdcAmount, 7)} Stellar USDC. Quoted path: {path}. Liquidity is
+        rechecked immediately before wallet approval; signing is blocked if this minimum cannot be
+        met.
+      </p>
+      <PathComparisonEvidence
+        comparison={conversion.pathComparison}
+        sourceMax={conversion.sourceMax}
+        sourceCode={conversion.source.code}
+      />
+    </>
   );
 }
 

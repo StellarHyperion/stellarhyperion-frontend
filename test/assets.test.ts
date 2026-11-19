@@ -6,6 +6,8 @@ import {
   conversionExecutionIntent,
   conversionRoute,
   conversionOperations,
+  compareConversionPaths,
+  MAX_CONVERSION_PATHS,
   revalidateConversion,
   issuerVerificationLabel,
   quoteTrade,
@@ -27,11 +29,20 @@ afterEach(() => {
 const path = {
   source_asset_type: "native",
   source_amount: "1.0000000",
+  destination_asset_type: "credit_alphanum4",
   destination_asset_code: USDC.code,
   destination_asset_issuer: USDC.issuer,
   destination_amount: "0.8000000",
   path: [],
 };
+const pathComparison = (selectedOutput: bigint) => ({
+  returnedPaths: 1,
+  eligiblePaths: 1,
+  selectedOutput,
+  excludedPaths: 0,
+  diagnostics: [],
+  omittedDiagnostics: 0,
+});
 const answer = (records: unknown[]) => {
   const request = vi
     .fn()
@@ -41,10 +52,24 @@ const answer = (records: unknown[]) => {
 };
 describe("Real Stellar conversion transaction boundaries", () => {
   it("uses live liquidity and keeps the conversion within the exact source maximum", async () => {
-    const request = answer([path, { ...path, destination_amount: "0.9000000" }]);
+    const request = answer([
+      path,
+      { ...path, destination_amount: "0.9000000" },
+      { ...path, path: [{ asset_type: "unsupported" }] },
+    ]);
     const conversion = await quoteConversion(XLM, 10000000n);
     expect(request.mock.calls[0]?.[0]).toContain("source_amount=1");
+    expect(request.mock.calls[0]?.[0]).toContain(`limit=${MAX_CONVERSION_PATHS}`);
     expect(conversion.usdcAmount).toBe(8955000n);
+    expect(conversion.pathComparison.selectedOutput).toBe(9000000n);
+    expect(conversion.pathComparison).toMatchObject({
+      returnedPaths: 3,
+      eligiblePaths: 2,
+      excludedPaths: 1,
+      diagnostics: [
+        { responseIndex: 2, reason: "path asset 1 has an unsupported asset type." },
+      ],
+    });
     const tx = new TransactionBuilder(new Account(TESTNET.reader, "1"), {
       fee: "100",
       networkPassphrase: TESTNET.networkPassphrase,
@@ -78,6 +103,7 @@ describe("Real Stellar conversion transaction boundaries", () => {
       sourceMax: 10000000n,
       usdcAmount: 8955000n,
       path: [intermediate],
+      pathComparison: pathComparison(9000000n),
     };
     const intent = conversionExecutionIntent(conversion, true);
     expect(intent).toMatchObject({
@@ -112,9 +138,94 @@ describe("Real Stellar conversion transaction boundaries", () => {
     await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow("No liquid");
     answer([{ ...path, destination_asset_issuer: TESTNET.reader }]);
     await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow("No liquid");
+    answer([{ ...path, source_amount: "0.9000000" }]);
+    await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow(
+      "Path 1: source amount does not match the requested spend cap.",
+    );
+  });
+  it("excludes malformed and source-mismatched paths with bounded diagnostics", () => {
+    const result = compareConversionPaths(XLM, 10000000n, [
+      { ...path, source_amount: "0.9000000" },
+      { ...path, destination_amount: "not-an-amount" },
+      { ...path, path: [{ asset_type: "unsupported" }] },
+      { ...path },
+    ]);
+    expect(result.selected?.output).toBe(8000000n);
+    expect(result.eligiblePaths).toBe(1);
+    expect(result.excludedPaths).toBe(3);
+    expect(result.diagnostics.map(({ reason }) => reason)).toEqual([
+      "source amount does not match the requested spend cap.",
+      "destination amount is not a valid exact 7-decimal amount.",
+      "path asset 1 has an unsupported asset type.",
+    ]);
+  });
+  it("matches issued source paths by both code and issuer", () => {
+    const source = {
+      id: `USD:${TESTNET.reader}`,
+      code: "USD",
+      issuer: TESTNET.reader,
+      verification: "horizon-search" as const,
+      trustline: "present" as const,
+    };
+    const result = compareConversionPaths(source, 10000000n, [
+      {
+        ...path,
+        source_asset_type: "credit_alphanum4",
+        source_asset_code: source.code,
+        source_asset_issuer: USDC.issuer,
+      },
+      {
+        ...path,
+        source_asset_type: "credit_alphanum4",
+        source_asset_code: source.code,
+        source_asset_issuer: source.issuer,
+      },
+    ]);
+    expect(result.eligiblePaths).toBe(1);
+    expect(result.excludedPaths).toBe(1);
+    expect(result.diagnostics[0]?.reason).toBe(
+      "source code or issuer does not match the requested asset.",
+    );
+  });
+  it("selects equal-output paths by issuer-qualified identity, regardless of Horizon order", () => {
+    const issuerA = Keypair.random().publicKey();
+    const issuerB = Keypair.random().publicKey();
+    const first = {
+      ...path,
+      destination_amount: "0.9000000",
+      path: [{ asset_type: "credit_alphanum4", asset_code: "USD", asset_issuer: issuerA }],
+    };
+    const second = {
+      ...path,
+      destination_amount: "0.9000000",
+      path: [{ asset_type: "credit_alphanum4", asset_code: "USD", asset_issuer: issuerB }],
+    };
+    const forward = compareConversionPaths(XLM, 10000000n, [first, second]);
+    const reversed = compareConversionPaths(XLM, 10000000n, [second, first]);
+    expect(forward.selected).toEqual(reversed.selected);
+    expect(forward.selected?.path[0]?.issuer).toBe(
+      [issuerA, issuerB].sort()[0],
+    );
+  });
+  it("rejects a response that exceeds the bounded comparison limit", () => {
+    const result = compareConversionPaths(
+      XLM,
+      10000000n,
+      Array.from({ length: MAX_CONVERSION_PATHS + 1 }, () => path),
+    );
+    expect(result.selected).toBeNull();
+    expect(result.excludedPaths).toBe(MAX_CONVERSION_PATHS + 1);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.reason).toContain("comparison limit");
   });
   it("rechecks live liquidity without changing reviewed conversion bounds", async () => {
-    const reviewed = { source: XLM, sourceMax: 10000000n, usdcAmount: 8000000n, path: [] };
+    const reviewed = {
+      source: XLM,
+      sourceMax: 10000000n,
+      usdcAmount: 8000000n,
+      path: [],
+      pathComparison: pathComparison(8000000n),
+    };
     answer([
       {
         ...path,
@@ -337,6 +448,7 @@ describe("Real Stellar conversion transaction boundaries", () => {
       sourceMax: 10000000n,
       usdcAmount: 9000000n,
       path: [],
+      pathComparison: pathComparison(9000000n),
     };
     await expect(submitConversion(TESTNET.reader, frozConversion, dummySigner)).rejects.toThrow(
       "Trustline for FROZ is frozen by the issuer.",
@@ -347,6 +459,7 @@ describe("Real Stellar conversion transaction boundaries", () => {
       sourceMax: 10000000n,
       usdcAmount: 9000000n,
       path: [],
+      pathComparison: pathComparison(9000000n),
     };
     await expect(submitConversion(TESTNET.reader, unatConversion, dummySigner)).rejects.toThrow(
       "Trustline for UNAT is not authorized by the issuer.",
@@ -357,6 +470,7 @@ describe("Real Stellar conversion transaction boundaries", () => {
       sourceMax: 60000000n,
       usdcAmount: 50000000n,
       path: [],
+      pathComparison: pathComparison(50000000n),
     };
     await expect(submitConversion(TESTNET.reader, liabConversion, dummySigner)).rejects.toThrow(
       "Insufficient available LIAB balance. Selling liabilities reduce your spendable balance to 5.0000000 LIAB.",
