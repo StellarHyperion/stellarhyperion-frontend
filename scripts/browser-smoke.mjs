@@ -20,6 +20,25 @@ const budgets = {
 };
 const traces = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const ALLOWED_PROVIDER_HOSTS = [
+  "horizon-testnet.stellar.org",
+  "soroban-testnet.stellar.org",
+  "axelarscan.io",
+  "circle.com",
+];
+const isAllowedProviderHost = (requestUrl) => {
+  try {
+    const { hostname } = new URL(requestUrl);
+    // Exact host match, or a real subdomain of it (e.g. iris-api-sandbox.circle.com).
+    // Never a substring match, so "evil.com/soroban-testnet.stellar.org" or
+    // "soroban-testnet.stellar.org.evil.com" cannot pass.
+    return ALLOWED_PROVIDER_HOSTS.some(
+      (host) => hostname === host || hostname.endsWith(`.${host}`),
+    );
+  } catch {
+    return false;
+  }
+};
 const deployment = JSON.parse(
   await readFile(new URL("../src/config/testnet-deployment.json", import.meta.url), "utf8"),
 );
@@ -34,13 +53,7 @@ try {
   // and cancellation boundaries without ever enabling wallet signing or transaction submission.
   await page.route("**/*", async (route) => {
     const url = route.request().url();
-    if (
-      providerDelayMs > 0 &&
-      /horizon-testnet\.stellar\.org|soroban-testnet\.stellar\.org|axelarscan\.io|circle\.com/i.test(
-        url,
-      )
-    )
-      await sleep(providerDelayMs);
+    if (providerDelayMs > 0 && isAllowedProviderHost(url)) await sleep(providerDelayMs);
     await route.continue();
   });
   await page.addInitScript(() => {
@@ -55,6 +68,7 @@ try {
   await page.addInitScript(() => {
     if (sessionStorage.getItem("wallet-preference-smoke-seeded")) return;
     sessionStorage.setItem("wallet-preference-smoke-seeded", "true");
+    // codeql[js/clear-text-storage-of-sensitive-data]: walletId here is the public wallet name "albedo", not a credential.
     localStorage.setItem("hyperion.stellar.walletId", "albedo");
     localStorage.setItem("hyperion.testnet.pending-transfer", "unresolved-checkpoint");
   });
