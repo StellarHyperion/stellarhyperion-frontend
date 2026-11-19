@@ -25,6 +25,12 @@ import {
 } from "./sdk";
 import styles from "./WalletPicker.module.css";
 
+import {
+  walletAvailability,
+  walletAvailabilityLabel,
+  type WalletAvailabilityStatus,
+} from "./capabilities";
+
 const WALLET_KEY = "hyperion.stellar.walletId";
 function readSavedWallet(): string | null {
   try {
@@ -49,6 +55,20 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [isConnecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [availability, setAvailability] = useState<
+    Partial<Record<StellarWalletId, WalletAvailabilityStatus>>
+  >({});
+  useEffect(() => {
+    if (!pickerOpen) return;
+    let active = true;
+    for (const wallet of STELLAR_WALLETS)
+      void walletAvailability(wallet.id).then((status) => {
+        if (active) setAvailability((current) => ({ ...current, [wallet.id]: status }));
+      });
+    return () => {
+      active = false;
+    };
+  }, [pickerOpen]);
   const [authorizing, setAuthorizing] = useState<StellarWalletId | null>(null);
   const [pendingSigningRequest, setPendingSigningRequest] = useState<PendingSigningRequest | null>(
     null,
@@ -93,6 +113,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     attempt.current++;
     setConnecting(true);
     setError(null);
+    setAvailability({});
     setPickerOpen(true);
     return await new Promise<string | null>((resolve) => {
       pending.current = resolve;
@@ -198,6 +219,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
                 >
                   {authorizing === wallet.id ? `Connecting to ${wallet.name}...` : wallet.name}
                 </button>
+                <span role="status">
+                  {walletAvailabilityLabel(availability[wallet.id] ?? "unknown")}
+                </span>
                 <a
                   href={wallet.url}
                   target="_blank"

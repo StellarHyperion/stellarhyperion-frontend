@@ -331,10 +331,10 @@ export async function readLane(
   route: BridgeRoute = 1,
 ): Promise<LaneState> {
   const destination = destinationFor(destinationKey);
-  if (route === 1 && destinationKey !== "sepolia")
+  if (!destination.routes.includes(route))
     return {
       available: false,
-      reason: "Axelar ITS is configured for Sepolia. Choose Circle CCTP for this network.",
+      reason: "This bridge does not have an independently verified lane to this testnet.",
       feeBps: null,
       ledger: 0,
       adapter: null,
@@ -691,6 +691,46 @@ export function reconcileSignatureReturn(
   return { valid: true };
 }
 
+export interface SequenceDiagnostic {
+  valid: boolean;
+  expectedSequence: string;
+  ledgerSequence: string;
+  reason: string | null;
+}
+
+export function diagnoseSequence(
+  constructedSequence: string,
+  ledgerSequence: string,
+): SequenceDiagnostic {
+  const expectedLedgerSequence = (BigInt(constructedSequence) - 1n).toString();
+  if (ledgerSequence !== expectedLedgerSequence) {
+    return {
+      valid: false,
+      expectedSequence: expectedLedgerSequence,
+      ledgerSequence,
+      reason: `The account sequence changed from ${expectedLedgerSequence} to ${ledgerSequence} after construction. Review a fresh simulation before signing.`,
+    };
+  }
+  return {
+    valid: true,
+    expectedSequence: expectedLedgerSequence,
+    ledgerSequence,
+    reason: null,
+  };
+}
+
+export async function verifyAccountSequence(
+  client: rpc.Server,
+  accountAddress: string,
+  constructedSequence: string,
+): Promise<void> {
+  const latest = await client.getAccount(accountAddress);
+  const diagnostic = diagnoseSequence(constructedSequence, latest.sequenceNumber());
+  if (!diagnostic.valid) {
+    throw new Error(diagnostic.reason ?? "The account sequence changed after construction.");
+  }
+}
+
 export async function submitOperation(
   sender: string,
   operation: xdr.Operation,
@@ -721,13 +761,14 @@ export async function submitOperation(
     );
   }
   const prepared = rpc.assembleTransaction(transaction, simulation).build();
+  await verifyAccountSequence(client, sender, prepared.sequence);
   progress?.("signing");
   return signAndSubmit(prepared, sign, progress, approval, reconcile);
 }
 
 export async function submitClassicOperations(
   sender: string,
-  operations: readonly xdr.Operation[],
+  operations: readonly xdr.Operation[] | (() => Promise<readonly xdr.Operation[]>),
   sign: WalletSigner,
   progress?: (phase: TransactionPhase, hash?: string) => void,
   approval?: WalletApprovalProvenance,
@@ -736,11 +777,13 @@ export async function submitClassicOperations(
   const client = server();
   if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
     throw new Error("The RPC endpoint is not Stellar Testnet.");
-  const builder = new TransactionBuilder(await client.getAccount(sender), {
+  const account = await client.getAccount(sender);
+  const builder = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: TESTNET.networkPassphrase,
   });
-  for (const operation of operations) builder.addOperation(operation);
+  const preparedOperations = typeof operations === "function" ? await operations() : operations;
+  for (const operation of preparedOperations) builder.addOperation(operation);
   return signAndSubmit(builder.setTimeout(180).build(), sign, progress, approval, reconcile);
 }
 
@@ -764,6 +807,11 @@ async function signAndSubmit(
   );
   if (toHex(signedTransaction.hash()) !== toHex(prepared.hash())) {
     throw new Error("The wallet returned a different transaction. Nothing was submitted.");
+  }
+  if ("innerTransaction" in signedTransaction || signedTransaction.sequence !== prepared.sequence) {
+    throw new Error(
+      "The transaction sequence was modified. Stale sequence cannot be silently changed inside a reviewed signed envelope.",
+    );
   }
   const hash = toHex(prepared.hash()).slice(2);
   if (reconcile) {
@@ -797,7 +845,7 @@ async function signAndSubmit(
   } catch (error) {
     if (
       error instanceof Error &&
-      /network rejected|Nothing was accepted|superseded|switched/.test(error.message)
+      /network rejected|Nothing was accepted|superseded|switched|sequence/i.test(error.message)
     )
       throw error;
     // A network timeout after submission has an unknown outcome. Preserve the real hash for checking.

@@ -34,7 +34,9 @@ function setup() {
     passphrase: TESTNET.networkPassphrase,
     protocolVersion: "27",
   });
-  vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(key.publicKey(), "0"));
+  vi.spyOn(rpc.Server.prototype, "getAccount").mockImplementation(() =>
+    Promise.resolve(new Account(key.publicKey(), "0")),
+  );
   vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
     executable: {
       type: "contractExecutableWasm",
@@ -161,6 +163,33 @@ describe("Signed Stellar submission failure boundaries", () => {
     ).rejects.toThrow("switched");
     expect(send).not.toHaveBeenCalled();
     expect(recoveredHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("detects account sequence change after construction and requires fresh simulation before signing", async () => {
+    const { send } = setup();
+    let calls = 0;
+    vi.spyOn(rpc.Server.prototype, "getAccount").mockImplementation(() => {
+      calls += 1;
+      return Promise.resolve(new Account(key.publicKey(), calls > 1 ? "1" : "0"));
+    });
+    const wallet = vi.fn(sign);
+    await expect(submitSettleClaim(key.publicKey(), 1n, wallet)).rejects.toThrow(
+      "sequence changed",
+    );
+    expect(wallet).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("refuses to submit an envelope with a silently altered sequence number", async () => {
+    const { send } = setup();
+    const altered = (value: string) => {
+      const tx = TransactionBuilder.fromXdr(value, TESTNET.networkPassphrase);
+      if ("innerTransaction" in tx) throw new Error("Unexpected fee bump");
+      (tx as unknown as { _tx: { seqNum: bigint }; _sequence: string })._tx.seqNum = 999n;
+      (tx as unknown as { _sequence: string })._sequence = "999";
+      tx.sign(key);
+      return Promise.resolve({ signedTxXdr: tx.toXdr() });
+    };
+    await expect(submitSettleClaim(key.publicKey(), 1n, altered)).rejects.toThrow();
+    expect(send).not.toHaveBeenCalled();
   });
   it("does not broadcast after the wallet disconnects while signing", async () => {
     const { send } = setup();
