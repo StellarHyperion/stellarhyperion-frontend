@@ -140,6 +140,27 @@ describe("Signed Stellar submission failure boundaries", () => {
     });
   });
 
+  it("never broadcasts a valid signature returned after its envelope deadline", async () => {
+    const { send } = setup();
+    const approval = vi.fn(async (envelope: string) => {
+      const signed = await sign(envelope);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 181000);
+      return signed;
+    });
+    const progress = vi.fn();
+    await expect(
+      submitOperation(
+        TESTNET.reader,
+        new Contract(TESTNET.router).call("noop"),
+        approval,
+        progress,
+      ),
+    ).rejects.toThrow(/expired before broadcast/);
+    expect(approval).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
+    expect(progress.mock.calls.some((call) => call[0] === "submitting")).toBe(false);
+  });
+
   it("never asks the wallet or submits when simulation fails", async () => {
     const { simulation, send } = setup();
     simulation.mockResolvedValueOnce({
