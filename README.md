@@ -54,6 +54,10 @@ The backend uses a server-side PostgreSQL connection and a scheduled indexer. Da
 
 Vercel's installed Git integration publishes `main` after pushes. GitHub Actions runs quality checks; the legacy token-based deployment jobs were removed to avoid duplicate deployments and expired deployment credentials.
 
+## Public asset metadata
+
+Asset discovery caches only public code, issuer, Stellar precision and deployment identity, with a five-minute freshness window and at most 64 entries in memory and browser storage. Keys separate networks, deployment revisions and same-symbol issuers. During a Horizon outage, the picker can show cached identities with an explicit cached or stale source label. Balances, authorization, conversion prices, recipients and signed amounts are never taken from this cache; signing still requires fresh account and quote checks. Storage failure leaves safely available discovery reads usable and does not clear transaction recovery checkpoints.
+
 ## Verification
 
 `npm run check` runs formatting, interface rules, contrast checks, unit tests, lint, types and the production build. Start the app and run `npm run test:browser` for the real wallet picker, theme persistence, native selectors and mobile layout. Chromium must be installed with `npx playwright install chromium`.
