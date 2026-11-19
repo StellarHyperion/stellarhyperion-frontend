@@ -99,7 +99,9 @@ describe("Direct Stellar wallet adapters", () => {
         finishPreflight = resolve;
       }),
     );
-    const preflightStarted = vi.waitFor(() => expect(api.freighter.getAddress).toHaveBeenCalled());
+    const preflightStarted = vi.waitFor(() => {
+      expect(api.freighter.getAddress).toHaveBeenCalled();
+    });
     const coordinator = createSigningCoordinator();
     const outstanding = coordinator.run(
       { operation: "transaction", account: signer.publicKey() },
@@ -110,7 +112,9 @@ describe("Direct Stellar wallet adapters", () => {
     coordinator.abandon(new Error("Disconnected during preflight"));
     await expect(outstanding).rejects.toThrow("Disconnected during preflight");
     finishPreflight({ address: signer.publicKey() });
-    await vi.waitFor(() => expect(api.freighter.getNetworkDetails).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(api.freighter.getNetworkDetails).toHaveBeenCalled();
+    });
     expect(api.freighter.signTransaction).not.toHaveBeenCalled();
     expect(coordinator.pending).toBeNull();
   });
