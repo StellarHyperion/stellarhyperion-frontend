@@ -68,6 +68,22 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     return null;
   }
 }
+
+// Returns true only when the checkpoint still describes the same account, destination, route,
+// amount and intent as the current session. A different account or intent means a saved
+// confirmation must never be reapplied to a new transfer.
+export function checkpointMatches(
+  checkpoint: TransferCheckpoint,
+  context: Pick<TransferCheckpoint, "account" | "destination" | "route" | "bridgeAmount" | "stage">,
+): boolean {
+  return (
+    checkpoint.account === context.account &&
+    checkpoint.destination === context.destination &&
+    checkpoint.route === context.route &&
+    checkpoint.bridgeAmount === context.bridgeAmount &&
+    checkpoint.stage === context.stage
+  );
+}
 export function saveCheckpoint(value: TransferCheckpoint | null) {
   const existing = parseCheckpoint(snapshot());
   if (

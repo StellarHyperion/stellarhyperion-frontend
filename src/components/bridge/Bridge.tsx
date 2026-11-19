@@ -4,6 +4,7 @@ import Link from "next/link";
 import {
   ArrowDown,
   ArrowRight,
+  Copy,
   ArrowUpRight,
   ChevronDown,
   LoaderCircle,
@@ -44,6 +45,7 @@ import {
 } from "../../contracts";
 import {
   USDC,
+  XLM,
   accountAssets,
   issuerVerificationLabel,
   conversionExecutionIntent,
@@ -51,6 +53,7 @@ import {
   quoteTrade,
   spendableBalance,
   submitConversion,
+  stellarAsset,
   trustlineLabel,
   type Conversion,
   type SourceAsset,
@@ -72,6 +75,90 @@ import styles from "./Bridge.module.css";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
+
+export interface BridgeFormParams {
+  amount: string;
+  recipient: string;
+  destination: DestinationKey;
+  route: BridgeRoute;
+  source: SourceAsset;
+}
+
+// Bounded public form state: only these keys are part of a shareable bridge link.
+// Checkpoints, signatures and submission intent are deliberately excluded.
+export function parseBridgeFormParams(search: string): BridgeFormParams | null {
+  if (search.length > 2048) return null;
+  const params = new URLSearchParams(search);
+  if (["a", "r", "d", "t", "s"].some((key) => params.getAll(key).length > 1)) return null;
+  const amount = params.get("a") ?? "";
+  const recipient = params.get("r") ?? "";
+  const destinationRaw = params.get("d");
+  const routeRaw = params.get("t");
+  const sourceRaw = params.get("s");
+
+  let destination: DestinationKey = "sepolia";
+  if (destinationRaw) {
+    try {
+      destination = destinationFor(destinationRaw).key;
+    } catch {
+      return null;
+    }
+  }
+
+  let route: BridgeRoute = 1;
+  if (routeRaw) {
+    if (routeRaw === "0") route = 0;
+    else if (routeRaw === "1") route = 1;
+    else return null;
+  }
+
+  if (amount.length > 64 || recipient.length > 42 || (sourceRaw?.length ?? 0) > 128) return null;
+  if (amount) {
+    try {
+      if (!/^\d+(?:\.\d{1,7})?$/.test(amount)) return null;
+      const value = parseUnits(amount, 7);
+      if (value <= 0n || value > (1n << 63n) - 1n) return null;
+    } catch {
+      return null;
+    }
+  }
+  if (recipient) {
+    try {
+      validateRecipient(recipient);
+    } catch {
+      return null;
+    }
+  }
+  if (!destinationFor(destination).routes.includes(route)) return null;
+  let source: SourceAsset = USDC;
+  if (sourceRaw) {
+    if (sourceRaw === XLM.id) {
+      source = XLM;
+    } else if (sourceRaw === USDC.id) {
+      source = USDC;
+    } else {
+      const parts = sourceRaw.split(":");
+      if (parts.length !== 2) return null;
+      const [code, issuer] = parts;
+      if (!code || !issuer) return null;
+      const candidate: SourceAsset = {
+        id: sourceRaw,
+        code,
+        issuer,
+        verification: "horizon-search",
+        trustline: "not-checked",
+      };
+      try {
+        stellarAsset(candidate);
+      } catch {
+        return null;
+      }
+      source = candidate;
+    }
+  }
+
+  return { amount, recipient, destination, route, source };
+}
 
 function ApprovalDetails({
   approval,
@@ -221,6 +308,7 @@ function PendingTransferCard({
   onReset: () => void;
 }) {
   const wallet = useStellarWallet();
+  const [copied, setCopied] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -330,6 +418,38 @@ function PendingTransferCard({
         {checkpoint.txHash.slice(0, 12)}...{checkpoint.txHash.slice(-8)}{" "}
         <ArrowUpRight size={14} aria-hidden="true" />
       </a>
+      <div className={styles.transactionIdentity}>
+        <span>Source transaction on Stellar Testnet</span>
+        <div className={styles.transactionIdentityValue}>
+          <code className={styles.transactionHash}>{checkpoint.txHash}</code>
+          <button
+            type="button"
+            className={styles.copyHash}
+            aria-label="Copy transaction hash"
+            onClick={() => {
+              void navigator.clipboard
+                .writeText(checkpoint.txHash)
+                .then(() => {
+                  setCopied(true);
+                })
+                .catch(() => {
+                  setCopied(false);
+                });
+            }}
+          >
+            <Copy size={14} aria-hidden="true" />
+          </button>
+        </div>
+        {copied && <span role="status">Transaction hash copied.</span>}
+        <a
+          className={styles.transactionLink}
+          href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          View on Stellar Expert <ArrowUpRight size={14} aria-hidden="true" />
+        </a>
+      </div>
       {checkpoint.stage === "bridge" && (
         <Link href={`/transfers/${checkpoint.txHash}`}>
           Track transfer <ArrowRight size={14} aria-hidden="true" />
@@ -564,6 +684,56 @@ export function Bridge() {
     !locked &&
     simulatedState?.key !== simKey;
   const chain = destinationFor(destination);
+  const waitController = useRef<AbortController | null>(null);
+  const waitGeneration = useRef(0);
+  const [shareStatus, setShareStatus] = useState<string | null>(null);
+  useEffect(() => {
+    const generation = waitGeneration;
+    return () => {
+      ++generation.current;
+      waitController.current?.abort();
+    };
+  }, [wallet.address]);
+  useEffect(() => {
+    const parsed = parseBridgeFormParams(window.location.search);
+    if (!parsed) return;
+    const timer = setTimeout(() => {
+      setSource(parsed.source);
+      setDestination(parsed.destination);
+      setRoute(parsed.route);
+      setAmount(parsed.amount);
+      setRecipient(parsed.recipient);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, []);
+  const shareConfiguration = async () => {
+    const params = new URLSearchParams({
+      a: amount,
+      r: recipient,
+      d: destination,
+      t: String(route),
+      s: source.id,
+    });
+    if (!parseBridgeFormParams(`?${params}`)) {
+      setShareStatus("Enter a valid amount and recipient on a supported route before sharing.");
+      return;
+    }
+    const url = new URL("/", window.location.origin);
+    url.search = params.toString();
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setShareStatus(
+        "Transfer configuration link copied. Opening it requires fresh quotes and wallet approval.",
+      );
+    } catch {
+      setShareStatus(
+        "Clipboard access is unavailable. Try sharing again after allowing clipboard access.",
+      );
+    }
+  };
+
   const invalidateQuote = () => {
     setQuoteVersion((version) => version + 1);
     setQuoted(null);
@@ -657,6 +827,10 @@ export function Bridge() {
     }
     const reviewedQuote = reviewed.quote;
     setReviewing(false);
+    const controller = new AbortController();
+    waitController.current?.abort();
+    waitController.current = controller;
+    const generation = ++waitGeneration.current;
     setBusy(true);
     setError(null);
     setResult(null);
@@ -737,7 +911,9 @@ export function Bridge() {
           },
           { ...reviewApproval, operation: "conversion" },
           conversionReconcile,
+          controller.signal,
         );
+        if (generation !== waitGeneration.current) return;
         if (swap.status !== "confirmed") {
           setResult(swap);
           if (swap.status === "failed")
@@ -766,7 +942,9 @@ export function Bridge() {
         { ...reviewApproval, operation: "bridge" },
         bridgeReconcile,
         reviewed.simulation ?? undefined,
+        controller.signal,
       );
+      if (generation !== waitGeneration.current) return;
       setResult(submitted);
     } catch (cause) {
       const message = errorMessage(cause);
@@ -1062,6 +1240,30 @@ export function Bridge() {
                   ? "waiting for Stellar confirmation"
                   : "checking the current quote"}
             .
+          </p>
+        )}
+        {busy && phase === "pending" && (
+          <button
+            type="button"
+            className={styles.secondary}
+            onClick={() => waitController.current?.abort()}
+          >
+            Stop waiting
+          </button>
+        )}
+        <button
+          type="button"
+          className={styles.secondary}
+          disabled={busy}
+          onClick={() => {
+            void shareConfiguration();
+          }}
+        >
+          Share transfer configuration
+        </button>
+        {shareStatus && (
+          <p role="status" className={styles.reviewNote}>
+            {shareStatus}
           </p>
         )}
         {!wallet.isConnected ? (
