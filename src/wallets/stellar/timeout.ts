@@ -40,24 +40,38 @@ export function withTimeout<T>(
   ms: number,
   message: string,
   ErrorClass: new (message: string) => Error = WalletTimeoutError,
+  signal?: AbortSignal,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    };
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(signal?.reason);
+    };
     const timer = setTimeout(() => {
       settled = true;
+      cleanup();
       reject(new ErrorClass(message));
     }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
     promise.then(
       (value) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        cleanup();
         resolve(value);
       },
       (error: unknown) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        cleanup();
         reject(error instanceof Error ? error : new Error(String(error)));
       },
     );

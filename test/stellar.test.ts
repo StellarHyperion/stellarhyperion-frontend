@@ -24,6 +24,7 @@ import {
   settleClaimsOperation,
   supportsBatchClaimSettlement,
   readTransaction,
+  transactionDeadline,
   reconcileSignatureReturn,
   validateReviewMatch,
   validateRecipient,
@@ -41,12 +42,46 @@ const quote: LiveQuote = {
   fee: 30000n,
   netAmount: 9970009n,
   destinationAmount: 9970009n,
+  representableAmount: 9970009n,
   flowAvailable: 10000000000n,
   ledger: 1,
   relayGas: 1051082n,
+  observedAt: "2026-11-18T20:00:00.000Z",
+  scope: {
+    destination: "sepolia",
+    route: 1,
+    adapter: TESTNET.router,
+    ledger: 1,
+  },
 };
 afterEach(() => vi.unstubAllGlobals());
 describe("Real Stellar transaction encoding", () => {
+  it("diagnoses expired envelope bounds before broadcast", () => {
+    const transaction = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    })
+      .addOperation(new Contract(TESTNET.router).call("noop"))
+      .setTimeout(60)
+      .build();
+    const maxTime = Number(transaction.timeBounds?.maxTime ?? 0);
+    const deadline = transactionDeadline(transaction, maxTime + 1);
+    expect(deadline.expired).toBe(true);
+    expect(deadline.remainingSeconds).toBe(0);
+  });
+  it("rejects malformed bounds and identifies envelopes before their valid window", () => {
+    expect(() => transactionDeadline(null)).toThrow(/bounds/);
+    expect(() => transactionDeadline({ timeBounds: { minTime: "-1", maxTime: "60" } })).toThrow(
+      /invalid/,
+    );
+    expect(() => transactionDeadline({ timeBounds: { minTime: "0", maxTime: "0" } })).toThrow(
+      /invalid/,
+    );
+    expect(
+      transactionDeadline({ timeBounds: { minTime: "100", maxTime: "200" } }, 99).notYetValid,
+    ).toBe(true);
+  });
+
   it("only advertises batch settlement when the router exposes its batch entrypoint", () => {
     const method = (
       name: string,

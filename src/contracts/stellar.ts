@@ -34,6 +34,47 @@ import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
+export const TRANSACTION_TIMEOUT_SECONDS = 180;
+
+export interface TransactionDeadline {
+  readonly minTime: number;
+  readonly maxTime: number;
+  readonly remainingSeconds: number;
+  readonly expired: boolean;
+  readonly notYetValid: boolean;
+}
+
+export function transactionDeadline(
+  transaction: unknown,
+  now = Math.floor(Date.now() / 1000),
+): TransactionDeadline {
+  if (!transaction || typeof transaction !== "object")
+    throw new Error("The transaction has no envelope time bounds.");
+  const value = transaction as {
+    timeBounds?: { minTime: string; maxTime: string };
+    innerTransaction?: { timeBounds?: { minTime: string; maxTime: string } };
+  };
+  const bounds = value.timeBounds ?? value.innerTransaction?.timeBounds;
+  if (!bounds) throw new Error("The transaction has no envelope time bounds.");
+  const minTime = Number(bounds.minTime);
+  const maxTime = Number(bounds.maxTime);
+  if (
+    !/^\d+$/.test(bounds.minTime) ||
+    !/^\d+$/.test(bounds.maxTime) ||
+    !Number.isSafeInteger(minTime) ||
+    !Number.isSafeInteger(maxTime) ||
+    minTime < 0 ||
+    maxTime <= minTime
+  )
+    throw new Error("The transaction has invalid envelope time bounds.");
+  return {
+    minTime,
+    maxTime,
+    remainingSeconds: Math.max(0, maxTime - now),
+    expired: now >= maxTime,
+    notYetValid: now < minTime,
+  };
+}
 
 export type WalletSigner = (
   xdr: string,
@@ -51,6 +92,15 @@ export interface LiveQuote {
   fee: bigint;
   netAmount: bigint;
   destinationAmount: bigint;
+  /**
+   * `netAmount` truncated down to the destination's decimal precision, expressed in
+   * destination-native base units, before the relay gas deduction folded into
+   * `destinationAmount`. Equal to `netAmount` whenever source and destination decimals match
+   * (Axelar ITS). This is the router's own `destination_amount`, computed from the
+   * `destination_decimals` passed into `quote_routes`, so it never drifts from what is
+   * actually signed.
+   */
+  representableAmount: bigint;
   flowAvailable: bigint;
   ledger: number;
   adapter: string;
@@ -58,8 +108,60 @@ export interface LiveQuote {
   requestedAmount: bigint;
   relayGas: bigint;
   estimatedRelayGas?: bigint;
+  readonly observedAt?: string;
+  readonly observations?: { readonly contractAt: string; readonly providerAt: string };
+  readonly scope?: {
+    readonly destination: DestinationKey;
+    readonly route: BridgeRoute;
+    readonly adapter: string;
+    readonly ledger: number;
+  };
   resourceFee?: bigint;
   networkFee?: bigint;
+}
+export type QuoteFreshness = "current" | "stale" | "unknown";
+const QUOTE_MAX_AGE_MS = 30_000;
+export function quoteFreshness(
+  quote: Pick<LiveQuote, "observedAt">,
+  now = Date.now(),
+): QuoteFreshness {
+  const observed = Date.parse(quote.observedAt ?? "");
+  if (!Number.isFinite(observed) || observed > now) return "unknown";
+  return now - observed <= QUOTE_MAX_AGE_MS ? "current" : "stale";
+}
+
+export interface QuoteBreakdown {
+  readonly requestedSourceAmount: bigint;
+  readonly actualSourceDebit: bigint;
+  readonly protocolFee: bigint;
+  readonly representableBridgeAmount: bigint;
+  readonly retainedDust: bigint;
+}
+
+/** Exact source units: the router leaves unrepresentable precision dust in the account. */
+export function quoteBreakdown(quote: LiveQuote): QuoteBreakdown {
+  const quantum = 10n ** BigInt(7 - destinationDecimals(quote.route));
+  const representableBridgeAmount = quote.representableAmount * quantum;
+  if (
+    quote.requestedAmount <= 0n ||
+    quote.requestedAmount > I128_MAX ||
+    quote.fee < 0n ||
+    quote.fee >= quote.requestedAmount ||
+    representableBridgeAmount <= 0n ||
+    representableBridgeAmount !== quote.netAmount ||
+    quote.grossAmount !== quote.fee + representableBridgeAmount ||
+    quote.grossAmount > quote.requestedAmount ||
+    quote.requestedAmount - quote.grossAmount >= quantum ||
+    quote.destinationAmount <= 0n
+  )
+    throw new Error("The live quote does not conserve its exact source and destination amounts.");
+  return {
+    requestedSourceAmount: quote.requestedAmount,
+    actualSourceDebit: quote.grossAmount,
+    protocolFee: quote.fee,
+    representableBridgeAmount,
+    retainedDust: quote.requestedAmount - quote.grossAmount,
+  };
 }
 export interface LaneState {
   available: boolean;
@@ -554,6 +656,7 @@ export async function quoteTransfer(
     nativeToScVal(amount, { type: "i128" }),
     nativeToScVal(destinationDecimals(route), { type: "u32" }),
   ]);
+  const contractAt = new Date().toISOString();
   if (!Array.isArray(response.value)) throw new Error("The router returned an invalid quote.");
   const quote = response.value.map(object).find((q) => q.route === route);
   if (!quote) throw new Error("The router did not quote this bridge.");
@@ -577,14 +680,19 @@ export async function quoteTransfer(
   });
   if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");
   const fee: unknown = await feeResponse.json();
+  const providerAt = new Date().toISOString();
   const relayGas = integer(object(fee).amount);
   const estimatedRelayGas = integer(object(fee).estimatedAmount ?? relayGas);
   if (estimatedRelayGas <= 0n || estimatedRelayGas > relayGas)
     throw new Error("Invalid live fee estimate.");
   if (relayGas <= 0n || relayGas > I128_MAX) throw new Error("Invalid relay gas estimate.");
-  if (route === 0 && (relayGas % 10n !== 0n || relayGas >= integer(quote.net_amount)))
+  // See `quoteBreakdown` for what this quantum represents: it must divide the relay gas
+  // exactly so the gas deduction below lands on a destination-representable boundary too.
+  const quantum = 10n ** BigInt(7 - destinationDecimals(route));
+  if (route === 0 && (relayGas % quantum !== 0n || relayGas >= integer(quote.net_amount)))
     throw new Error("Increase the amount to cover Circle's destination forwarding fee.");
-  return {
+  const representableAmount = integer(quote.destination_amount);
+  const result: LiveQuote = {
     relayGas,
     estimatedRelayGas,
     route,
@@ -594,10 +702,21 @@ export async function quoteTransfer(
     grossAmount: integer(quote.gross_amount),
     fee: integer(quote.fee),
     netAmount: integer(quote.net_amount),
-    destinationAmount: integer(quote.destination_amount) - (route === 0 ? relayGas / 10n : 0n),
+    destinationAmount: representableAmount - (route === 0 ? relayGas / quantum : 0n),
+    representableAmount,
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
+    observedAt: providerAt,
+    observations: { contractAt, providerAt },
+    scope: {
+      destination: destinationKey,
+      route,
+      adapter: lane.adapter,
+      ledger: response.ledger,
+    },
   };
+  quoteBreakdown(result);
+  return result;
 }
 
 export async function readBalance(account: string): Promise<bigint> {
@@ -810,7 +929,7 @@ export async function simulateOperation(
     networkPassphrase: TESTNET.networkPassphrase,
   })
     .addOperation(operation)
-    .setTimeout(180)
+    .setTimeout(TRANSACTION_TIMEOUT_SECONDS)
     .build();
   const simulation = await client.simulateTransaction(transaction);
   if (!rpc.Api.isSimulationSuccess(simulation)) {
@@ -917,7 +1036,7 @@ export async function submitClassicOperations(
   const preparedOperations = typeof operations === "function" ? await operations() : operations;
   for (const operation of preparedOperations) builder.addOperation(operation);
   return signAndSubmit(
-    builder.setTimeout(180).build(),
+    builder.setTimeout(TRANSACTION_TIMEOUT_SECONDS).build(),
     sign,
     progress,
     approval,
@@ -936,6 +1055,10 @@ async function signAndSubmit(
 ): Promise<TransactionResult> {
   const client = server();
   progress?.("signing");
+  if (transactionDeadline(prepared).notYetValid)
+    throw new Error("The transaction envelope is not yet valid. Review a fresh transaction.");
+  if (transactionDeadline(prepared).expired)
+    throw new Error("The signed transaction envelope has expired. Review again.");
   const signOptions = { networkPassphrase: TESTNET.networkPassphrase };
   const signed = await sign(
     prepared.toXdr(),
@@ -953,6 +1076,12 @@ async function signAndSubmit(
       "The transaction sequence was modified. Stale sequence cannot be silently changed inside a reviewed signed envelope.",
     );
   }
+  if (transactionDeadline(signedTransaction).notYetValid)
+    throw new Error("The transaction envelope is not yet valid. Nothing was submitted.");
+  if (transactionDeadline(signedTransaction).expired)
+    throw new Error(
+      "The signed transaction envelope expired before broadcast. Nothing was submitted.",
+    );
   const hash = toHex(prepared.hash()).slice(2);
   if (reconcile) {
     if (reconcile.isSuperseded?.()) {

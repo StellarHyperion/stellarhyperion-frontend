@@ -1,4 +1,5 @@
 import { STELLAR_WALLETS, type StellarWalletId } from "./sdk";
+import { withTimeout } from "./timeout";
 
 export type WalletAvailabilityStatus =
   "installed" | "missing_extension" | "popup_required" | "available" | "unsupported" | "unknown";
@@ -19,10 +20,14 @@ export async function walletAvailability(id: StellarWalletId): Promise<WalletAva
   try {
     if (id === "freighter") {
       const api = await import("@stellar/freighter-api");
-      return (await api.isConnected()).isConnected ? "installed" : "missing_extension";
+      return (await withTimeout(api.isConnected(), 8_000, "Wallet availability unknown.")).isConnected
+        ? "installed"
+        : "missing_extension";
     }
     const api = await import("@lobstrco/signer-extension-api");
-    return (await api.isConnected()) ? "installed" : "missing_extension";
+    return (await withTimeout(api.isConnected(), 8_000, "Wallet availability unknown."))
+      ? "installed"
+      : "missing_extension";
   } catch {
     return "unknown";
   }
