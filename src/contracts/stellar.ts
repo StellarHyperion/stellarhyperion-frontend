@@ -1007,8 +1007,8 @@ function recoveryResult(
     source,
     message:
       source === "horizon"
-        ? `The transaction was ${status} in Stellar Testnet history.`
-        : `The transaction was ${status} on Stellar Testnet.`,
+        ? `The transaction ${status === "confirmed" ? "was confirmed" : "failed"} in Stellar Testnet history.`
+        : `The transaction ${status === "confirmed" ? "was confirmed" : "failed"} on Stellar Testnet.`,
   };
 }
 
