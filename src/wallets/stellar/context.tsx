@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { StellarWalletContextValue } from "./types";
+import type { StellarWalletContextValue, WalletApprovalProvenance } from "./types";
 import { TESTNET } from "../../config/testnet";
 
 import { Dialog } from "../../components/common/Dialog";
@@ -19,9 +19,17 @@ import {
   isWalletId,
   walletAddress,
   walletSign,
+  createSigningCoordinator,
   type StellarWalletId,
+  type PendingSigningRequest,
 } from "./sdk";
 import styles from "./WalletPicker.module.css";
+
+import {
+  walletAvailability,
+  walletAvailabilityLabel,
+  type WalletAvailabilityStatus,
+} from "./capabilities";
 
 const WALLET_KEY = "hyperion.stellar.walletId";
 function readSavedWallet(): string | null {
@@ -47,7 +55,25 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [isConnecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [availability, setAvailability] = useState<
+    Partial<Record<StellarWalletId, WalletAvailabilityStatus>>
+  >({});
+  useEffect(() => {
+    if (!pickerOpen) return;
+    let active = true;
+    for (const wallet of STELLAR_WALLETS)
+      void walletAvailability(wallet.id).then((status) => {
+        if (active) setAvailability((current) => ({ ...current, [wallet.id]: status }));
+      });
+    return () => {
+      active = false;
+    };
+  }, [pickerOpen]);
   const [authorizing, setAuthorizing] = useState<StellarWalletId | null>(null);
+  const [pendingSigningRequest, setPendingSigningRequest] = useState<PendingSigningRequest | null>(
+    null,
+  );
+  const coordinator = useRef(createSigningCoordinator(setPendingSigningRequest));
   const pending = useRef<((address: string | null) => void) | null>(null);
   const attempt = useRef(0);
 
@@ -87,6 +113,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     attempt.current++;
     setConnecting(true);
     setError(null);
+    setAvailability({});
     setPickerOpen(true);
     return await new Promise<string | null>((resolve) => {
       pending.current = resolve;
@@ -125,11 +152,26 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   }, [closePicker]);
 
   const signTransaction = useCallback(
-    async (transaction: string, opts?: { networkPassphrase?: string }) => {
+    async (
+      transaction: string,
+      opts?: {
+        networkPassphrase?: string;
+        operation?: PendingSigningRequest["operation"];
+        approval?: WalletApprovalProvenance;
+      },
+    ) => {
       if (!address || !walletId) throw new Error("Connect your Stellar wallet first.");
       if (opts?.networkPassphrase && opts.networkPassphrase !== TESTNET.networkPassphrase)
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
-      return walletSign(walletId, transaction, address);
+      if (opts?.approval && opts.approval.account !== address)
+        throw new Error("The wallet account changed. Review the transaction again.");
+      return coordinator.current.run(
+        {
+          operation: opts?.approval?.operation ?? opts?.operation ?? "transaction",
+          account: address,
+        },
+        () => walletSign(walletId, transaction, address, opts?.approval),
+      );
     },
     [address, walletId],
   );
@@ -138,14 +180,25 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     () => ({
       address,
       shortAddress: address ? `${address.slice(0, 6)}...${address.slice(-6)}` : null,
+      walletId,
       isConnected: address !== null,
       isConnecting,
       error,
+      pendingSigningRequest,
       connect,
       disconnect,
       signTransaction,
     }),
-    [address, isConnecting, error, connect, disconnect, signTransaction],
+    [
+      address,
+      walletId,
+      isConnecting,
+      error,
+      pendingSigningRequest,
+      connect,
+      disconnect,
+      signTransaction,
+    ],
   );
   return (
     <Context.Provider value={value}>
@@ -166,6 +219,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
                 >
                   {authorizing === wallet.id ? `Connecting to ${wallet.name}...` : wallet.name}
                 </button>
+                <span role="status">
+                  {walletAvailabilityLabel(availability[wallet.id] ?? "unknown")}
+                </span>
                 <a
                   href={wallet.url}
                   target="_blank"
