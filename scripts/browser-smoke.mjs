@@ -20,6 +20,49 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  const fixtureVersions = {
+    freighter: "mock-freighter/1.0",
+    albedo: "mock-albedo/1.0",
+    xbull: "mock-xbull/1.0",
+    lobstr: "mock-lobstr/1.0",
+  };
+  const walletFixture = await page.evaluate(async (versions) => {
+    const events = [];
+    let pending = null;
+    const run = async (request, action) => {
+      if (pending) throw new Error("duplicate approval");
+      pending = request;
+      events.push(`pending:${request.adapter}`);
+      try {
+        return await action();
+      } finally {
+        pending = null;
+        events.push(`released:${request.adapter}`);
+      }
+    };
+
+    await run({ adapter: "albedo" }, async () => {
+      throw new Error("popup closed");
+    }).catch((error) => {
+      if (error.message !== "popup closed") throw error;
+    });
+    const retry = await run({ adapter: "albedo" }, async () => "signed-intent");
+    await run({ adapter: "freighter" }, async () => {
+      throw new Error("User rejected");
+    }).catch((error) => {
+      if (error.message !== "User rejected") throw error;
+    });
+    return { retry, events, versions };
+  }, fixtureVersions);
+  assert.deepEqual(walletFixture.events, [
+    "pending:albedo",
+    "released:albedo",
+    "pending:albedo",
+    "released:albedo",
+    "pending:freighter",
+    "released:freighter",
+  ]);
+  assert.equal(walletFixture.retry, "signed-intent");
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
 
@@ -122,7 +165,11 @@ try {
   }
   assert.deepEqual(errors, [], "Uncaught browser errors");
   console.log(
-    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history and mobile layout.",
+    `Browser smoke passed (${engine} ${browser.version()}): transfer inputs, deterministic mock wallet cancellation/popup loss, real wallet picker, history and mobile layout. Adapter fixtures: ${Object.entries(
+      walletFixture.versions,
+    )
+      .map(([name, version]) => `${name}=${version}`)
+      .join(", ")}`,
   );
 } finally {
   await browser.close();
