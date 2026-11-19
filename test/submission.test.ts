@@ -868,9 +868,12 @@ describe("Checkpoint staleness guards", () => {
     bridgeAmount: "10000000",
     stage: "bridge",
     txHash: "0".repeat(64),
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
   const sameIntent = {
     account: checkpoint.account,
+    recipient: checkpoint.recipient,
+    source: checkpoint.source,
     destination: checkpoint.destination,
     route: checkpoint.route,
     bridgeAmount: checkpoint.bridgeAmount,
@@ -896,6 +899,12 @@ describe("Checkpoint staleness guards", () => {
   it("rejects a stale confirmation when the amount changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, bridgeAmount: "20000000" })).toBe(false);
   });
+  it("rejects a stale confirmation when recipient or issuer-specific source identity changes", () => {
+    expect(checkpointMatches(checkpoint, { ...sameIntent, recipient: "0x" + "b".repeat(40) })).toBe(
+      false,
+    );
+    expect(checkpointMatches(checkpoint, { ...sameIntent, source: USDC })).toBe(false);
+  });
   it("rejects a stale confirmation when the stage changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, stage: "conversion" })).toBe(false);
   });
@@ -913,6 +922,7 @@ describe("Source identity and explorer access", () => {
     bridgeAmount: "10000000",
     stage: "bridge" as const,
     txHash: realHash,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
 
   it("preserves the real signed hash exactly in a saved checkpoint", () => {
@@ -950,6 +960,25 @@ describe("Source identity and explorer access", () => {
 });
 
 describe("Binding flow-limit diagnostics", () => {
+  it.each([null, -1n, 1n << 127n])(
+    "does not invent current capacity from unavailable or invalid values (%s)",
+    (available) => {
+      const code = sorobanErrorCode("FlowLimitExceeded");
+      const diagnostic = describeBindingLimit(code, 10_000_000n, available, "sepolia", 1);
+      expect(diagnostic.available).toBeNull();
+      expect(diagnostic.summary).toContain("capacity is unavailable");
+      expect(diagnostic.nextStep).not.toContain("Reduce the amount");
+      expect(diagnostic.nextStep).toContain("Refresh the quote");
+    },
+  );
+  it.each([undefined, null, -1, NaN, Infinity, "", "1.1", "-1", "999999999999999999999999"])(
+    "keeps malformed reason %s unclassified",
+    (reason) => {
+      const diagnostic = describeBindingLimit(reason, 10_000_000n, 0n, "sepolia", 1);
+      expect(diagnostic.code).toBeNull();
+      expect(diagnostic.kind).toBe("other");
+    },
+  );
   it("names the exact flow-window headroom and an exact amount to retry", () => {
     const code = sorobanErrorCode("FlowLimitExceeded");
     if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");

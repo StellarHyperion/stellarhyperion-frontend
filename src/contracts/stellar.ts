@@ -29,6 +29,7 @@ import {
   destinationFor,
   destinationDecimals,
   supportedLanes,
+  deploymentIdentityMismatch,
   type BridgeRoute,
   type DestinationKey,
   type SupportedLane,
@@ -375,7 +376,7 @@ export class TransferLimitError extends Error {
 export function describeBindingLimit(
   reasonCode: unknown,
   requested: bigint,
-  flowAvailable: bigint,
+  flowAvailable: bigint | null,
   destinationKey: DestinationKey,
   route: BridgeRoute,
 ): FlowLimitDiagnostic {
@@ -385,9 +386,31 @@ export function describeBindingLimit(
   const laneSuggestion = alternateLanes.length
     ? ` ${destination.name} also supports ${alternateLanes.map((lane) => lane.provider).join(" and ")} on this deployment; you can switch routes and try that lane instead.`
     : "";
-  const name = sorobanErrorName(Number(reasonCode));
+  const candidate = typeof reasonCode === "bigint" ? reasonCode.toString() : reasonCode;
+  const parsedCode =
+    typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string" && /^\d{1,10}$/.test(candidate)
+        ? Number(candidate)
+        : NaN;
+  const name =
+    Number.isSafeInteger(parsedCode) && parsedCode >= 0 && parsedCode <= 0xffffffff
+      ? sorobanErrorName(parsedCode)
+      : null;
   const help = name ? describeError(name) : null;
   if (name === "FlowLimitExceeded") {
+    if (flowAvailable === null || flowAvailable < 0n || flowAvailable > I128_MAX)
+      return {
+        code: name,
+        kind: "flow",
+        limitLabel: `${laneLabel} flow window to ${destination.name}`,
+        summary: `The ${laneLabel} flow limit blocked ${formatUnits(requested, 7)} USDC. Current capacity is unavailable.`,
+        available: null,
+        requested,
+        nextStep: `Refresh the quote to check current capacity.${laneSuggestion}`,
+        retryable: true,
+        alternateLanes,
+      };
     return {
       code: name,
       kind: "flow",
@@ -421,9 +444,9 @@ export function describeBindingLimit(
       : kind === "routeMax"
         ? `This exceeds the maximum single transfer this route allows. Split it into smaller transfers.${laneSuggestion}`
         : kind === "paused"
-          ? `This lane is temporarily paused by the operator. Try again shortly.${laneSuggestion}`
+          ? `The operator must resume this lane before it can be used. Refresh its status before trying again.${laneSuggestion}`
           : kind === "disabled"
-            ? `This asset or route is retired here and will not resume.${laneSuggestion}`
+            ? `This asset or route is not enabled in the current configuration. Wait for a verified configuration change before trying this lane.${laneSuggestion}`
             : kind === "input"
               ? "Adjust the requested amount and try again."
               : help?.retryable
@@ -629,6 +652,15 @@ export async function readLane(
   route: BridgeRoute = 1,
 ): Promise<LaneState> {
   const destination = destinationFor(destinationKey);
+  const deploymentMismatch = deploymentIdentityMismatch(TESTNET.router, TESTNET.token);
+  if (deploymentMismatch)
+    return {
+      available: false,
+      reason: deploymentMismatch,
+      feeBps: null,
+      ledger: 0,
+      adapter: null,
+    };
   if (!destination.routes.includes(route))
     return {
       available: false,
@@ -843,7 +875,19 @@ export async function quoteTransfer(
       describeBindingLimit(
         quote.reason,
         amount,
-        integer(quote.flow_available),
+        typeof quote.flow_available === "bigint" &&
+          quote.flow_available >= 0n &&
+          quote.flow_available <= I128_MAX
+          ? quote.flow_available
+          : typeof quote.flow_available === "number" &&
+              Number.isSafeInteger(quote.flow_available) &&
+              quote.flow_available >= 0
+            ? BigInt(quote.flow_available)
+            : typeof quote.flow_available === "string" &&
+                /^\d{1,39}$/.test(quote.flow_available) &&
+                BigInt(quote.flow_available) <= I128_MAX
+              ? BigInt(quote.flow_available)
+              : null,
         destinationKey,
         route,
       ),
@@ -1089,6 +1133,9 @@ function matchesConversion(checkpoint: TransferCheckpoint, operations: ParsedOpe
     payment?.type === "pathPaymentStrictReceive" &&
     (!payment.source || payment.source === checkpoint.account) &&
     payment.destination === checkpoint.account &&
+    (!checkpoint.source ||
+      (payment.sendAsset.getCode() === checkpoint.source.code &&
+        (payment.sendAsset.getIssuer() ?? null) === checkpoint.source.issuer)) &&
     payment.destAsset.getCode() === TESTNET.usdcCode &&
     payment.destAsset.getIssuer() === TESTNET.usdcIssuer &&
     parseUnits(payment.destAmount, 7) === BigInt(checkpoint.bridgeAmount)
