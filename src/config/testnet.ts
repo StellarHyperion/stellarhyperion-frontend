@@ -24,6 +24,32 @@ export const STELLAR_DEPLOYMENT = {
   commit: stellar.commit,
   deployedLedger: stellar.deployedAt.ledger,
 } as const;
+
+export interface PublicConfigurationAdmission {
+  readonly available: boolean;
+  readonly reasons: readonly string[];
+}
+
+/**
+ * Validate public deployment inputs before enabling money-like interactions.
+ * The result contains labels only; it never echoes environment values or secrets.
+ */
+export function publicConfigurationAdmission(): PublicConfigurationAdmission {
+  const reasons: string[] = [];
+  if (TESTNET.networkPassphrase !== STELLAR_DEPLOYMENT.networkPassphrase)
+    reasons.push("The configured Stellar network is not the supported testnet.");
+  if (TESTNET.router !== STELLAR_DEPLOYMENT.router)
+    reasons.push("The configured router does not match the published testnet deployment.");
+  if (TESTNET.token !== stellar.tokens.USDC.sacId)
+    reasons.push("The configured token does not match the published testnet token.");
+  try {
+    if (new URL(TESTNET.rpcUrl).protocol !== "https:")
+      reasons.push("The configured RPC endpoint is not HTTPS.");
+  } catch {
+    reasons.push("The configured RPC endpoint is invalid.");
+  }
+  return { available: reasons.length === 0, reasons };
+}
 export type BridgeRoute = 0 | 1;
 const cctpDestinations = new Set(
   stellar.activation.cctp.status === "active" && stellar.activation.cctp.acceptance === "delivered"
