@@ -13,6 +13,9 @@ export interface StellarWalletContextValue {
   walletId: string | null;
   isConnected: boolean;
   isConnecting: boolean;
+  // True while a signature request is outstanding with the connected wallet. Surfaced so the UI
+  // can show the pending approval and offer an explicit way out if the wallet goes silent.
+  isSigning: boolean;
   error: string | null;
   pendingSigningRequest: PendingSigningRequest | null;
   connect: () => Promise<string | null>;

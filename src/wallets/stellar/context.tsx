@@ -200,6 +200,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       walletId,
       isConnected: address !== null,
       isConnecting,
+      isSigning: pendingSigningRequest !== null,
       error,
       pendingSigningRequest,
       connect,
