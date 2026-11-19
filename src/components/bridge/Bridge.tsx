@@ -973,6 +973,21 @@ export function Bridge() {
     conservativeMax !== null &&
     quote.sourceAmount > conservativeMax &&
     isUsdcSource;
+  const validationSummary = [
+    inputError ? { id: "send-amount", label: "amount" } : null,
+    inputError?.toLowerCase().includes("recipient") ? { id: "recipient", label: "recipient" } : null,
+    insufficient ? { id: "send-amount", label: "available balance" } : null,
+    exceedsFlow ? { id: "send-amount", label: "route limit" } : null,
+  ].filter((item): item is { id: string; label: string } => item !== null);
+  const actionHelp = fetching
+    ? "Wait while the current route and fee estimate are loaded."
+    : simulating
+      ? "Wait while the current transaction simulation is checked."
+      : simulationError
+        ? "Refresh the quote to retry the failed simulation."
+        : !quote
+          ? "Enter a valid amount and destination to continue."
+          : null;
 
   return (
     <>
@@ -1010,6 +1025,8 @@ export function Bridge() {
             <input
               id="send-amount"
               aria-label="Amount to send"
+              aria-invalid={inputError !== null || insufficient || exceedsFlow}
+              aria-describedby={validationSummary.length ? "bridge-validation-summary" : undefined}
               inputMode="decimal"
               autoComplete="off"
               value={amount}
@@ -1138,6 +1155,8 @@ export function Bridge() {
           <input
             id="recipient"
             aria-label={`Recipient on ${chain.name}`}
+            aria-invalid={inputError?.toLowerCase().includes("recipient") || undefined}
+            aria-describedby={validationSummary.length ? "bridge-validation-summary" : undefined}
             autoComplete="off"
             spellCheck={false}
             placeholder="0x..."
@@ -1212,9 +1231,19 @@ export function Bridge() {
           )
         )}
         {(error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
-          <p role="alert" className={styles.error}>
-            {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
-          </p>
+          <div id="bridge-validation-summary" role="alert" aria-live="polite" className={styles.error}>
+            <strong>Review before continuing.</strong>
+            <p>{error ?? wallet.error ?? quoteError ?? laneError ?? inputError}</p>
+            {validationSummary.length > 0 && (
+              <ul>
+                {validationSummary.map((item) => (
+                  <li key={`${item.id}-${item.label}`}>
+                    <a href={`#${item.id}`}>Review {item.label}</a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>
@@ -1281,9 +1310,11 @@ export function Bridge() {
           </button>
         ) : (
           !checkpoint && (
+            <>
             <button
               type="button"
               className={styles.primary}
+              aria-describedby={actionHelp ? "bridge-action-help" : undefined}
               disabled={
                 !quote ||
                 (!quote.conversion && !simulation) ||
@@ -1318,6 +1349,8 @@ export function Bridge() {
                     : "Review transfer"}
               <ArrowRight size={18} aria-hidden="true" />
             </button>
+            {actionHelp && <p id="bridge-action-help" role="status" className={styles.reviewNote}>{actionHelp}</p>}
+            </>
           )
         )}
         <p className={styles.feeNote}>
