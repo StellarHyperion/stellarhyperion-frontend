@@ -515,8 +515,8 @@ describe("Real Stellar transaction encoding", () => {
             ? undefined
             : {
                 getItem: () => null,
-                setItem: () => undefined,
-                removeItem: () => undefined,
+                setItem: () => {},
+                removeItem: () => {},
               },
         );
         expect(() => saveCheckpoint(checkpoint)).toThrow("Browser storage is unavailable");
