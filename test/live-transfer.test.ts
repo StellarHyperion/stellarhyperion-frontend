@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { createPublicClient, http, parseAbi } from "viem";
@@ -31,6 +31,20 @@ interface Proof {
   status: string;
 }
 
+function defaultProofFile(): string {
+  const directory = join(homedir(), ".hyperion-testnet-proofs");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const info = lstatSync(directory);
+  if (
+    !info.isDirectory() ||
+    (info.mode & 0o077) !== 0 ||
+    (process.getuid && info.uid !== process.getuid())
+  ) {
+    throw new Error("The live-transfer proof directory must be private and owned by this user.");
+  }
+  return join(directory, "its-transfer.json");
+}
+
 // Explicit opt-in only: this test signs and spends 0.1 testnet USDC plus testnet XLM fees.
 const enabled = process.env.HYPERION_LIVE_TESTNET === "1";
 it.skipIf(!enabled)(
@@ -46,8 +60,9 @@ it.skipIf(!enabled)(
       encoding: "utf8",
     }).trim();
     const recipient = validateRecipient(recipientInput) as `0x${string}`;
-    const file =
-      process.env.HYPERION_TESTNET_PROOF ?? join(tmpdir(), "hyperion-live-transfer.json");
+    const file = process.env.HYPERION_TESTNET_PROOF ?? defaultProofFile();
+    // Retain the proof on interruption; set this path explicitly to resume without resending.
+    console.log(`Live transfer proof: ${file}`);
     const amount = parseSendAmount("0.1");
     const proof = existsSync(file)
       ? (JSON.parse(readFileSync(file, "utf8")) as Proof)
@@ -65,7 +80,7 @@ it.skipIf(!enabled)(
     expect(proof.recipient).toBe(recipient);
     expect(proof.grossAmount).toBe(String(amount));
     const save = () => {
-      writeFileSync(file, `${JSON.stringify(proof, null, 2)}\n`);
+      writeFileSync(file, `${JSON.stringify(proof, null, 2)}\n`, { mode: 0o600 });
     };
     const remote = createPublicClient({
       transport: http("https://ethereum-sepolia-rpc.publicnode.com", { timeout: 15_000 }),
