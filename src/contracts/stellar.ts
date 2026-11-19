@@ -671,6 +671,8 @@ export interface SubmissionReconciliation {
     signedTx: Transaction | FeeBumpTransaction,
   ) => void | Promise<void>;
   validate?: (hash: string, signedTx: Transaction | FeeBumpTransaction) => void | Promise<void>;
+  /** Runs after signing but before broadcast. Throw to block a broadcast that cannot be checkpointed. */
+  onSigned?: (hash: string, signedTx: Transaction | FeeBumpTransaction) => void | Promise<void>;
 }
 
 export function validateReviewMatch(original: ReviewSnapshot, current: ReviewSnapshot): boolean {
@@ -972,6 +974,7 @@ async function signAndSubmit(
     if (reconcile.validate) {
       await reconcile.validate(hash, signedTransaction);
     }
+    if (reconcile.onSigned) await reconcile.onSigned(hash, signedTransaction);
   }
   progress?.("submitting", hash);
   try {
@@ -1109,6 +1112,7 @@ export async function submitSettleClaim(
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
@@ -1127,7 +1131,7 @@ export async function submitSettleClaim(
       nativeToScVal(id, { type: "u64" }),
     ),
     sign,
-    undefined,
+    progress,
     approval,
     reconcile,
     undefined,
@@ -1142,6 +1146,7 @@ export async function submitSettleClaims(
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
 ): Promise<TransactionResult> {
   if (claims.length < 2) throw new Error("Batch settlement requires at least two claims.");
   if (claims.length > MAX_BATCH_CLAIMS)
@@ -1180,7 +1185,7 @@ export async function submitSettleClaims(
       claims.map((claim) => claim.id),
     ),
     sign,
-    undefined,
+    progress,
     approval,
     reconcile,
     undefined,
