@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Account, Asset, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { TESTNET } from "../src/config/testnet";
-import { createSigningCoordinator, walletAddress, walletSign } from "../src/wallets/stellar/sdk";
+import {
+  createSigningCoordinator,
+  validateStellarAddress,
+  walletAddress,
+  walletSign,
+} from "../src/wallets/stellar/sdk";
+import { assertSigningAuthorized, WalletSigningError } from "../src/wallets/stellar/signature";
 
 const api = vi.hoisted(() => ({
   freighter: {
@@ -183,5 +189,152 @@ describe("Direct Stellar wallet adapters", () => {
     await expect(walletSign("lobstr", original, signer.publicKey())).rejects.toThrow(
       "did not sign",
     );
+  });
+
+  describe("Read-only account inspection and mode reconciliation (issue 48)", () => {
+    it("validates Stellar public addresses for read-only inspection", async () => {
+      const valid = Keypair.random().publicKey();
+      await expect(validateStellarAddress(valid)).resolves.toBe(valid);
+      await expect(validateStellarAddress(`  ${valid}  `)).resolves.toBe(valid);
+      await expect(validateStellarAddress("invalid-public-key")).rejects.toThrow(
+        "Enter a valid Stellar public address",
+      );
+      await expect(
+        validateStellarAddress("0x71C8fb861337518779b10D2C283F00424534ffEB"),
+      ).rejects.toThrow("Enter a valid Stellar public address");
+      await expect(validateStellarAddress("")).rejects.toThrow(
+        "Enter a valid Stellar public address",
+      );
+    });
+
+    it("a typed public address must never grant signing", async () => {
+      const { original } = envelope();
+      const typedAddress = Keypair.random().publicKey();
+
+      // walletSign with isReadOnly flag throws and does not invoke wallet adapter
+      await expect(
+        walletSign("freighter", original, typedAddress, undefined, { isReadOnly: true }),
+      ).rejects.toThrow(WalletSigningError);
+      try {
+        await walletSign("freighter", original, typedAddress, undefined, { isReadOnly: true });
+      } catch (err) {
+        expect(err).toBeInstanceOf(WalletSigningError);
+        expect((err as WalletSigningError).code).toBe("READ_ONLY_MODE");
+      }
+      expect(api.freighter.signTransaction).not.toHaveBeenCalled();
+
+      // walletSign with a non-wallet identifier throws
+      await expect(walletSign("read-only" as never, original, typedAddress)).rejects.toThrow(
+        "typed public address cannot sign",
+      );
+      expect(api.freighter.signTransaction).not.toHaveBeenCalled();
+
+      // assertSigningAuthorized rejects read-only mode or missing walletId
+      expect(() => {
+        assertSigningAuthorized({
+          account: typedAddress,
+          walletId: null,
+          isReadOnly: true,
+        });
+      }).toThrow("typed public address cannot sign");
+
+      expect(() => {
+        assertSigningAuthorized({
+          account: typedAddress,
+          walletId: "freighter",
+          isReadOnly: true,
+        });
+      }).toThrow("typed public address cannot sign");
+
+      expect(() => {
+        assertSigningAuthorized({
+          account: typedAddress,
+          walletId: null,
+          isReadOnly: false,
+        });
+      }).toThrow("typed public address cannot sign");
+    });
+
+    it("requires explicit mode reconciliation when the connected account differs from the viewed address", async () => {
+      const { original } = envelope();
+      const connectedAccount = signer.publicKey();
+      const viewedAddress = Keypair.random().publicKey();
+
+      // Mismatch between connected wallet and viewed address requires reconciliation
+      expect(() => {
+        assertSigningAuthorized({
+          account: viewedAddress,
+          walletId: "freighter",
+          isReadOnly: false,
+          connectedAccount,
+          viewedAddress,
+        });
+      }).toThrow(WalletSigningError);
+
+      try {
+        assertSigningAuthorized({
+          account: viewedAddress,
+          walletId: "freighter",
+          isReadOnly: false,
+          connectedAccount,
+          viewedAddress,
+        });
+      } catch (err) {
+        expect(err).toBeInstanceOf(WalletSigningError);
+        expect((err as WalletSigningError).code).toBe("ACCOUNT_MISMATCH");
+      }
+
+      // walletSign rejects mismatched connected account
+      await expect(
+        walletSign("freighter", original, viewedAddress, undefined, {
+          isReadOnly: false,
+          connectedAccount,
+        }),
+      ).rejects.toThrow(
+        "Connected wallet differs from viewed address. Reconcile mode before signing.",
+      );
+      expect(api.freighter.signTransaction).not.toHaveBeenCalled();
+
+      // Reconciling viewedAddress to match connectedAccount allows signing
+      expect(() => {
+        assertSigningAuthorized({
+          account: connectedAccount,
+          walletId: "freighter",
+          isReadOnly: false,
+          connectedAccount,
+          viewedAddress: connectedAccount,
+        });
+      }).not.toThrow();
+    });
+
+    it("keeps read-only history errors separate from wallet errors", async () => {
+      // Validation error for read-only inspection produces specific read-only message
+      let readOnlyError: string | null = null;
+      let walletError: string | null = null;
+
+      try {
+        await validateStellarAddress("bad-address");
+      } catch (err) {
+        readOnlyError = err instanceof Error ? err.message : String(err);
+      }
+
+      expect(readOnlyError).toBe("Enter a valid Stellar public address (G...).");
+      expect(walletError).toBeNull();
+
+      // A wallet failure sets walletError while keeping read-only error distinct
+      api.freighter.requestAccess.mockResolvedValueOnce({
+        address: "",
+        error: { message: "Freighter rejected connection" },
+      });
+
+      try {
+        await walletAddress("freighter");
+      } catch (err) {
+        walletError = err instanceof Error ? err.message : String(err);
+      }
+
+      expect(walletError).toBe("Freighter rejected connection");
+      expect(readOnlyError).toBe("Enter a valid Stellar public address (G...).");
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { TESTNET } from "../../config/testnet";
-import { assertWalletApproval } from "./signature";
+import { assertWalletApproval, WalletSigningError } from "./signature";
 import type { WalletApprovalProvenance } from "./types";
 
 export const STELLAR_WALLETS = [
@@ -102,13 +102,42 @@ export async function walletAddress(id: StellarWalletId, requestAccess = true): 
   }
 }
 
+export async function validateStellarAddress(value: string): Promise<string> {
+  const trimmed = value.trim();
+  const { StrKey } = await import("@stellar/stellar-sdk");
+  if (!StrKey.isValidEd25519PublicKey(trimmed))
+    throw new Error("Enter a valid Stellar public address (G...).");
+  return trimmed;
+}
+
 export async function walletSign(
   id: StellarWalletId,
   xdr: string,
   address: string,
   approval?: WalletApprovalProvenance,
+  options?: { isReadOnly?: boolean | undefined; connectedAccount?: string | null | undefined },
 ) {
-  if (approval) assertWalletApproval(approval, address);
+  if (options?.isReadOnly || !isWalletId(id)) {
+    throw new WalletSigningError(
+      "READ_ONLY_MODE",
+      "A typed public address cannot sign transactions. Connect a supported wallet.",
+    );
+  }
+  if (options?.connectedAccount && options.connectedAccount !== address) {
+    throw new WalletSigningError(
+      "ACCOUNT_MISMATCH",
+      "Connected wallet differs from viewed address. Reconcile mode before signing.",
+    );
+  }
+  if (approval) {
+    assertWalletApproval(approval, address, {
+      account: address,
+      walletId: id,
+      isReadOnly: options?.isReadOnly,
+      connectedAccount: options?.connectedAccount,
+      viewedAddress: address,
+    });
+  }
   if (approval && (id === "albedo" || id === "xbull")) {
     const actual = await walletAddress(id, false);
     if (actual !== address)

@@ -7,7 +7,12 @@ import {
   Operation,
   TransactionBuilder,
 } from "@stellar/stellar-sdk";
-import { assertWalletApproval, verifyWalletSignature } from "../src/wallets/stellar/signature";
+import {
+  assertSigningAuthorized,
+  assertWalletApproval,
+  verifyWalletSignature,
+  WalletSigningError,
+} from "../src/wallets/stellar/signature";
 
 const signer = Keypair.random();
 function transaction(amount = "1", networkPassphrase = Networks.TESTNET) {
@@ -109,5 +114,88 @@ describe("Wallet signature verification", () => {
     expect(() => verifyWalletSignature(original, original, signer.publicKey())).toThrow(
       "did not sign",
     );
+  });
+
+  describe("Read-only signing guard and reconciliation checks", () => {
+    it("never permits signing for typed read-only accounts", () => {
+      const typedKey = Keypair.random().publicKey();
+
+      expect(() => {
+        assertSigningAuthorized({
+          account: typedKey,
+          walletId: null,
+          isReadOnly: true,
+        });
+      }).toThrow(WalletSigningError);
+
+      try {
+        assertSigningAuthorized({
+          account: typedKey,
+          walletId: null,
+          isReadOnly: true,
+        });
+      } catch (err) {
+        expect(err).toBeInstanceOf(WalletSigningError);
+        expect((err as WalletSigningError).code).toBe("READ_ONLY_MODE");
+      }
+
+      expect(() => {
+        assertSigningAuthorized({
+          account: typedKey,
+          walletId: "freighter",
+          isReadOnly: true,
+        });
+      }).toThrow("A typed public address cannot sign transactions. Connect a Stellar wallet.");
+
+      expect(() => {
+        assertWalletApproval(
+          {
+            account: signer.publicKey(),
+            network: Networks.TESTNET,
+            operation: "bridge",
+          },
+          signer.publicKey(),
+          { isReadOnly: true, walletId: "freighter" },
+        );
+      }).toThrow("A typed public address cannot sign transactions. Connect a Stellar wallet.");
+    });
+
+    it("requires explicit reconciliation when connected wallet differs from viewed address", () => {
+      const connectedKey = signer.publicKey();
+      const viewedKey = Keypair.random().publicKey();
+
+      expect(() => {
+        assertSigningAuthorized({
+          account: viewedKey,
+          walletId: "freighter",
+          isReadOnly: false,
+          connectedAccount: connectedKey,
+          viewedAddress: viewedKey,
+        });
+      }).toThrow(WalletSigningError);
+
+      try {
+        assertSigningAuthorized({
+          account: viewedKey,
+          walletId: "freighter",
+          isReadOnly: false,
+          connectedAccount: connectedKey,
+          viewedAddress: viewedKey,
+        });
+      } catch (err) {
+        expect(err).toBeInstanceOf(WalletSigningError);
+        expect((err as WalletSigningError).code).toBe("ACCOUNT_MISMATCH");
+      }
+
+      expect(() => {
+        assertSigningAuthorized({
+          account: connectedKey,
+          walletId: "freighter",
+          isReadOnly: false,
+          connectedAccount: connectedKey,
+          viewedAddress: connectedKey,
+        });
+      }).not.toThrow();
+    });
   });
 });
