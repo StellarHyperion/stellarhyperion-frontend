@@ -418,12 +418,15 @@ describe("Independently verified testnet bridge lanes", () => {
       usdcIssuer: USDC.issuer,
       usdcToken: TESTNET.token,
     });
-    expect(deploymentIdentityMismatch(STELLAR_DEPLOYMENT.router, STELLAR_DEPLOYMENT.usdcToken))
-      .toBeNull();
-    expect(deploymentIdentityMismatch("different-router", STELLAR_DEPLOYMENT.usdcToken))
-      .toContain("router");
-    expect(deploymentIdentityMismatch(STELLAR_DEPLOYMENT.router, "different-token"))
-      .toContain("USDC token contract");
+    expect(
+      deploymentIdentityMismatch(STELLAR_DEPLOYMENT.router, STELLAR_DEPLOYMENT.usdcToken),
+    ).toBeNull();
+    expect(deploymentIdentityMismatch("different-router", STELLAR_DEPLOYMENT.usdcToken)).toContain(
+      "router",
+    );
+    expect(deploymentIdentityMismatch(STELLAR_DEPLOYMENT.router, "different-token")).toContain(
+      "USDC token contract",
+    );
   });
   it("exposes only the routes backed by checked-in delivery evidence", () => {
     expect(Object.fromEntries(DESTINATIONS.map(({ key, routes }) => [key, routes]))).toEqual({

@@ -1468,9 +1468,7 @@ export function Bridge() {
                     <CopyableAddress
                       value={destinationRepresentation}
                       label={
-                        route === 0
-                          ? "native destination USDC contract"
-                          : "ITS destination token"
+                        route === 0 ? "native destination USDC contract" : "ITS destination token"
                       }
                     />
                   ) : (
