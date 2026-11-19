@@ -12,6 +12,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
 import {
+  quoteFreshness,
   quoteBreakdown,
   type LiveQuote,
   submitSettleClaim,
@@ -82,6 +83,13 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("labels provider observations by freshness without implying delivery", () => {
+    const observedAt = "2026-11-18T20:00:00.000Z";
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:29.000Z"))).toBe("current");
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:31.000Z"))).toBe("stale");
+    expect(quoteFreshness({ observedAt: "not-a-date" })).toBe("unknown");
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T19:59:59.000Z"))).toBe("unknown");
+  });
   it("recovers the exact precision dust a CCTP route's six-decimal destination truncates", () => {
     // 7-decimal Stellar USDC minus the fee leaves 9,969,995 base units -- not a multiple of
     // the 10-unit quantum that six-decimal Circle USDC can represent, so the trailing 5 base

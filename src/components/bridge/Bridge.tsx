@@ -28,6 +28,7 @@ import {
   batchClaimSettlementSupport,
   getClaims,
   quoteTransfer,
+  quoteFreshness,
   readLane,
   readTransaction,
   simulateBridgeOut,
@@ -200,6 +201,16 @@ function QuoteDetails({
   const networkFee = simulation?.networkFee;
   const breakdown = quoteBreakdown(quote);
 
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+  const freshness = quoteFreshness(quote, now);
   return (
     <dl className={styles.summary}>
       <div>
@@ -257,6 +268,30 @@ function QuoteDetails({
         <dd>
           {formatUnits(quote.destinationAmount, destinationDecimals(quote.route))}{" "}
           {receiveSymbol(quote.route)}
+        </dd>
+      </div>
+      <div>
+        <dt>Provider observation</dt>
+        <dd>
+          {freshness === "current" ? "Current" : freshness === "stale" ? "Stale" : "Unknown"} ·{" "}
+          {quote.observedAt ? new Date(quote.observedAt).toLocaleString() : "Not observed"}
+        </dd>
+      </div>
+      <div>
+        <dt>Contract observation</dt>
+        <dd>
+          {quote.observations?.contractAt
+            ? new Date(quote.observations.contractAt).toLocaleString()
+            : "Not observed"}{" "}
+          · ledger {quote.ledger}
+        </dd>
+      </div>
+      <div>
+        <dt>Quote scope</dt>
+        <dd>
+          {quote.destination} · {quote.route === 0 ? "Circle CCTP" : "Axelar ITS"} · {quote.adapter}{" "}
+          · ledger {quote.ledger}
+          <span> · Stellar Testnet</span>
         </dd>
       </div>
     </dl>
