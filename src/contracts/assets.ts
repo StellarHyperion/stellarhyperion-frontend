@@ -1,6 +1,13 @@
 import { Asset, BASE_FEE, Operation, StrKey, type xdr } from "@stellar/stellar-sdk";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
-import { TESTNET, type BridgeRoute, type DestinationKey } from "../config/testnet";
+import {
+  TESTNET,
+  cachedPublicAssetMetadata,
+  getPublicAssetMetadata,
+  type PublicAssetMetadata,
+  type BridgeRoute,
+  type DestinationKey,
+} from "../config/testnet";
 import {
   quoteTransfer,
   submitClassicOperations,
@@ -22,9 +29,10 @@ export interface SourceAsset {
   sellingLiabilities?: string;
   available?: string;
   nativeMinimumReserve?: string;
+  metadata?: PublicAssetMetadata;
 }
 export type AssetVerification =
-  "configured" | "wallet-trustline" | "horizon-search" | "horizon-path";
+  "configured" | "wallet-trustline" | "horizon-search" | "horizon-path" | "cached-metadata";
 export type TrustlineState = "native" | "present" | "not-checked" | "frozen" | "unauthorized";
 export interface TrustlineReservePreview {
   readonly nativeBalance: bigint;
@@ -58,6 +66,10 @@ export function isCanonicalUsdc(asset: SourceAsset): boolean {
 
 export function issuerVerificationLabel(asset: SourceAsset): string {
   if (!asset.issuer) return "Native Stellar asset; no issuer";
+  if (asset.verification === "cached-metadata")
+    return asset.metadata?.stale
+      ? "Cached issuer metadata is stale; verify before signing"
+      : "Cached issuer metadata; verify before signing";
   if (asset.verification === "configured") return "Issuer matches the configured testnet asset";
   return "Issuer metadata supplied by Horizon; verify before signing";
 }
@@ -312,6 +324,22 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
   });
 }
 
+export async function requireRecoveredUsdc(
+  account: string,
+  amount: bigint,
+  signal?: AbortSignal,
+): Promise<void> {
+  const assets = await accountAssets(account, signal);
+  const usdc = assets.find((asset) => asset.id === USDC.id);
+  if (
+    amount <= 0n ||
+    usdc?.trustline !== "present" ||
+    usdc.available === undefined ||
+    parseUnits(usdc.available, 7) < amount
+  )
+    throw new Error("The confirmed conversion's USDC is not currently available in this wallet.");
+}
+
 export async function searchAssets(query: string, signal?: AbortSignal): Promise<SourceAsset[]> {
   const input = query.trim();
   if (!input) return [USDC, XLM];
@@ -320,19 +348,37 @@ export async function searchAssets(query: string, signal?: AbortSignal): Promise
   if (StrKey.isValidEd25519PublicKey(input)) params.set("asset_issuer", input);
   else if (/^[A-Za-z0-9]{1,12}$/.test(input)) params.set("asset_code", input);
   else throw new Error("Search by asset code or full Stellar issuer address.");
-  const body = await horizon(`/assets?${params}`, signal);
-  return records(body).flatMap((entry) => {
-    if (typeof entry.asset_code !== "string" || typeof entry.asset_issuer !== "string") return [];
-    const asset: SourceAsset = {
-      id: `${entry.asset_code}:${entry.asset_issuer}`,
-      code: entry.asset_code,
-      issuer: entry.asset_issuer,
-      verification: "horizon-search",
+  let body: Record<string, unknown>;
+  try {
+    body = await horizon(`/assets?${params}`, signal);
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    const cached = cachedPublicAssetMetadata(input);
+    if (!cached.length) throw cause;
+    return cached.map((metadata) => ({
+      id: `${metadata.code}:${metadata.issuer}`,
+      code: metadata.code,
+      issuer: metadata.issuer,
+      verification: "cached-metadata",
       trustline: "not-checked",
-    };
-    stellarAsset(asset);
-    return [asset];
-  });
+      metadata,
+    }));
+  }
+  return records(body)
+    .slice(0, 40)
+    .flatMap((entry) => {
+      if (typeof entry.asset_code !== "string" || typeof entry.asset_issuer !== "string") return [];
+      const asset: SourceAsset = {
+        id: `${entry.asset_code}:${entry.asset_issuer}`,
+        code: entry.asset_code,
+        issuer: entry.asset_issuer,
+        verification: "horizon-search",
+        trustline: "not-checked",
+        metadata: getPublicAssetMetadata(entry.asset_code, entry.asset_issuer),
+      };
+      stellarAsset(asset);
+      return [asset];
+    });
 }
 
 export interface Conversion {
