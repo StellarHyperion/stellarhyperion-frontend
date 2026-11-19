@@ -54,6 +54,7 @@ import {
 } from "../../contracts/assets";
 import {
   claimOperationOwnership,
+  getTransferCheckpoint,
   getOperationOwnership,
   releaseOperationOwnership,
   saveCheckpoint,
@@ -178,7 +179,11 @@ function PendingTransferCard({
     setChecking(true);
     setError(null);
     try {
+      if (getTransferCheckpoint()?.txHash !== checkpoint.txHash)
+        throw new Error("The pending transaction changed in another tab. Refresh its status.");
       const result = await readTransaction(checkpoint.txHash);
+      if (getTransferCheckpoint()?.txHash !== checkpoint.txHash)
+        throw new Error("The pending transaction changed in another tab. Refresh its status.");
       setChecked(result);
       if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount)
         setReview(
@@ -199,6 +204,8 @@ function PendingTransferCard({
     setChecking(true);
     setError(null);
     try {
+      if (getTransferCheckpoint()?.txHash !== checkpoint.txHash)
+        throw new Error("The pending transaction changed in another tab. Check its current outcome.");
       const result = await submitBridgeOut(
         checkpoint.account,
         review,
@@ -262,6 +269,11 @@ function PendingTransferCard({
       {error && (
         <p role="alert" className={styles.error}>
           {error}
+        </p>
+      )}
+      {current?.reason && (
+        <p role="status" className={styles.error}>
+          {current.reason}
         </p>
       )}
       {current?.status === "failed" ||
@@ -608,12 +620,17 @@ export function Bridge() {
     }
   };
   const reset = () => {
-    saveCheckpoint(null);
-    setResult(null);
-    setError(null);
-    setReviewed(null);
-    setAmount("");
-    setRefresh((value) => value + 1);
+    if (!checkpoint) return;
+    try {
+      saveCheckpoint(null, checkpoint.txHash);
+      setResult(null);
+      setError(null);
+      setReviewed(null);
+      setAmount("");
+      setRefresh((value) => value + 1);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    }
   };
   const insufficient = quote && spendableUnits !== undefined && spendableUnits < quote.sourceAmount;
   return (

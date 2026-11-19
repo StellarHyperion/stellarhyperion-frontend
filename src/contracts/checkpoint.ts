@@ -68,8 +68,13 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     return null;
   }
 }
-export function saveCheckpoint(value: TransferCheckpoint | null) {
+export function getTransferCheckpoint(): TransferCheckpoint | null {
+  return parseCheckpoint(snapshot());
+}
+export function saveCheckpoint(value: TransferCheckpoint | null, expectedTxHash?: string) {
   const existing = parseCheckpoint(snapshot());
+  if (!value && expectedTxHash && existing?.txHash !== expectedTxHash)
+    throw new Error("The pending transaction changed in another tab. Check its current outcome.");
   if (
     value &&
     existing &&

@@ -35,7 +35,10 @@ const quote: LiveQuote = {
   ledger: 1,
   relayGas: 1051082n,
 };
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 describe("Real Stellar transaction encoding", () => {
   it("keeps unsupported claim previews explicitly unknown", () => {
     expect(parseClaimPreview({ eligible: true }, "preview_settle_claim")).toMatchObject({
@@ -179,6 +182,38 @@ describe("Real Stellar transaction encoding", () => {
     expect(await readTransaction("0xnot-a-stellar-tx")).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
   });
+  it("retains an unknown outcome when configured RPC sources disagree", async () => {
+    vi.stubEnv("NEXT_PUBLIC_STELLAR_READ_RPC_URLS", "https://rpc-two.testnet.example");
+    const getNetwork = vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
+      passphrase: TESTNET.networkPassphrase,
+      protocolVersion: "27",
+    });
+    vi.spyOn(rpc.Server.prototype, "getTransaction")
+      .mockResolvedValueOnce({
+        status: rpc.Api.GetTransactionStatus.SUCCESS,
+      } as never)
+      .mockResolvedValueOnce({
+        status: rpc.Api.GetTransactionStatus.FAILED,
+      } as never);
+
+    const result = await readTransaction("a".repeat(64));
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: "a".repeat(64),
+      reason: expect.stringContaining("disagree"),
+    });
+    expect(getNetwork).toHaveBeenCalledTimes(2);
+  });
+  it("does not accept transaction evidence from an RPC on another network", async () => {
+    vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
+      passphrase: "Public Global Stellar Network ; September 2015",
+      protocolVersion: "27",
+    });
+    const getTransaction = vi.spyOn(rpc.Server.prototype, "getTransaction");
+
+    await expect(readTransaction("b".repeat(64))).rejects.toThrow("not Stellar Testnet");
+    expect(getTransaction).not.toHaveBeenCalled();
+  });
   it("encodes Circle's post-forwarding receive minimum with six-decimal native USDC", () => {
     const operation = bridgeOperation(
       TESTNET.reader,
@@ -321,6 +356,24 @@ describe("Real Stellar transaction encoding", () => {
         saveCheckpoint(cp2);
       }).toThrow("previous transaction remains pending");
       saveCheckpoint(null);
+    });
+    it("does not clear a checkpoint that changed in another tab", () => {
+      const checkpoint: TransferCheckpoint = {
+        router: TESTNET.router,
+        account: TESTNET.reader,
+        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        destination: "sepolia",
+        route: 1,
+        bridgeAmount: "1000000",
+        stage: "bridge",
+        txHash: "3".repeat(64),
+      };
+      saveCheckpoint(null);
+      saveCheckpoint(checkpoint);
+
+      expect(() => saveCheckpoint(null, "4".repeat(64))).toThrow("changed in another tab");
+      saveCheckpoint(checkpoint);
+      saveCheckpoint(null, checkpoint.txHash);
     });
     it("retains a pending hash when writes fail but storage reads still work", () => {
       const checkpoint = {

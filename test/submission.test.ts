@@ -9,7 +9,7 @@ import {
   type xdr,
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
-import { submitSettleClaim } from "../src/contracts/stellar";
+import { readTransaction, submitSettleClaim } from "../src/contracts/stellar";
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 
 // Deterministic test-only signer; this test never connects to a network.
@@ -112,6 +112,17 @@ describe("Signed Stellar submission failure boundaries", () => {
     const result = await submitSettleClaim(key.publicKey(), 1n, sign);
     expect(result).toEqual({ status: "pending", txHash: hash });
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("never broadcasts again while checking an ambiguous signed transaction", async () => {
+    const { send } = setup();
+    send.mockRejectedValue(new Error("timeout"));
+    const first = await submitSettleClaim(key.publicKey(), 1n, sign);
+    expect(first.status).toBe("pending");
+    vi.spyOn(rpc.Server.prototype, "getTransaction").mockResolvedValue({
+      status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+    } as never);
+    expect(await readTransaction(first.txHash)).toMatchObject({ status: "pending" });
+    expect(send).toHaveBeenCalledTimes(1);
   });
   it("reports a known network rejection instead of source confirmation", async () => {
     const { send } = setup();

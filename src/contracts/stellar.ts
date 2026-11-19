@@ -43,6 +43,7 @@ export interface TransactionResult {
   status: "confirmed" | "pending" | "failed";
   txHash: string;
   nonce?: string;
+  reason?: string;
 }
 export interface LiveQuote {
   route: number;
@@ -615,9 +616,45 @@ export function bridgeOperation(sender: string, quote: LiveQuote, recipientInput
   );
 }
 
-export async function readTransaction(hash: string): Promise<TransactionResult | null> {
-  if (!/^[0-9a-fA-F]{64}$/.test(hash)) return null;
-  const result = await server().getTransaction(hash);
+const MAX_TRANSACTION_READ_SOURCES = 3;
+
+function transactionReadSources(): string[] {
+  const configured = (process.env.NEXT_PUBLIC_STELLAR_READ_RPC_URLS ?? "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+  const sources: string[] = [];
+  const origins = new Set<string>();
+  for (const endpoint of [TESTNET.rpcUrl, ...configured]) {
+    let url: URL;
+    try {
+      url = new URL(endpoint);
+    } catch {
+      throw new Error("A Stellar transaction read source is not a valid URL.");
+    }
+    if (
+      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      url.username ||
+      url.password
+    ) {
+      throw new Error("Stellar transaction read sources must be public HTTP(S) endpoints.");
+    }
+    if (origins.has(url.origin)) continue;
+    origins.add(url.origin);
+    sources.push(url.toString());
+    if (sources.length === MAX_TRANSACTION_READ_SOURCES) break;
+  }
+  return sources;
+}
+
+async function readTransactionFrom(
+  client: rpc.Server,
+  hash: string,
+): Promise<TransactionResult> {
+  const network = await client.getNetwork();
+  if (network.passphrase !== TESTNET.networkPassphrase)
+    throw new Error("The RPC endpoint is not Stellar Testnet.");
+  const result = await client.getTransaction(hash);
   if (result.status === rpc.Api.GetTransactionStatus.FAILED)
     return { status: "failed", txHash: hash };
   if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
@@ -629,6 +666,36 @@ export async function readTransaction(hash: string): Promise<TransactionResult |
     };
   }
   return { status: "pending", txHash: hash };
+}
+
+export async function readTransaction(hash: string): Promise<TransactionResult | null> {
+  if (!/^[0-9a-fA-F]{64}$/.test(hash)) return null;
+  const sources = transactionReadSources();
+  const reads = await Promise.allSettled(
+    sources.map((url) => readTransactionFrom(new rpc.Server(url, { timeout: 15_000 }), hash)),
+  );
+  const results = reads.flatMap((read) => (read.status === "fulfilled" ? [read.value] : []));
+  if (!results.length) {
+    throw new Error("No configured Stellar Testnet RPC source could verify this transaction.");
+  }
+  const pending = (reason: string): TransactionResult => ({ status: "pending", txHash: hash, reason });
+  if (results.length !== sources.length)
+    return pending("A transaction read source was unavailable; its outcome remains unknown.");
+  const statuses = new Set(results.map((result) => result.status));
+  if (statuses.size !== 1)
+    return pending("Stellar transaction sources disagree; its outcome remains unknown.");
+  if (statuses.has("pending"))
+    return pending("Stellar Testnet has not confirmed a final transaction result yet.");
+  const nonces = new Set(results.flatMap((result) => (result.nonce ? [result.nonce] : [])));
+  if (nonces.size > 1)
+    return pending("Stellar transaction sources returned conflicting results; its outcome remains unknown.");
+  const [result] = results;
+  if (!result) throw new Error("No Stellar transaction result was returned.");
+  return {
+    status: result.status,
+    txHash: hash,
+    ...(nonces.size === 1 ? { nonce: [...nonces][0] } : {}),
+  };
 }
 
 export interface ReviewSnapshot {

@@ -36,6 +36,8 @@ Connect Freighter, Albedo, xBull or LOBSTR for Stellar Testnet through the nativ
 
 The checked-in deployment supplies the default router and canonical USDC asset. Public overrides are documented in `.env.example`. The app is testnet only.
 
+`NEXT_PUBLIC_STELLAR_READ_RPC_URLS` may list up to two additional, independently operated Stellar Testnet RPC origins, comma-separated. Transaction status is accepted only when every configured source confirms the same result and each source identifies as Stellar Testnet; disagreement or an unavailable source leaves the saved transaction pending.
+
 `NEXT_PUBLIC_HYPERION_API_URL` supplies transfer activity and destination verification. The backend must run its indexer and rail pollers regularly. The public testnet uses a five-minute GitHub Actions schedule, subject to runner queueing; destination Activity can take several minutes to update. Unreachable history is shown explicitly. A confirmed Stellar transaction proves source execution; destination delivery requires matching confirmed bridge and token-payment events.
 
 Next serves `/api/relay-fee` for Axelar's live ITS estimate and `/api/cctp-fee` for Circle's finalized forwarding estimate. Static export cannot serve these endpoints. There are no fixed relay prices, generated transaction hashes, sample claims or fabricated history.
