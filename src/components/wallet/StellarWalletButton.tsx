@@ -32,13 +32,19 @@ export function StellarWalletButton() {
   const rememberedWalletName = isWalletId(rememberedWallet)
     ? walletCapabilities(rememberedWallet).name
     : null;
-  const preference = (rememberedWallet || preferenceError) && (
+  const preference = (rememberedWallet !== null || preferenceError !== null) && (
     <div className={styles.preference}>
-      <span className={styles.addressLabel}>Remembered wallet: {rememberedWalletName ?? "unavailable"}</span>
+      <span className={styles.addressLabel}>
+        Remembered wallet: {rememberedWalletName ?? "unavailable"}
+      </span>
       <button type="button" className={styles.preferenceBtn} onClick={clearRememberedWallet}>
         clear saved preference
       </button>
-      {preferenceError && <p role="alert" className={styles.preferenceError}>{preferenceError}</p>}
+      {preferenceError && (
+        <p role="alert" className={styles.preferenceError}>
+          {preferenceError}
+        </p>
+      )}
     </div>
   );
   const containerRef = useRef<HTMLDivElement>(null);
@@ -69,13 +75,22 @@ export function StellarWalletButton() {
     return (
       <div className={styles.disconnected}>
         <button
-          type="button" className={styles.button}
-          onClick={() => { void connect(); }} disabled={isConnecting} aria-busy={isConnecting}
+          type="button"
+          className={styles.button}
+          onClick={() => {
+            void connect();
+          }}
+          disabled={isConnecting}
+          aria-busy={isConnecting}
         >
           <span className={styles.dot} />
           <span>{isConnecting ? "connecting..." : "connect stellar"}</span>
         </button>
-        {error && <p role="alert" className={styles.preferenceError}>{error}</p>}
+        {error && (
+          <p role="alert" className={styles.preferenceError}>
+            {error}
+          </p>
+        )}
         {preference}
       </div>
     );
@@ -103,7 +118,9 @@ export function StellarWalletButton() {
       </button>
 
       {preferenceError && !menuOpen && (
-        <p role="alert" className={styles.preferenceNotice}>{preferenceError}</p>
+        <p role="alert" className={styles.preferenceNotice}>
+          {preferenceError}
+        </p>
       )}
       {menuOpen && (
         <div id={menuId} className={styles.menu} role="region" aria-label="Wallet details">

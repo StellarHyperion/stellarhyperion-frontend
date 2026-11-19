@@ -31,7 +31,11 @@ import {
   type WalletAvailabilityStatus,
 } from "./capabilities";
 
-import { isRecognizedWalletPreference, readWalletPreference, saveWalletPreference } from "./preference";
+import {
+  isRecognizedWalletPreference,
+  readWalletPreference,
+  saveWalletPreference,
+} from "./preference";
 
 const Context = createContext<StellarWalletContextValue | null>(null);
 
@@ -69,24 +73,31 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     const version = attempt.current;
-    const preference = readWalletPreference();
-    const saved = preference.id;
-    setRememberedWallet(isWalletId(saved) ? saved : null);
-    setPreferenceError(preference.error ?? (!isRecognizedWalletPreference(saved)
-        ? "The saved wallet preference is not recognized. Clear it before connecting."
-        : null));
-    // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
-    if (isWalletId(saved) && saved === "freighter")
-      void walletAddress(saved, false)
-        .then((value) => {
-          if (active && restorationAllowed.current && attempt.current === version) {
-            setAddress(value);
-            setWalletId(saved);
-          }
-        })
-        .catch(() => {
-          /* Explicit connection remains available. */
-        });
+    // Hydrate browser storage after mount; cleanup also covers strict-mode remounts.
+    queueMicrotask(() => {
+      if (!active) return;
+      const preference = readWalletPreference();
+      const saved = preference.id;
+      setRememberedWallet(isWalletId(saved) ? saved : null);
+      setPreferenceError(
+        preference.error ??
+          (!isRecognizedWalletPreference(saved)
+            ? "The saved wallet preference is not recognized. Clear it before connecting."
+            : null),
+      );
+      // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
+      if (isWalletId(saved) && saved === "freighter")
+        void walletAddress(saved, false)
+          .then((value) => {
+            if (active && restorationAllowed.current && attempt.current === version) {
+              setAddress(value);
+              setWalletId(saved);
+            }
+          })
+          .catch(() => {
+            /* Explicit connection remains available. */
+          });
+    });
     return () => {
       active = false;
     };

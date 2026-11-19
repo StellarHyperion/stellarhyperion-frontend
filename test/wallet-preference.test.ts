@@ -49,6 +49,17 @@ describe("Stellar wallet preference storage", () => {
     expect(isRecognizedWalletPreference("albedo")).toBe(true);
   });
 
+  it("keeps the saved preference and checkpoint when clearing storage fails", () => {
+    state.set(walletKey, "albedo");
+    state.set(checkpointKey, "unresolved-checkpoint");
+    storage.removeItem.mockImplementation(() => {
+      throw new Error("storage is disabled");
+    });
+    expect(saveWalletPreference(null)).toMatch(/Could not update/);
+    expect(state.get(walletKey)).toBe("albedo");
+    expect(state.get(checkpointKey)).toBe("unresolved-checkpoint");
+  });
+
   it("reports failures reading the saved preference", () => {
     storage.getItem.mockImplementation(() => {
       throw new Error("storage is disabled");

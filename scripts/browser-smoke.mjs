@@ -69,10 +69,7 @@ try {
   await page.getByText("Remembered wallet: Albedo").waitFor();
   assert.equal(await page.getByRole("dialog", { name: "Connect a Stellar wallet" }).count(), 0);
   await page.getByRole("button", { name: "clear saved preference" }).click();
-  assert.equal(
-    await page.evaluate(() => localStorage.getItem("hyperion.stellar.walletId")),
-    null,
-  );
+  assert.equal(await page.evaluate(() => localStorage.getItem("hyperion.stellar.walletId")), null);
   assert.equal(
     await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
     "unresolved-checkpoint",
