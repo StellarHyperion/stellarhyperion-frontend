@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { relayBudget } from "../../../lib/relay-budget";
+import { fetchWithDeadline } from "../../../lib/provider-request";
 // The fee API expects a method in the JSON body. Its /gmp/estimateITSFee path returns help text.
 export async function GET() {
   try {
-    const response = await fetch("https://testnet.api.gmp.axelarscan.io", {
+    const response = await fetchWithDeadline("https://testnet.api.gmp.axelarscan.io", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -12,7 +13,6 @@ export async function GET() {
         destinationChain: "ethereum-sepolia",
         event: "InterchainTransfer",
       }),
-      signal: AbortSignal.timeout(15_000),
       cache: "no-store",
     });
     const value = (await response.text()).trim().replace(/^"(\d+)"$/, "$1");

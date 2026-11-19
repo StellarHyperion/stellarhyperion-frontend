@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import {
   TESTNET,
@@ -100,6 +100,7 @@ function PendingTransferCard({
   const [checked, setChecked] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<LiveQuote | null>(null);
+  const generation = useRef(0);
   const current =
     checked?.txHash === checkpoint.txHash
       ? checked
@@ -107,21 +108,29 @@ function PendingTransferCard({
         ? latest
         : null;
   const sameAccount = wallet.address === checkpoint.account;
+  useEffect(() => {
+    generation.current += 1;
+    setChecked(null);
+    setReview(null);
+  }, [wallet.address, checkpoint.txHash]);
   const check = async () => {
     if (checking || busy) return;
+    const requestGeneration = ++generation.current;
     setChecking(true);
     setError(null);
     try {
       const result = await readTransaction(checkpoint.txHash);
+      if (requestGeneration !== generation.current) return;
       setChecked(result);
-      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount)
-        setReview(
-          await quoteTransfer(
-            checkpoint.destination,
-            BigInt(checkpoint.bridgeAmount),
-            checkpoint.route,
-          ),
+      if (result?.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+        const nextReview = await quoteTransfer(
+          checkpoint.destination,
+          BigInt(checkpoint.bridgeAmount),
+          checkpoint.route,
         );
+        if (requestGeneration !== generation.current) return;
+        setReview(nextReview);
+      }
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -130,6 +139,7 @@ function PendingTransferCard({
   };
   const continueBridge = async () => {
     if (!review || !sameAccount || checking) return;
+    const requestGeneration = ++generation.current;
     setChecking(true);
     setError(null);
     try {
@@ -142,6 +152,7 @@ function PendingTransferCard({
           if (hash) saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
         },
       );
+      if (requestGeneration !== generation.current) return;
       setChecked(result);
       setReview(null);
     } catch (cause) {

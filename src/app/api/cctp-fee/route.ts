@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { destinationFor } from "../../../config/testnet";
 import { relayBudget } from "../../../lib/relay-budget";
+import { fetchWithDeadline } from "../../../lib/provider-request";
 
 export async function GET(request: Request) {
   let domain: number;
@@ -10,10 +11,9 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Choose a supported destination testnet." }, { status: 400 });
   }
   try {
-    const response = await fetch(
+    const response = await fetchWithDeadline(
       `https://iris-api-sandbox.circle.com/v2/burn/USDC/fees/27/${domain}?forward=true`,
       {
-        signal: AbortSignal.timeout(15000),
         cache: "no-store",
       },
     );
