@@ -873,7 +873,7 @@ describe("Checkpoint staleness guards", () => {
   const sameIntent = {
     account: checkpoint.account,
     recipient: checkpoint.recipient,
-    source: checkpoint.source,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
     destination: checkpoint.destination,
     route: checkpoint.route,
     bridgeAmount: checkpoint.bridgeAmount,

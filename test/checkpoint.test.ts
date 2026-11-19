@@ -109,6 +109,13 @@ describe("pending transfer checkpoints", () => {
     expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toEqual(changed);
   });
 
+  it("refuses a JSON numeric amount that has already lost integer precision", () => {
+    expect(
+      parseCheckpoint(
+        JSON.stringify({ ...checkpoint, bridgeAmount: Number(checkpoint.bridgeAmount) }),
+      ),
+    ).toBeNull();
+  });
   it("retains compatibility with existing checkpoints while rejecting a different token", () => {
     expect(parseCheckpoint(JSON.stringify({ ...checkpoint, token: undefined }))).toEqual(
       checkpoint,
