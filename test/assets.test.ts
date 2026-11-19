@@ -18,7 +18,6 @@ import {
   searchAssets,
   spendableBalance,
   stellarAsset,
-  submitConversion,
   suggestSourceSpend,
   USDC,
   XLM,
