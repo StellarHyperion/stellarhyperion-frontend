@@ -12,6 +12,9 @@ import {
   conversionExecutionIntent,
   conversionRoute,
   conversionOperations,
+  compareConversionPaths,
+  MAX_CONVERSION_PATHS,
+  isCanonicalUsdc,
   revalidateConversion,
   issuerVerificationLabel,
   quoteTrade,
@@ -24,7 +27,12 @@ import {
   trustlineLabel,
 } from "../src/contracts/assets";
 import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
-import { DESTINATIONS, TESTNET } from "../src/config/testnet";
+import {
+  DESTINATIONS,
+  deploymentIdentityMismatch,
+  STELLAR_DEPLOYMENT,
+  TESTNET,
+} from "../src/config/testnet";
 import { boundedRetryAfter, cctpMinimumReceived, relayBudget } from "../src/lib/relay-budget";
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -32,11 +40,20 @@ afterEach(() => {
 const path = {
   source_asset_type: "native",
   source_amount: "1.0000000",
+  destination_asset_type: "credit_alphanum4",
   destination_asset_code: USDC.code,
   destination_asset_issuer: USDC.issuer,
   destination_amount: "0.8000000",
   path: [],
 };
+const pathComparison = (selectedOutput: bigint) => ({
+  returnedPaths: 1,
+  eligiblePaths: 1,
+  selectedOutput,
+  excludedPaths: 0,
+  diagnostics: [],
+  omittedDiagnostics: 0,
+});
 const answer = (records: unknown[]) => {
   const request = vi
     .fn()
@@ -46,10 +63,22 @@ const answer = (records: unknown[]) => {
 };
 describe("Real Stellar conversion transaction boundaries", () => {
   it("uses live liquidity and keeps the conversion within the exact source maximum", async () => {
-    const request = answer([path, { ...path, destination_amount: "0.9000000" }]);
+    const request = answer([
+      path,
+      { ...path, destination_amount: "0.9000000" },
+      { ...path, path: [{ asset_type: "unsupported" }] },
+    ]);
     const conversion = await quoteConversion(XLM, 10000000n);
     expect(request.mock.calls[0]?.[0]).toContain("source_amount=1");
+    expect(request.mock.calls[0]?.[0]).toContain(`limit=${MAX_CONVERSION_PATHS}`);
     expect(conversion.usdcAmount).toBe(8955000n);
+    expect(conversion.pathComparison.selectedOutput).toBe(9000000n);
+    expect(conversion.pathComparison).toMatchObject({
+      returnedPaths: 3,
+      eligiblePaths: 2,
+      excludedPaths: 1,
+      diagnostics: [{ responseIndex: 2, reason: "path asset 1 has an unsupported asset type." }],
+    });
     const tx = new TransactionBuilder(new Account(TESTNET.reader, "1"), {
       fee: "100",
       networkPassphrase: TESTNET.networkPassphrase,
@@ -83,6 +112,7 @@ describe("Real Stellar conversion transaction boundaries", () => {
       sourceMax: 10000000n,
       usdcAmount: 8955000n,
       path: [intermediate],
+      pathComparison: pathComparison(9000000n),
     };
     const intent = conversionExecutionIntent(conversion, true);
     expect(intent).toMatchObject({
@@ -117,9 +147,109 @@ describe("Real Stellar conversion transaction boundaries", () => {
     await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow("No liquid");
     answer([{ ...path, destination_asset_issuer: TESTNET.reader }]);
     await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow("No liquid");
+    answer([{ ...path, source_amount: "0.9000000" }]);
+    await expect(quoteConversion(XLM, 10000000n)).rejects.toThrow(
+      "Path 1: source amount does not match the requested spend cap.",
+    );
+  });
+  it("excludes malformed and source-mismatched paths with bounded diagnostics", () => {
+    const result = compareConversionPaths(XLM, 10000000n, [
+      { ...path, source_amount: "0.9000000" },
+      { ...path, destination_amount: "not-an-amount" },
+      { ...path, path: [{ asset_type: "unsupported" }] },
+      { ...path },
+    ]);
+    expect(result.selected?.output).toBe(8000000n);
+    expect(result.eligiblePaths).toBe(1);
+    expect(result.excludedPaths).toBe(3);
+    expect(result.diagnostics.map(({ reason }) => reason)).toEqual([
+      "source amount does not match the requested spend cap.",
+      "destination amount is not a valid exact 7-decimal amount.",
+      "path asset 1 has an unsupported asset type.",
+    ]);
+  });
+  it("matches issued source paths by both code and issuer", () => {
+    const source = {
+      id: `USD:${TESTNET.reader}`,
+      code: "USD",
+      issuer: TESTNET.reader,
+      verification: "horizon-search" as const,
+      trustline: "present" as const,
+    };
+    const result = compareConversionPaths(source, 10000000n, [
+      {
+        ...path,
+        source_asset_type: "credit_alphanum4",
+        source_asset_code: source.code,
+        source_asset_issuer: USDC.issuer,
+      },
+      {
+        ...path,
+        source_asset_type: "credit_alphanum4",
+        source_asset_code: source.code,
+        source_asset_issuer: source.issuer,
+      },
+    ]);
+    expect(result.eligiblePaths).toBe(1);
+    expect(result.excludedPaths).toBe(1);
+    expect(result.diagnostics[0]?.reason).toBe(
+      "source code or issuer does not match the requested asset.",
+    );
+  });
+  it("selects equal-output paths by issuer-qualified identity, regardless of Horizon order", () => {
+    const issuerA = Keypair.random().publicKey();
+    const issuerB = Keypair.random().publicKey();
+    const first = {
+      ...path,
+      destination_amount: "0.9000000",
+      path: [{ asset_type: "credit_alphanum4", asset_code: "USD", asset_issuer: issuerA }],
+    };
+    const second = {
+      ...path,
+      destination_amount: "0.9000000",
+      path: [{ asset_type: "credit_alphanum4", asset_code: "USD", asset_issuer: issuerB }],
+    };
+    const forward = compareConversionPaths(XLM, 10000000n, [first, second]);
+    const reversed = compareConversionPaths(XLM, 10000000n, [second, first]);
+    expect(forward.selected).toEqual(reversed.selected);
+    expect(forward.selected?.path[0]?.issuer).toBe([issuerA, issuerB].sort()[0]);
+  });
+  it("excludes oversized amount strings and issued identity attached to native path assets", () => {
+    const result = compareConversionPaths(XLM, 10000000n, [
+      { ...path, destination_amount: "9".repeat(100000) },
+      {
+        ...path,
+        path: [{ asset_type: "native", asset_code: "USD", asset_issuer: TESTNET.reader }],
+      },
+      path,
+    ]);
+    expect(result.eligiblePaths).toBe(1);
+    expect(result.excludedPaths).toBe(2);
+    expect(result.diagnostics.map(({ reason }) => reason)).toEqual([
+      "destination amount is not a valid exact 7-decimal amount.",
+      "path asset 1 includes issued-asset identity fields on a native asset.",
+    ]);
+    expect(result.selected?.output).toBe(8000000n);
+  });
+  it("rejects a response that exceeds the bounded comparison limit", () => {
+    const result = compareConversionPaths(
+      XLM,
+      10000000n,
+      Array.from({ length: MAX_CONVERSION_PATHS + 1 }, () => path),
+    );
+    expect(result.selected).toBeNull();
+    expect(result.excludedPaths).toBe(MAX_CONVERSION_PATHS + 1);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.reason).toContain("comparison limit");
   });
   it("rechecks live liquidity without changing reviewed conversion bounds", async () => {
-    const reviewed = { source: XLM, sourceMax: 10000000n, usdcAmount: 8000000n, path: [] };
+    const reviewed = {
+      source: XLM,
+      sourceMax: 10000000n,
+      usdcAmount: 8000000n,
+      path: [],
+      pathComparison: pathComparison(8000000n),
+    };
     answer([
       {
         ...path,
@@ -144,6 +274,28 @@ describe("Real Stellar conversion transaction boundaries", () => {
   it("keeps issuer identity and rejects invalid assets or oversized source amounts", async () => {
     expect(() => stellarAsset({ ...USDC, id: "USDC:different" })).toThrow();
     expect(() => stellarAsset({ ...USDC, issuer: "invalid" })).toThrow();
+    expect(isCanonicalUsdc(USDC)).toBe(true);
+    const sameCodeDifferentIssuer = {
+      ...USDC,
+      id: `USDC:${TESTNET.reader}`,
+      issuer: TESTNET.reader,
+      verification: "horizon-search" as const,
+      trustline: "not-checked" as const,
+    };
+    expect(isCanonicalUsdc(sameCodeDifferentIssuer)).toBe(false);
+    const request = answer([
+      {
+        ...path,
+        source_asset_type: "credit_alphanum4",
+        source_asset_code: sameCodeDifferentIssuer.code,
+        source_asset_issuer: sameCodeDifferentIssuer.issuer,
+      },
+    ]);
+    const conversion = await quoteConversion(sameCodeDifferentIssuer, 10000000n);
+    const params = new URL(String(request.mock.calls[0]?.[0])).searchParams;
+    expect(params.get("source_asset_issuer")).toBe(TESTNET.reader);
+    expect(params.get("destination_assets")).toBe(USDC.id);
+    expect(conversion.source).toEqual(sameCodeDifferentIssuer);
     const fetcher = answer([]);
     await expect(quoteConversion(XLM, 1n << 63n)).rejects.toThrow("limit");
     await expect(searchAssets("not a valid asset code")).rejects.toThrow("Search by");
@@ -342,6 +494,7 @@ describe("Real Stellar conversion transaction boundaries", () => {
       sourceMax: 10000000n,
       usdcAmount: 9000000n,
       path: [],
+      pathComparison: pathComparison(9000000n),
     };
     await expect(submitConversion(TESTNET.reader, frozConversion, dummySigner)).rejects.toThrow(
       "Trustline for FROZ is frozen by the issuer.",
@@ -352,6 +505,7 @@ describe("Real Stellar conversion transaction boundaries", () => {
       sourceMax: 10000000n,
       usdcAmount: 9000000n,
       path: [],
+      pathComparison: pathComparison(9000000n),
     };
     await expect(submitConversion(TESTNET.reader, unatConversion, dummySigner)).rejects.toThrow(
       "Trustline for UNAT is not authorized by the issuer.",
@@ -362,6 +516,7 @@ describe("Real Stellar conversion transaction boundaries", () => {
       sourceMax: 60000000n,
       usdcAmount: 50000000n,
       path: [],
+      pathComparison: pathComparison(50000000n),
     };
     await expect(submitConversion(TESTNET.reader, liabConversion, dummySigner)).rejects.toThrow(
       "Insufficient available LIAB balance. Selling liabilities reduce your spendable balance to 5.0000000 LIAB.",
@@ -391,6 +546,22 @@ describe("Real Stellar conversion transaction boundaries", () => {
   });
 });
 describe("Independently verified testnet bridge lanes", () => {
+  it("binds the configured Stellar asset identity to the checked-in deployment", () => {
+    expect(STELLAR_DEPLOYMENT).toMatchObject({
+      usdcCode: USDC.code,
+      usdcIssuer: USDC.issuer,
+      usdcToken: TESTNET.token,
+    });
+    expect(
+      deploymentIdentityMismatch(STELLAR_DEPLOYMENT.router, STELLAR_DEPLOYMENT.usdcToken),
+    ).toBeNull();
+    expect(deploymentIdentityMismatch("different-router", STELLAR_DEPLOYMENT.usdcToken)).toContain(
+      "router",
+    );
+    expect(deploymentIdentityMismatch(STELLAR_DEPLOYMENT.router, "different-token")).toContain(
+      "USDC token contract",
+    );
+  });
   it("exposes only the routes backed by checked-in delivery evidence", () => {
     expect(Object.fromEntries(DESTINATIONS.map(({ key, routes }) => [key, routes]))).toEqual({
       sepolia: [0, 1],
@@ -469,6 +640,7 @@ describe("Trustline reserve and network fee disclosure", () => {
       sourceMax: 3000000n,
       usdcAmount: 2000000n,
       path: [],
+      pathComparison: pathComparison(2000000n),
     };
     const exact = trustlineReserveImpact(trustlineReservePreview(20000200n, 1), conversion, true);
     expect(exact.addsTrustline).toBe(true);
@@ -488,13 +660,20 @@ describe("Trustline reserve and network fee disclosure", () => {
       sourceMax: 30000000n,
       usdcAmount: 2000000n,
       path: [],
+      pathComparison: pathComparison(2000000n),
     };
     const impact = trustlineReserveImpact(trustlineReservePreview(50000200n, 0), conversion, true);
     expect(impact.sourceSpend).toBe(30000000n);
     expect(impact.projectedSpendable).toBe(5000000n);
   });
   it("skips the second reserve and the second operation fee once the trustline already exists", () => {
-    const conversion: Conversion = { source: foo, sourceMax: 1n, usdcAmount: 1n, path: [] };
+    const conversion: Conversion = {
+      source: foo,
+      sourceMax: 1n,
+      usdcAmount: 1n,
+      path: [],
+      pathComparison: pathComparison(1n),
+    };
     const impact = trustlineReserveImpact(trustlineReservePreview(10000100n, 1), conversion, false);
     expect(impact.addsTrustline).toBe(false);
     expect(impact.networkFee).toBe(100n);
@@ -536,6 +715,7 @@ describe("Trustline reserve and network fee disclosure", () => {
       sourceMax: 1000000n,
       usdcAmount: 900000n,
       path: [],
+      pathComparison: pathComparison(900000n),
     };
     const sign = vi.fn(() => Promise.resolve({ signedTxXdr: "unused" }));
     await expect(submitConversion(TESTNET.reader, conversion, sign)).rejects.toThrow(/reserve/i);
@@ -545,6 +725,7 @@ describe("Trustline reserve and network fee disclosure", () => {
 describe("Interrupted transfer recovery", () => {
   const checkpoint: TransferCheckpoint = {
     router: TESTNET.router,
+    token: TESTNET.token,
     account: TESTNET.reader,
     recipient: `0x${"1".repeat(40)}`,
     destination: "sepolia",

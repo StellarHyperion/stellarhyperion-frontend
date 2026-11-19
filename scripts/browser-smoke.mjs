@@ -18,6 +18,14 @@ const browser = await { chromium, firefox }[engine].launch(
 );
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  await page.addInitScript(() => {
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (value) => (copied = value) },
+    });
+    Object.defineProperty(window, "__hyperionCopiedAddress", { get: () => copied });
+  });
   const errors = [];
   await page.addInitScript(() => {
     if (sessionStorage.getItem("wallet-preference-smoke-seeded")) return;
@@ -28,6 +36,27 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+  const identityDetails = page
+    .locator("details")
+    .filter({ hasText: "Inspect canonical USDC identity" });
+  await identityDetails.locator("summary").click();
+  const canonicalIssuer = deployment.networks["stellar-testnet"].tokens.USDC.issuer;
+  assert.ok((await identityDetails.innerText()).includes(canonicalIssuer));
+  assert.ok(
+    (await identityDetails.innerText()).includes(
+      deployment.networks["stellar-testnet"].tokens.USDC.sacId,
+    ),
+  );
+  await identityDetails.getByRole("button", { name: "Copy canonical USDC issuer" }).click();
+  await identityDetails.getByRole("status").filter({ hasText: "Copied" }).waitFor();
+  assert.equal(await page.evaluate(() => window.__hyperionCopiedAddress), canonicalIssuer);
+  assert.ok((await identityDetails.innerText()).includes("Axelar ITS USDC representation"));
+  await page.getByRole("button", { name: "Choose destination network and token" }).click();
+  const representationDialog = page.getByRole("dialog", { name: "Choose a destination" });
+  await representationDialog
+    .getByRole("button", { name: /Circle CCTP delivers native USDC/ })
+    .click();
+  assert.ok((await identityDetails.innerText()).includes("Circle CCTP native USDC"));
 
   // Opening a shared link loads bounded form state without any submission intent.
   const recipient = "0x" + "a".repeat(40);
@@ -75,8 +104,10 @@ try {
     "unresolved-checkpoint",
   );
   await page.getByRole("button", { name: "Choose source token", exact: true }).click();
-  await page.getByRole("dialog", { name: "Choose a token" }).waitFor();
+  const sourceDialog = page.getByRole("dialog", { name: "Choose a token" });
+  await sourceDialog.waitFor();
   await page.getByLabel("Search Stellar assets").waitFor();
+  await sourceDialog.getByText(/compare up to 50 Horizon paths by exact USDC output/i).waitFor();
   await page.getByLabel("Search Stellar assets").fill("USDC");
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "hidden" });
@@ -120,7 +151,39 @@ try {
   }, router);
   await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
   await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
+  await page
+    .getByText(
+      "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer.",
+    )
+    .waitFor();
   await page.getByRole("button", { name: "Check status" }).waitFor();
+  const checkpointBeforeNavigation = await page.evaluate(() =>
+    localStorage.getItem("hyperion.testnet.pending-transfer"),
+  );
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
+    checkpointBeforeNavigation,
+  );
+  assert.equal(
+    await page.getByRole("link", { name: "Recovery" }).getAttribute("href"),
+    "/#pending-recovery",
+  );
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
+  await page.getByRole("link", { name: "Activity" }).click();
+  await page.getByRole("heading", { name: "Transfer history" }).waitFor();
+  await page.getByRole("link", { name: "Recovery" }).click();
+  await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
+  // Selecting the current recovery fragment again restores focus without resetting its identity.
+  await page.getByRole("link", { name: "Activity" }).focus();
+  await page.getByRole("link", { name: "Recovery" }).click();
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
+    checkpointBeforeNavigation,
+  );
   const otherTab = await page.context().newPage();
   await otherTab.goto(origin, { waitUntil: "domcontentloaded" });
   await otherTab.evaluate(() => {
