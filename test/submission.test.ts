@@ -11,11 +11,18 @@ import {
   type xdr,
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
-import { submitSettleClaim, submitOperation, simulateOperation } from "../src/contracts/stellar";
+import {
+  createReviewedIntentSnapshot,
+  reviewedBridgeMatches,
+  reviewedIntentMatches,
+  submitSettleClaim,
+  submitOperation,
+  simulateOperation,
+} from "../src/contracts/stellar";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
-import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
+import { DESTINATIONS, STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 import {
   planMaxUsdcAmount,
   planMaxSourceAmount,
@@ -24,6 +31,7 @@ import {
 
 // Deterministic test-only signer; this test never connects to a network.
 const key = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(7));
+const otherKey = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(8));
 const success = (retval: xdr.ScVal): rpc.Api.SimulateTransactionSuccessResponse => ({
   id: "test",
   latestLedger: 1,
@@ -73,6 +81,76 @@ const sign = (value: string) => {
   return Promise.resolve({ signedTxXdr: tx.toXdr() });
 };
 afterEach(() => vi.restoreAllMocks());
+
+describe("Immutable reviewed transfer intent", () => {
+  const intent = createReviewedIntentSnapshot({
+    account: key.publicKey(),
+    asset: {
+      id: "USD:GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      code: "USD",
+      issuer: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    },
+    destination: "sepolia",
+    route: 0,
+    recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+    amount: 9007199254740993n,
+    minimum: 9007199254740001n,
+    providerBudget: 123450n,
+    estimatedProviderBudget: 112230n,
+    sourceAmount: 9007199254740993n,
+    sourceMaximum: null,
+    stage: "bridge",
+  });
+
+  it("freezes the public intent snapshot and its issuer-specific asset identity", () => {
+    expect(Object.isFrozen(intent)).toBe(true);
+    expect(Object.isFrozen(intent.asset)).toBe(true);
+    expect(reviewedIntentMatches(intent, { ...intent, asset: { ...intent.asset } })).toBe(true);
+  });
+
+  it("rejects changes to any payout-affecting field or exact integer amount", () => {
+    const changed = [
+      { ...intent, account: otherKey.publicKey() },
+      { ...intent, asset: { ...intent.asset, issuer: otherKey.publicKey() } },
+      { ...intent, destination: "base-sepolia" as const },
+      { ...intent, route: 1 as const },
+      { ...intent, recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c9" },
+      { ...intent, amount: 9007199254740992n },
+      { ...intent, minimum: 9007199254740000n },
+      { ...intent, providerBudget: 123451n },
+      { ...intent, estimatedProviderBudget: 112231n },
+      { ...intent, sourceAmount: 9007199254740992n },
+      { ...intent, stage: "conversion" as const },
+    ];
+    for (const candidate of changed) expect(reviewedIntentMatches(intent, candidate)).toBe(false);
+  });
+
+  it("blocks bridge signing when the submitted quote differs from the reviewed payout", () => {
+    const bridge = {
+      account: intent.account,
+      recipient: intent.recipient,
+      destination: intent.destination,
+      route: intent.route,
+      amount: intent.amount,
+      minimum: intent.minimum,
+      providerBudget: intent.providerBudget,
+      estimatedProviderBudget: intent.estimatedProviderBudget,
+    };
+    expect(reviewedBridgeMatches(intent, bridge)).toBe(true);
+    expect(reviewedBridgeMatches(intent, { ...bridge, minimum: bridge.minimum + 1n })).toBe(false);
+    expect(
+      reviewedBridgeMatches(intent, { ...bridge, providerBudget: bridge.providerBudget + 1n }),
+    ).toBe(false);
+  });
+
+  it("only exposes testnet lanes with destination-specific delivered evidence", () => {
+    expect(DESTINATIONS.map(({ key: destination, routes }) => [destination, routes])).toEqual([
+      ["sepolia", [0, 1]],
+      ["base-sepolia", [0]],
+      ["arc-testnet", [0]],
+    ]);
+  });
+});
 
 describe("Signed Stellar submission failure boundaries", () => {
   it("never asks the wallet or submits when simulation fails", async () => {

@@ -46,7 +46,7 @@ export interface TransactionResult {
   nonce?: string;
 }
 export interface LiveQuote {
-  route: number;
+  route: BridgeRoute;
   grossAmount: bigint;
   fee: bigint;
   netAmount: bigint;
@@ -662,8 +662,92 @@ export interface ReviewSnapshot {
   networkFee?: bigint;
 }
 
+export interface ReviewedIntentSnapshot {
+  readonly account: string;
+  readonly asset: Readonly<{ id: string; code: string; issuer: string | null }>;
+  readonly destination: DestinationKey;
+  readonly route: BridgeRoute;
+  readonly recipient: string;
+  readonly amount: bigint;
+  readonly minimum: bigint;
+  readonly providerBudget: bigint;
+  readonly estimatedProviderBudget: bigint;
+  readonly sourceAmount: bigint;
+  readonly sourceMaximum: bigint | null;
+  readonly stage: "conversion" | "bridge";
+}
+
+export function createReviewedIntentSnapshot(
+  intent: ReviewedIntentSnapshot,
+): ReviewedIntentSnapshot {
+  if (
+    !intent.account ||
+    !intent.asset.id ||
+    !intent.asset.code ||
+    intent.amount <= 0n ||
+    intent.minimum <= 0n ||
+    intent.providerBudget <= 0n ||
+    intent.estimatedProviderBudget <= 0n ||
+    intent.sourceAmount <= 0n ||
+    (intent.sourceMaximum !== null && intent.sourceMaximum <= 0n)
+  )
+    throw new Error("The reviewed transfer intent is invalid.");
+  return Object.freeze({
+    ...intent,
+    asset: Object.freeze({ ...intent.asset }),
+  });
+}
+
+export function reviewedIntentMatches(
+  original: ReviewedIntentSnapshot,
+  current: ReviewedIntentSnapshot,
+): boolean {
+  return (
+    original.account === current.account &&
+    original.asset.id === current.asset.id &&
+    original.asset.code === current.asset.code &&
+    original.asset.issuer === current.asset.issuer &&
+    original.destination === current.destination &&
+    original.route === current.route &&
+    original.recipient === current.recipient &&
+    original.amount === current.amount &&
+    original.minimum === current.minimum &&
+    original.providerBudget === current.providerBudget &&
+    original.estimatedProviderBudget === current.estimatedProviderBudget &&
+    original.sourceAmount === current.sourceAmount &&
+    original.sourceMaximum === current.sourceMaximum &&
+    original.stage === current.stage
+  );
+}
+
+export function reviewedBridgeMatches(
+  intent: ReviewedIntentSnapshot,
+  current: {
+    account: string;
+    recipient: string;
+    destination: DestinationKey;
+    route: BridgeRoute;
+    amount: bigint;
+    minimum: bigint;
+    providerBudget: bigint;
+    estimatedProviderBudget: bigint;
+  },
+): boolean {
+  return (
+    intent.account === current.account &&
+    intent.recipient === current.recipient &&
+    intent.destination === current.destination &&
+    intent.route === current.route &&
+    intent.amount === current.amount &&
+    intent.minimum === current.minimum &&
+    intent.providerBudget === current.providerBudget &&
+    intent.estimatedProviderBudget === current.estimatedProviderBudget
+  );
+}
+
 export interface SubmissionReconciliation {
   expectedAccount: string;
+  reviewedIntent?: ReviewedIntentSnapshot;
   getCurrentAccount?: () => string | null;
   isSuperseded?: () => boolean;
   onAccountSwitch?: (
@@ -1023,15 +1107,30 @@ export async function submitBridgeOut(
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
   validateRecipient(recipient);
-  const refreshed = await quoteTransfer(
-    quoted.destination,
-    quoted.requestedAmount,
-    quoted.route as BridgeRoute,
-  );
+  const reviewedIntent = reconcile?.reviewedIntent;
   if (
+    reviewedIntent &&
+    !reviewedBridgeMatches(reviewedIntent, {
+      account: sender,
+      recipient: validateRecipient(recipient),
+      destination: quoted.destination,
+      route: quoted.route,
+      amount: quoted.requestedAmount,
+      minimum: quoted.destinationAmount,
+      providerBudget: quoted.relayGas,
+      estimatedProviderBudget: quoted.estimatedRelayGas ?? quoted.relayGas,
+    })
+  )
+    throw new Error("The reviewed transfer intent changed. Review it again before signing.");
+  const refreshed = await quoteTransfer(quoted.destination, quoted.requestedAmount, quoted.route);
+  if (
+    refreshed.destination !== quoted.destination ||
+    refreshed.route !== quoted.route ||
+    refreshed.requestedAmount !== quoted.requestedAmount ||
     refreshed.grossAmount !== quoted.grossAmount ||
     refreshed.destinationAmount < quoted.destinationAmount ||
     refreshed.fee !== quoted.fee ||
+    refreshed.relayGas > quoted.relayGas ||
     (refreshed.estimatedRelayGas ?? refreshed.relayGas) > quoted.relayGas
   ) {
     throw new Error("The quote changed. Review a fresh quote before signing.");
