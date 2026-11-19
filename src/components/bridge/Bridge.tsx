@@ -73,9 +73,8 @@ import {
 } from "../../contracts/assets";
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import {
-  claimOperationOwnership,
+  acquireOperationOwnership,
   getOperationOwnership,
-  releaseOperationOwnership,
   saveCheckpoint,
   assertCheckpointStorage,
   useTransferCheckpoint,
@@ -1132,9 +1131,9 @@ export function Bridge() {
     const initialSourceId = source.id;
     const initialDestination = destination;
     const initialRoute = route;
-    let ownership: ReturnType<typeof claimOperationOwnership>;
+    let ownership: Awaited<ReturnType<typeof acquireOperationOwnership>>;
     try {
-      ownership = claimOperationOwnership({
+      ownership = await acquireOperationOwnership({
         account: sender,
         recipient: validateRecipient(recipient),
         destination,
@@ -1142,6 +1141,12 @@ export function Bridge() {
         bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
         stage: reviewedQuote.conversion ? "conversion" : "bridge",
       });
+      if (controller.signal.aborted || generation !== waitGeneration.current) {
+        ownership.release();
+        setBusy(false);
+        setPhase(null);
+        return;
+      }
     } catch (cause) {
       setError(errorMessage(cause));
       setBusy(false);
@@ -1243,7 +1248,7 @@ export function Bridge() {
       if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(converted);
       setError(message);
     } finally {
-      releaseOperationOwnership(ownership.id);
+      ownership.release();
       setBusy(false);
       setPhase(null);
     }
@@ -2014,6 +2019,8 @@ export function ClaimRecovery() {
         (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "claim" }),
         claimApproval ?? undefined,
         { expectedAccount: wallet.address, getCurrentAccount: () => currentAccount.current },
+        undefined,
+        claim,
       );
       setResult(transaction);
       if (transaction.status === "confirmed") setClaims(await getClaims([claim.id]));

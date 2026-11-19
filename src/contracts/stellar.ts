@@ -1752,9 +1752,24 @@ export async function submitSettleClaim(
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
+  reviewed?: PendingClaim,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
+  if (
+    reviewed &&
+    (claim.recipient !== reviewed.recipient ||
+      claim.token !== reviewed.token ||
+      claim.amount !== reviewed.amount ||
+      claim.deployment.router !== reviewed.deployment.router ||
+      claim.deployment.chain !== reviewed.deployment.chain ||
+      claim.deployment.wasmHash !== reviewed.deployment.wasmHash)
+  )
+    throw new Error("The claim changed. Review it again before signing.");
+  if (reviewed && claim.eligibility.status === "unknown")
+    throw new Error(
+      "Claim payout eligibility is unavailable. Look up the claim again before signing.",
+    );
   if (claim.eligibility.status === "ineligible")
     throw new Error(`Claim payout is ineligible: ${claim.eligibility.reason}`);
   const deployment = await verifyRouterDeployment();

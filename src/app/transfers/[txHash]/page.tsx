@@ -106,6 +106,7 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
               record.destination.token,
               record.destination.symbol,
               record.destination.decimals,
+              record.destination.representation,
             )}
           </p>
           <p>

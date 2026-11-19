@@ -100,6 +100,7 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
                   t.destination.token,
                   t.destination.symbol,
                   t.destination.decimals,
+                  t.destination.representation,
                 )}
               >
                 token:{" "}
@@ -107,6 +108,7 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
                   t.destination.token,
                   t.destination.symbol,
                   t.destination.decimals,
+                  t.destination.representation,
                 )}
               </span>
               <span className={styles.addressMono}>
@@ -161,17 +163,11 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
             <div className={styles.amountGroup}>
               <span className={styles.netAmount}>
                 <small className={styles.amountLabel}>
-                  {hasVerifiedDestinationEvidence(t) &&
-                  t.destination.amount &&
-                  t.destination.decimals !== undefined &&
-                  t.destination.decimals !== null
-                    ? "Received"
+                  {hasVerifiedDestinationEvidence(t) && t.destination.amount
+                    ? "Actual received"
                     : "Bridged before relay fees"}
                 </small>
-                {hasVerifiedDestinationEvidence(t) &&
-                t.destination.amount &&
-                t.destination.decimals !== undefined &&
-                t.destination.decimals !== null ? (
+                {hasVerifiedDestinationEvidence(t) && t.destination.amount ? (
                   <>
                     {formatTokenAmount(t.destination.amount, t.destination.decimals)}{" "}
                     {t.destination.symbol ?? "token"}

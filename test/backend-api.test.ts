@@ -73,29 +73,6 @@ describe("Real indexer client", () => {
     expect((await fetchTransfers()).coverage).toEqual(payload.coverage);
   });
 
-  it("preserves destination token metadata and formats missing precision as base units", async () => {
-    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
-    const payload = {
-      transfers: [],
-      count: 0,
-      limit: 20,
-      offset: 0,
-      destination: {
-        token: "0x0000000000000000000000000000000000000001",
-        symbol: "USDC",
-        decimals: 6,
-        amount: "1234567",
-      },
-    };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))));
-    const result = await fetchTransfers();
-    expect(result).toEqual(payload);
-    expect(formatTokenAmount("1234567", 6)).toBe("1.234567");
-    expect(formatTokenIdentity(payload.destination.token, payload.destination.symbol, null)).toBe(
-      "USDC · base units · 0x0000000000000000000000000000000000000001",
-    );
-  });
-
   it("reads indexer cursors for freshness without conflating metrics failure with empty history", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
     const payload = {
@@ -128,6 +105,16 @@ describe("Real indexer client", () => {
 });
 
 describe("transfer evidence", () => {
+  it("renders CCTP and ITS exact amounts and keeps unknown precision in base units", () => {
+    expect(formatTokenAmount("1234567", 6)).toBe("1.234567");
+    expect(formatTokenAmount("1234567", 7)).toBe("0.1234567");
+    for (const decimals of [undefined, null, -1, 1.5, NaN, 256]) {
+      expect(formatTokenAmount("1234567", decimals)).toBe("1234567 base units");
+    }
+    expect(formatTokenIdentity("0x1111", "USDC", 6, "native")).not.toEqual(
+      formatTokenIdentity("0x2222", "USDC", 7, "ITS"),
+    );
+  });
   const transfer = (overrides: Partial<FormattedTransfer> = {}): FormattedTransfer => ({
     id: "transfer-1",
     stage: "delivering",
@@ -163,6 +150,28 @@ describe("transfer evidence", () => {
     },
     claim: null,
     ...overrides,
+  });
+
+  it("preserves real destination metadata through the indexer response", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const record = transfer({
+      destination: {
+        chain: "sepolia",
+        recipient: "0x" + "a".repeat(40),
+        token: "0x" + "1".repeat(40),
+        symbol: "USDC",
+        representation: "native",
+        decimals: 6,
+        amount: "1234567",
+        delivered: true,
+        txHash: "0x" + "b".repeat(64),
+        block: "1",
+        deliveredAt: "2026-11-19T12:00:00.000Z",
+      },
+    });
+    const response = { transfers: [record], count: 1, limit: 20, offset: 0 };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(response))));
+    expect((await fetchTransfers()).transfers[0]?.destination).toEqual(record.destination);
   });
 
   it("keeps provider execution as a candidate until a destination transaction exists", () => {
