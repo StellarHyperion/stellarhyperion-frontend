@@ -179,10 +179,10 @@ it.skipIf(process.env.HYPERION_LIVE_ROUTES !== "1")(
           save();
           try {
             const bridgeSign: WalletSigner = async (value) => {
-              const result = await sign(value);
-              const hash = TransactionBuilder.fromXdr(result.signedTxXdr, TESTNET.networkPassphrase)
-                .hash()
-                .toString("hex");
+              const result = await sign(value, { networkPassphrase: TESTNET.networkPassphrase });
+              const hash = Buffer.from(
+                TransactionBuilder.fromXdr(result.signedTxXdr, TESTNET.networkPassphrase).hash(),
+              ).toString("hex");
               assertSignedSource(result.signedTxXdr, sender, hash);
               proof.sourceEnvelope = result.signedTxXdr;
               proof.sourceHash = hash;

@@ -100,7 +100,7 @@ export function assertSignedSource(envelope: string, sender: string, hash: strin
   if (
     "innerTransaction" in tx ||
     tx.source !== sender ||
-    tx.hash().toString("hex") !== hash ||
+    Buffer.from(tx.hash()).toString("hex") !== hash ||
     !tx.signatures.some((signature) =>
       Keypair.fromPublicKey(sender).verify(tx.hash(), signature.signature),
     )

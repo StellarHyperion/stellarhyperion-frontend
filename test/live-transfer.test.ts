@@ -115,9 +115,9 @@ it.skipIf(!enabled)(
               ["tx", "sign", "--sign-with-key", identity, "--network", "testnet"],
               { input: value, encoding: "utf8" },
             ).trim();
-            const hash = TransactionBuilder.fromXdr(signedTxXdr, TESTNET.networkPassphrase)
-              .hash()
-              .toString("hex");
+            const hash = Buffer.from(
+              TransactionBuilder.fromXdr(signedTxXdr, TESTNET.networkPassphrase).hash(),
+            ).toString("hex");
             assertSignedSource(signedTxXdr, sender, hash);
             proof.sourceEnvelope = signedTxXdr;
             proof.sourceHash = hash;

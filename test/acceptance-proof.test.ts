@@ -173,7 +173,7 @@ describe("Independent public acceptance evidence", () => {
       )
       .setTimeout(60)
       .build();
-    const hash = tx.hash().toString("hex");
+    const hash = Buffer.from(tx.hash()).toString("hex");
     expect(() => {
       assertSignedSource(tx.toXdr(), signer.publicKey(), hash);
     }).toThrow("signature");
