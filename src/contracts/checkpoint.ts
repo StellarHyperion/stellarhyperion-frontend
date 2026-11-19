@@ -127,6 +127,11 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       source?: unknown;
     };
     if (
+      typeof value.router !== "string" ||
+      typeof value.account !== "string" ||
+      typeof value.recipient !== "string" ||
+      typeof value.bridgeAmount !== "string" ||
+      typeof value.txHash !== "string" ||
       value.router !== TESTNET.router ||
       (value.token !== undefined && value.token !== TESTNET.token) ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
@@ -142,8 +147,12 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     const source = value.source === undefined ? undefined : checkpointSource(value.source);
     destinationFor(value.destination);
     return {
-      ...value,
+      router: value.router,
       token: TESTNET.token,
+      account: value.account,
+      recipient: value.recipient,
+      bridgeAmount: value.bridgeAmount,
+      txHash: value.txHash,
       destination: destinationFor(value.destination).key,
       route: value.route,
       stage: value.stage,
