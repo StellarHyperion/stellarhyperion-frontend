@@ -141,9 +141,10 @@ export function Header({ network }: { readonly network: string }): ReactElement 
               Activity
             </Link>
             {pendingCheckpoint && (
-              <a
+              <Link
                 className={styles.navLink}
                 href="/#pending-recovery"
+                scroll={false}
                 onClick={(event) => {
                   if (
                     event.button === 0 &&
@@ -157,7 +158,7 @@ export function Header({ network }: { readonly network: string }): ReactElement 
                 }}
               >
                 Recovery
-              </a>
+              </Link>
             )}
           </nav>
         </div>
