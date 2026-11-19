@@ -120,6 +120,36 @@ export function cursorFreshness(cursor: IndexerCursor | null, now = Date.now()):
   return "stale";
 }
 
+export interface FormattedClaim {
+  readonly id: string;
+  readonly chain: string;
+  readonly claimId: string;
+  readonly recipient: string;
+  readonly token: string;
+  readonly amount: string;
+  readonly route: number;
+  readonly sourceChain: string;
+  readonly sourceNonce: string;
+  readonly settled: boolean;
+  readonly createdAt: string;
+  readonly observedAt: string;
+}
+
+export interface ClaimsResponse {
+  readonly claims: readonly FormattedClaim[];
+  readonly limit: number;
+  readonly offset: number;
+  readonly count: number;
+}
+
+export interface ClaimsQuery {
+  readonly chain?: string;
+  readonly recipient?: string;
+  readonly settled?: string;
+  readonly limit?: string;
+  readonly offset?: string;
+}
+
 export interface TransfersQuery {
   readonly originChain?: string;
   readonly destinationChain?: string;
@@ -188,6 +218,9 @@ function params(query?: object): string {
 }
 export async function fetchTransfers(query?: TransfersQuery): Promise<TransfersResponse> {
   return await request<TransfersResponse>(`/v1/transfers${params(query)}`);
+}
+export async function fetchClaims(query?: ClaimsQuery): Promise<ClaimsResponse> {
+  return await request<ClaimsResponse>(`/v1/claims${params(query)}`);
 }
 
 export async function fetchIndexerMetrics(): Promise<IndexerMetrics> {
