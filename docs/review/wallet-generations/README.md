@@ -9,3 +9,5 @@ Six scenarios passed: delayed silent restoration, picker cancellation followed b
 Deterministic generation, SDK, signature and submission regressions also run through `npm run check`. Live signing suites remain opt-in.
 
 The current Next production build also passed explicit wallet selection, Escape cancellation with immediate reconnect availability, saved-preference clearing without checkpoint loss, generated signed-hash retention after reload and mobile overflow checks. RPC/Horizon outage responses were isolated fixtures. No automatic network submission occurred. The additional picker captures come from that production build.
+
+The final Node 22 pipeline passed all seven stages with 272 deterministic tests and two opt-in live suites skipped. Chromium 158 refreshed the production picker at desktop and mobile widths: explicit opening, Escape cancellation and unlock, saved-preference clearing and signed-hash reload all passed without errors or automatic submission. The current picker captures were visually inspected.
