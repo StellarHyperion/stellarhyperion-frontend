@@ -58,7 +58,7 @@ describe("pending transfer checkpoints", () => {
   });
 
   it("retains a legacy conversion hash without guessing its original source asset", () => {
-    const legacy = { ...checkpoint, stage: "conversion" as const };
+    const legacy = { ...checkpoint, stage: "conversion" as const, source: undefined };
     const parsed = parseCheckpoint(JSON.stringify(legacy));
     expect(parsed).toEqual(legacy);
     expect(checkpointForAsset(parsed, XLM)).toBeNull();
