@@ -515,14 +515,20 @@ describe("Real Stellar transaction encoding", () => {
             ? undefined
             : {
                 getItem: () => null,
-                setItem: () => {},
-                removeItem: () => {},
+                setItem: () => {
+                  /* Simulate a browser discarding writes. */
+                },
+                removeItem: () => {
+                  /* No value was retained. */
+                },
               },
         );
-        expect(() => saveCheckpoint(checkpoint)).toThrow("Browser storage is unavailable");
-        expect(() => saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) })).toThrow(
-          "previous transaction remains pending",
-        );
+        expect(() => {
+          saveCheckpoint(checkpoint);
+        }).toThrow("Browser storage is unavailable");
+        expect(() => {
+          saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) });
+        }).toThrow("previous transaction remains pending");
         vi.unstubAllGlobals();
         saveCheckpoint(null);
       },
