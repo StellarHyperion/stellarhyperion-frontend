@@ -1,32 +1,54 @@
-export type FeeProvider = "axelar" | "circle";
-
-function drift(provider: FeeProvider, version: string, reason: string): null {
-  console.warn("[fee-schema-drift]", { provider, version, reason });
-  return null;
+export interface ProviderFeeQuote {
+  readonly amount: string;
+  readonly estimatedAmount: string;
+  readonly token: "XLM" | "USDC";
+  readonly decimals: 7;
+  readonly destination: string;
+  readonly finality?: number;
 }
 
-export function parseAxelarFee(value: unknown): bigint | null {
-  const raw = typeof value === "string" ? value.trim().replace(/^"(\d+)"$/, "$1") : null;
-  if (!raw || !/^\d+$/.test(raw) || BigInt(raw) <= 0n)
-    return drift("axelar", "estimateITSFee", "expected positive integer fee");
-  return BigInt(raw);
-}
+const MAX_FEE = (1n << 127n) - 1n;
 
-export function parseCircleFee(value: unknown): bigint | null {
-  if (!Array.isArray(value)) return drift("circle", "v2", "expected fee array");
-  const entry = value.find((candidate) => {
-    if (!candidate || typeof candidate !== "object") return false;
-    const item = candidate as Record<string, unknown>;
-    const forward = item.forwardFee;
-    return (
-      item.finalityThreshold === 2000 &&
-      item.minimumFee === 0 &&
-      !!forward &&
-      typeof forward === "object" &&
-      Number.isSafeInteger((forward as Record<string, unknown>).med) &&
-      ((forward as Record<string, unknown>).med as number) > 0
-    );
-  }) as { forwardFee: { med: number } } | undefined;
-  if (!entry) return drift("circle", "v2", "no finalized forwarding estimate");
-  return BigInt(entry.forwardFee.med);
+export function validateProviderFee(
+  value: unknown,
+  expected: {
+    token: ProviderFeeQuote["token"];
+    destination: string;
+  },
+): ProviderFeeQuote {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid provider fee response.");
+  const entry = value as Record<string, unknown>;
+  const amount = entry.amount;
+  const estimatedAmount = entry.estimatedAmount;
+  if (
+    typeof amount !== "string" ||
+    typeof estimatedAmount !== "string" ||
+    amount.length > 39 ||
+    estimatedAmount.length > 39 ||
+    !/^\d+$/.test(amount) ||
+    !/^\d+$/.test(estimatedAmount) ||
+    BigInt(amount) <= 0n ||
+    BigInt(estimatedAmount) <= 0n ||
+    BigInt(estimatedAmount) > BigInt(amount) ||
+    BigInt(amount) > MAX_FEE ||
+    entry.token !== expected.token ||
+    entry.decimals !== 7 ||
+    entry.destination !== expected.destination
+  )
+    throw new Error("Provider fee response failed schema validation.");
+  const finality = entry.finality;
+  if (
+    (expected.token === "USDC" && finality !== 2000) ||
+    (expected.token === "XLM" && finality !== undefined)
+  )
+    throw new Error("Provider fee finality is invalid.");
+  return {
+    amount,
+    estimatedAmount,
+    token: expected.token,
+    decimals: 7,
+    destination: expected.destination,
+    ...(typeof finality === "number" ? { finality } : {}),
+  };
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { relayBudget } from "../../../lib/relay-budget";
-import { parseAxelarFee } from "../../../lib/fee-schema";
+import { validateProviderFee } from "../../../lib/fee-schema";
 // The fee API expects a method in the JSON body. Its /gmp/estimateITSFee path returns help text.
 export async function GET() {
   try {
@@ -16,17 +16,20 @@ export async function GET() {
       signal: AbortSignal.timeout(15_000),
       cache: "no-store",
     });
-    const value = parseAxelarFee(await response.text());
-    if (!response.ok || value === null) throw new Error("Invalid gas estimate");
-    return NextResponse.json(
+    const value = (await response.text()).trim().replace(/^"(\d+)"$/, "$1");
+    if (!response.ok || value.length > 39 || !/^\d+$/.test(value) || BigInt(value) <= 0n)
+      throw new Error("Invalid gas estimate");
+    const quote = validateProviderFee(
       {
-        amount: String(relayBudget(value)),
-        estimatedAmount: String(value),
+        amount: String(relayBudget(BigInt(value))),
+        estimatedAmount: value,
         token: "XLM",
         decimals: 7,
+        destination: "ethereum-sepolia",
       },
-      { headers: { "Cache-Control": "no-store" } },
+      { token: "XLM", destination: "ethereum-sepolia" },
     );
+    return NextResponse.json(quote, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return NextResponse.json(
       { error: "Relay gas pricing is unavailable. No transfer can be prepared." },
