@@ -52,7 +52,12 @@ export function withTimeout<T>(
       if (settled) return;
       settled = true;
       cleanup();
-      reject(signal?.reason);
+      const reason: unknown = signal?.reason;
+      reject(
+        reason instanceof Error
+          ? reason
+          : new Error(typeof reason === "string" ? reason : "Wallet request cancelled."),
+      );
     };
     const timer = setTimeout(() => {
       settled = true;

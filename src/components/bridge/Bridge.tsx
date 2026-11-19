@@ -1525,7 +1525,9 @@ export function Bridge() {
                       }
                     />
                   ) : (
-                    <span>Address is shown after the ITS lane is independently verified.</span>
+                    <span className={styles.identityNotice}>
+                      Address is shown after the ITS lane is independently verified.
+                    </span>
                   )}
                 </dd>
               </div>
