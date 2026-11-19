@@ -303,7 +303,7 @@ export function Bridge() {
       const parsed = parseUnits(amount.trim(), 7);
       if (parsed <= 0n || parsed > (1n << 63n) - 1n)
         throw new Error("Enter a positive amount within Stellar's asset limit.");
-      validateRecipient(recipient);
+      validateRecipient(recipient, destination);
       valid = true;
     } catch (cause) {
       inputError = errorMessage(cause);
@@ -375,7 +375,7 @@ export function Bridge() {
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
       router: TESTNET.router,
       account: sender,
-      recipient: validateRecipient(recipient),
+      recipient: validateRecipient(recipient, destination),
       destination,
       route,
       bridgeAmount: String(quote.bridge.requestedAmount),
@@ -772,7 +772,7 @@ export function Bridge() {
           <p className={styles.reviewNote}>
             From Stellar Testnet to {chain.name} via {provider(route)}.
           </p>
-          <p className={styles.address}>Recipient: {validateRecipient(recipient)}</p>
+          <p className={styles.address}>Recipient: {validateRecipient(recipient, destination)}</p>
           {source.issuer && source.id !== USDC.id && (
             <p className={styles.address}>Source issuer: {source.issuer}</p>
           )}

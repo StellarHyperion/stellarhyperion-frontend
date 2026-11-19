@@ -30,6 +30,10 @@ describe("Real Stellar transaction encoding", () => {
   });
   it("requires a real nonzero EVM destination", () => {
     expect(validateRecipient("0x70997970C51812dc3A010C7d01b50e0d17dc79C8")).toMatch(/^0x/);
+    expect(validateRecipient(" 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 ", "sepolia")).toBe(
+      "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    );
+    expect(() => validateRecipient("0x123", "base-sepolia")).toThrow("Base Sepolia");
     for (const value of ["", "0x123", "0x" + "0".repeat(40), TESTNET.reader])
       expect(() => validateRecipient(value)).toThrow();
   });
