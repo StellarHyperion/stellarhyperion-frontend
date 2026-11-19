@@ -12,6 +12,8 @@ import {
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
 import {
+  classifySubmissionFailure,
+  SubmissionFailure,
   quoteFreshness,
   quoteBreakdown,
   type LiveQuote,
@@ -83,6 +85,13 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("classifies bounded pre-broadcast failures without attaching a fake hash", () => {
+    const failure = classifySubmissionFailure("approval", new Error("declined\nsecret details"));
+    expect(failure).toBeInstanceOf(SubmissionFailure);
+    expect(failure.stage).toBe("approval");
+    expect(failure.message).toBe("declined");
+    expect(failure.txHash).toBeUndefined();
+  });
   it("labels provider observations by freshness without implying delivery", () => {
     const observedAt = "2026-11-18T20:00:00.000Z";
     expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:29.000Z"))).toBe("current");
@@ -184,6 +193,45 @@ describe("Signed Stellar submission failure boundaries", () => {
     );
   });
 
+  it("classifies simulation transport failure without wallet approval or broadcast", async () => {
+    const { simulation, send } = setup();
+    simulation.mockReset().mockRejectedValue(new Error("Provider unavailable"));
+    const approve = vi.fn();
+    await expect(
+      submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), approve),
+    ).rejects.toMatchObject({ stage: "simulation", txHash: undefined });
+    expect(approve).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("blocks broadcast when required checkpoint persistence fails", async () => {
+    const { send } = setup();
+    const progress = (phase: string) => {
+      if (phase === "submitting") throw new Error("Recovery storage is unavailable");
+    };
+    await expect(
+      submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), sign, progress),
+    ).rejects.toMatchObject({ stage: "checkpoint", txHash: undefined });
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("retains the actual signed hash and broadcast stage for an uncertain network send", async () => {
+    const { send } = setup();
+    send.mockRejectedValueOnce(new Error("Provider timed out"));
+    const result = await submitOperation(
+      TESTNET.reader,
+      new Contract(TESTNET.router).call("noop"),
+      sign,
+    );
+    expect(result.status).toBe("pending");
+    expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.failure).toMatchObject({ stage: "broadcast", txHash: result.txHash });
+  });
+  it("keeps classification bounded and strips hashes from pre-broadcast stages", () => {
+    expect(
+      classifySubmissionFailure("build", new Error("x".repeat(1000)), "a".repeat(64)),
+    ).toMatchObject({ stage: "build", message: "x".repeat(400), txHash: undefined });
+    expect(classifySubmissionFailure("broadcast", "timeout", "fake").txHash).toBeUndefined();
+  });
+
   it("never asks the wallet or submits when simulation fails", async () => {
     const { simulation, send } = setup();
     simulation.mockResolvedValueOnce({
@@ -229,7 +277,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       return Promise.reject(new Error("timeout"));
     });
     const result = await submitSettleClaim(key.publicKey(), 1n, sign);
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
   });
   it("reports a known network rejection instead of source confirmation", async () => {
@@ -361,7 +413,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       undefined,
       sim,
     );
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(wallet).toHaveBeenCalledTimes(1);
     expect(submittedXdr).toBe(sim.envelopeXdr);
     expect(send).toHaveBeenCalledTimes(1);
