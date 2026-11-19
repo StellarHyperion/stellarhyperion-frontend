@@ -23,8 +23,7 @@ export async function GET(request: Request) {
     if (!response.ok || !Array.isArray(body) || body.length > 32)
       throw new Error("Invalid Circle fee response.");
     const fee = selectFinalizedCctpFee(body);
-    if (fee === null)
-      throw new Error("No unambiguous finalized forwarding estimate.");
+    if (fee === null) throw new Error("No unambiguous finalized forwarding estimate.");
     const quote = validateProviderFee(
       {
         amount: String(relayBudget(fee.amount) * 10n),
