@@ -12,8 +12,9 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SELF = "scripts/house-rules.mjs";
 
 const SKIP_DIRS = new Set([".git", ".next", ".vercel", "node_modules", "out", "coverage"]);
@@ -100,7 +101,7 @@ const tokenHexes = new Set(
 for (const file of files) {
   if (file === "package-lock.json") continue;
   const lines = readFileSync(join(ROOT, file), "utf8").split("\n");
-  const isSelf = file === SELF;
+  const isSelf = file.split(sep).join("/") === SELF;
   const isTokenLayer = TOKEN_LAYER.has(file);
   const isStyle = file.endsWith(".css");
   const isComponent = file.endsWith(".tsx") || file.endsWith(".ts") || file.endsWith(".svg");

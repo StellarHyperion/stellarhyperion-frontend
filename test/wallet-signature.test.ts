@@ -7,7 +7,7 @@ import {
   Operation,
   TransactionBuilder,
 } from "@stellar/stellar-sdk";
-import { verifyWalletSignature } from "../src/wallets/stellar/signature";
+import { assertWalletApproval, verifyWalletSignature } from "../src/wallets/stellar/signature";
 
 const signer = Keypair.random();
 function transaction(amount = "1", networkPassphrase = Networks.TESTNET) {
@@ -27,6 +27,52 @@ function transaction(amount = "1", networkPassphrase = Networks.TESTNET) {
 }
 
 describe("Wallet signature verification", () => {
+  it("accepts provenance for the exact connected account and Testnet", () => {
+    expect(() => {
+      assertWalletApproval(
+        {
+          account: signer.publicKey(),
+          network: Networks.TESTNET,
+          operation: "bridge",
+        },
+        signer.publicKey(),
+      );
+    }).not.toThrow();
+  });
+  it("rejects provenance when the account or network changed", () => {
+    expect(() => {
+      assertWalletApproval(
+        {
+          account: Keypair.random().publicKey(),
+          network: Networks.TESTNET,
+          operation: "conversion",
+        },
+        signer.publicKey(),
+      );
+    }).toThrow("account changed");
+    expect(() => {
+      assertWalletApproval(
+        {
+          account: signer.publicKey(),
+          network: Networks.PUBLIC,
+          operation: "claim-settlement",
+        },
+        signer.publicKey(),
+      );
+    }).toThrow("different Stellar network");
+  });
+  it("rejects an unsupported approval operation", () => {
+    expect(() => {
+      assertWalletApproval(
+        {
+          account: signer.publicKey(),
+          network: Networks.TESTNET,
+          operation: "unexpected" as never,
+        },
+        signer.publicKey(),
+      );
+    }).toThrow("unsupported");
+  });
   it("accepts the actual connected account's signature on the exact Testnet transaction", () => {
     const tx = transaction();
     const original = tx.toXdr();
