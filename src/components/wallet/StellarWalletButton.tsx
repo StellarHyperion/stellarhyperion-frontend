@@ -138,7 +138,7 @@ export function StellarWalletButton() {
             <>
               <p role="status" className={styles.addressLabel}>
                 Waiting on your wallet to approve the request. If it closed, was removed, or stopped
-                responding, cancel and try again.
+                responding, stop waiting, close the wallet prompt and review before trying again.
               </p>
               <button
                 type="button"
@@ -147,7 +147,7 @@ export function StellarWalletButton() {
                   cancelSignature();
                 }}
               >
-                cancel signature request
+                stop waiting for signature
               </button>
             </>
           )}

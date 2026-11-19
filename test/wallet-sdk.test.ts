@@ -63,6 +63,81 @@ beforeEach(() => {
   api.lobstr.getPublicKey.mockResolvedValue(signer.publicKey());
 });
 describe("Direct Stellar wallet adapters", () => {
+  it("releases signing ownership when an adapter throws before returning a promise", async () => {
+    const coordinator = createSigningCoordinator();
+    await expect(
+      coordinator.run({ operation: "bridge", account: signer.publicKey() }, () => {
+        throw new Error("Extension context invalidated.");
+      }),
+    ).rejects.toThrow("Extension context invalidated");
+    expect(coordinator.pending).toBeNull();
+    await expect(
+      coordinator.run({ operation: "bridge", account: signer.publicKey() }, () =>
+        Promise.resolve("available"),
+      ),
+    ).resolves.toBe("available");
+  });
+
+  it("does not open an adapter request when disconnected before signing starts", async () => {
+    const coordinator = createSigningCoordinator();
+    const action = vi.fn(() => Promise.resolve("unused"));
+    const outstanding = coordinator.run(
+      { operation: "transaction", account: signer.publicKey() },
+      action,
+    );
+    coordinator.abandon(new Error("Disconnected"));
+    await expect(outstanding).rejects.toThrow("Disconnected");
+    expect(action).not.toHaveBeenCalled();
+    expect(coordinator.pending).toBeNull();
+  });
+
+  it("prevents a late account preflight from opening a cancelled signature prompt", async () => {
+    let finishPreflight!: (value: { address: string }) => void;
+    api.freighter.getAddress.mockReturnValue(
+      new Promise((resolve) => {
+        finishPreflight = resolve;
+      }),
+    );
+    const preflightStarted = vi.waitFor(() => expect(api.freighter.getAddress).toHaveBeenCalled());
+    const coordinator = createSigningCoordinator();
+    const outstanding = coordinator.run(
+      { operation: "transaction", account: signer.publicKey() },
+      (signal) =>
+        walletSign("freighter", envelope().original, signer.publicKey(), undefined, signal),
+    );
+    await preflightStarted;
+    coordinator.abandon(new Error("Disconnected during preflight"));
+    await expect(outstanding).rejects.toThrow("Disconnected during preflight");
+    finishPreflight({ address: signer.publicKey() });
+    await vi.waitFor(() => expect(api.freighter.getNetworkDetails).toHaveBeenCalled());
+    expect(api.freighter.signTransaction).not.toHaveBeenCalled();
+    expect(coordinator.pending).toBeNull();
+  });
+
+  it("discards a cancelled signature while a new request owns the signing controls", async () => {
+    let finishOld!: (value: string) => void;
+    let finishNew!: (value: string) => void;
+    const coordinator = createSigningCoordinator();
+    const first = coordinator.run(
+      { operation: "conversion", account: signer.publicKey() },
+      () => new Promise<string>((resolve) => (finishOld = resolve)),
+    );
+    await Promise.resolve();
+    coordinator.abandon(new Error("Stopped waiting"));
+    await expect(first).rejects.toThrow("Stopped waiting");
+    const second = coordinator.run(
+      { operation: "bridge", account: signer.publicKey() },
+      () => new Promise<string>((resolve) => (finishNew = resolve)),
+    );
+    await Promise.resolve();
+    finishOld("stale signature");
+    await Promise.resolve();
+    expect(coordinator.pending?.operation).toBe("bridge");
+    finishNew("new signature");
+    await expect(second).resolves.toBe("new signature");
+    expect(coordinator.pending).toBeNull();
+  });
+
   it("serializes signing requests and releases ownership after cancellation", async () => {
     let cancel!: (error: Error) => void;
     const coordinator = createSigningCoordinator();
@@ -225,7 +300,7 @@ describe("An outstanding approval resolves to an explicit failure instead of han
     api.freighter.signTransaction.mockReturnValue(new Promise(() => undefined));
     const pending = walletSign("freighter", envelope().original, signer.publicKey());
     const assertion = expect(pending).rejects.toThrow(
-      "Freighter closed or did not respond to the signature request",
+      "The approval outcome is unknown. Close the wallet prompt and review before trying again. Nothing is automatically submitted.",
     );
     await vi.advanceTimersByTimeAsync(WALLET_SIGN_TIMEOUT_MS);
     await assertion;

@@ -151,7 +151,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     // A pending approval must never be left to resolve against a wallet we've already walked
     // away from: settle it to an explicit failure instead of letting it hang or complete silently.
     coordinator.current.abandon(
-      new Error("Wallet disconnected before the signature completed. Reconnect and try again."),
+      new Error(
+        "Wallet disconnected before the signature completed. Close any old wallet prompt, reconnect and review the transfer.",
+      ),
     );
     setAddress(null);
     setWalletId(null);
@@ -160,7 +162,11 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   }, [closePicker]);
 
   const cancelSignature = useCallback(() => {
-    coordinator.current.abandon(new Error("Signature cancelled. Try again when you are ready."));
+    coordinator.current.abandon(
+      new Error(
+        "Stopped waiting for this signature. Close the wallet prompt and review before trying again.",
+      ),
+    );
   }, []);
 
   const signTransaction = useCallback(
@@ -187,7 +193,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
           operation: opts?.approval?.operation ?? opts?.operation ?? "transaction",
           account: address,
         },
-        () => walletSign(walletId, transaction, address, opts?.approval),
+        (signal) => walletSign(walletId, transaction, address, opts?.approval, signal),
       );
     },
     [address, walletId],

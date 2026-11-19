@@ -66,19 +66,28 @@ export function createSigningCoordinator(
     get pending() {
       return pending;
     },
-    async run<T>(request: PendingSigningRequest, action: () => Promise<T>): Promise<T> {
-      if (pending) {
+    async run<T>(
+      request: PendingSigningRequest,
+      action: (signal: AbortSignal) => Promise<T>,
+    ): Promise<T> {
+      if (pending)
         throw new Error(
           `A ${pending.operation} signing request is already waiting for wallet approval.`,
         );
-      }
+      const controller = new AbortController();
       pending = request;
       onChange?.(pending);
-      const actionPromise = action();
       const cancellation = new Promise<never>((_resolve, reject) => {
-        abandonCurrent = reject;
+        abandonCurrent = (reason) => {
+          controller.abort(reason);
+          reject(reason);
+        };
       });
       try {
+        const actionPromise = Promise.resolve().then(() => {
+          controller.signal.throwIfAborted();
+          return action(controller.signal);
+        });
         return await Promise.race([actionPromise, cancellation]);
       } finally {
         abandonCurrent = null;
@@ -86,7 +95,6 @@ export function createSigningCoordinator(
           pending = null;
           onChange?.(null);
         }
-        actionPromise.catch(() => undefined);
       }
     },
     /** Force-settles the current outstanding request (if any) to an explicit rejection. */
@@ -106,10 +114,21 @@ async function account(value: string): Promise<string> {
 // Races a wallet SDK call against a bound. If the timeout wins, the underlying promise's eventual
 // outcome is still observed (so it cannot reject unhandled) but is otherwise discarded: a late
 // response is never treated as success and never resubmitted.
-function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  timeoutMessage: string,
+  signing = false,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(timeoutMessage));
+      reject(
+        new Error(
+          signing
+            ? `${timeoutMessage} The approval outcome is unknown. Close the wallet prompt and review before trying again. Nothing is automatically submitted.`
+            : timeoutMessage,
+        ),
+      );
     }, ms);
     promise.then(
       (value) => {
@@ -194,7 +213,9 @@ export async function walletSign(
   xdr: string,
   address: string,
   approval?: WalletApprovalProvenance,
+  signal?: AbortSignal,
 ) {
+  signal?.throwIfAborted();
   if (approval) assertWalletApproval(approval, address);
   if (approval && (id === "albedo" || id === "xbull")) {
     const actual = await walletAddress(id, false);
@@ -215,6 +236,7 @@ export async function walletSign(
       if (network.error) throwWalletError(network.error);
       if (network.networkPassphrase !== TESTNET.networkPassphrase)
         throw new Error("Switch Freighter to Stellar Testnet before signing.");
+      signal?.throwIfAborted();
       const result = await withTimeout(
         api.signTransaction(xdr, {
           networkPassphrase: TESTNET.networkPassphrase,
@@ -222,14 +244,17 @@ export async function walletSign(
         }),
         WALLET_SIGN_TIMEOUT_MS,
         "Freighter closed or did not respond to the signature request. Reopen Freighter and try again.",
+        true,
       );
       if (result.error) throwWalletError(result.error);
       signed = result.signedTxXdr;
       break;
     }
     case "albedo": {
+      const client = await albedoClient();
+      signal?.throwIfAborted();
       const result = await withTimeout(
-        (await albedoClient()).tx({
+        client.tx({
           xdr,
           pubkey: address,
           network: "testnet",
@@ -237,6 +262,7 @@ export async function walletSign(
         }),
         WALLET_SIGN_TIMEOUT_MS,
         "Albedo closed or did not respond to the signature request. Reopen the popup and try again.",
+        true,
       );
       signed = result.signed_envelope_xdr;
       break;
@@ -245,10 +271,12 @@ export async function walletSign(
       const { xBullWalletConnect } = await import("@creit.tech/xbull-wallet-connect");
       const bridge = new xBullWalletConnect();
       try {
+        signal?.throwIfAborted();
         signed = await withTimeout(
           bridge.sign({ xdr, publicKey: address, network: TESTNET.networkPassphrase }),
           WALLET_SIGN_TIMEOUT_MS,
           "xBull closed or did not respond to the signature request. Reopen the extension and try again.",
+          true,
         );
       } finally {
         bridge.closeConnections();
@@ -259,14 +287,18 @@ export async function walletSign(
       const api = await import("@lobstrco/signer-extension-api");
       if ((await walletAddress(id, false)) !== address)
         throw new Error("Your wallet account changed. Connect again.");
+      signal?.throwIfAborted();
       signed = await withTimeout(
         api.signTransaction(xdr),
         WALLET_SIGN_TIMEOUT_MS,
         "LOBSTR closed or did not respond to the signature request. Reopen the extension and try again.",
+        true,
       );
       break;
     }
   }
+  signal?.throwIfAborted();
   const { verifyWalletSignature } = await import("./signature");
+  signal?.throwIfAborted();
   return { signedTxXdr: verifyWalletSignature(xdr, signed, address) };
 }
