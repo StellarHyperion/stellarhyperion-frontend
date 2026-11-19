@@ -320,6 +320,22 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
   });
 }
 
+export async function requireRecoveredUsdc(
+  account: string,
+  amount: bigint,
+  signal?: AbortSignal,
+): Promise<void> {
+  const assets = await accountAssets(account, signal);
+  const usdc = assets.find((asset) => asset.id === USDC.id);
+  if (
+    amount <= 0n ||
+    usdc?.trustline !== "present" ||
+    usdc.available === undefined ||
+    parseUnits(usdc.available, 7) < amount
+  )
+    throw new Error("The confirmed conversion's USDC is not currently available in this wallet.");
+}
+
 export async function searchAssets(query: string, signal?: AbortSignal): Promise<SourceAsset[]> {
   const input = query.trim();
   if (!input) return [USDC, XLM];
