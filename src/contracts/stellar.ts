@@ -29,6 +29,7 @@ import {
   destinationFor,
   destinationDecimals,
   supportedLanes,
+  deploymentIdentityMismatch,
   type BridgeRoute,
   type DestinationKey,
   type SupportedLane,
@@ -629,6 +630,15 @@ export async function readLane(
   route: BridgeRoute = 1,
 ): Promise<LaneState> {
   const destination = destinationFor(destinationKey);
+  const deploymentMismatch = deploymentIdentityMismatch(TESTNET.router, TESTNET.token);
+  if (deploymentMismatch)
+    return {
+      available: false,
+      reason: deploymentMismatch,
+      feeBps: null,
+      ledger: 0,
+      adapter: null,
+    };
   if (!destination.routes.includes(route))
     return {
       available: false,
