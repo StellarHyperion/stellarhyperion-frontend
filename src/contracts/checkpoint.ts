@@ -7,6 +7,7 @@ export interface TransferCheckpoint {
   revision?: number;
   router: string;
   networkPassphrase?: string;
+  token?: string;
   account: string;
   recipient: string;
   destination: DestinationKey;
@@ -95,6 +96,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       revision?: number;
       router: string;
       networkPassphrase?: string;
+      token?: string;
       account: string;
       recipient: string;
       destination: string;
@@ -107,6 +109,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       (value.schemaVersion !== undefined && value.schemaVersion !== 1) ||
       value.router !== TESTNET.router ||
       (value.networkPassphrase !== undefined && typeof value.networkPassphrase !== "string") ||
+      (value.token !== undefined && value.token !== TESTNET.token) ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
       !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||
       /^0x0{40}$/.test(value.recipient) ||
@@ -122,6 +125,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     return {
       ...rest,
       ...(schemaVersion === undefined ? {} : { schemaVersion: 1 as const }),
+      token: TESTNET.token,
       destination: destinationFor(value.destination).key,
       route: value.route,
       stage: value.stage,
