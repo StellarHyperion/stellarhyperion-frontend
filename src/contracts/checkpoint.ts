@@ -227,6 +227,7 @@ export function saveCheckpoint(value: TransferCheckpoint | null, expected?: Tran
           networkPassphrase: TESTNET.networkPassphrase,
           revision: (existing?.revision ?? 0) + 1,
         });
+        // codeql[js/clear-text-storage-of-sensitive-data]: networkPassphrase here is the hardcoded, publicly documented Stellar testnet passphrase ("Test SDF Network ; September 2015"), not a credential or secret.
         localStorage.setItem(key, serialized);
         if (localStorage.getItem(key) !== serialized)
           throw new Error("Recovery checkpoint did not persist.");
