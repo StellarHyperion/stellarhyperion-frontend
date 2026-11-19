@@ -19,8 +19,11 @@ export async function GET(request: Request) {
         cache: "no-store",
       },
     );
-    const fee = selectFinalizedCctpFee(await response.json());
-    if (!response.ok || fee === null)
+    const body: unknown = await response.json();
+    if (!response.ok || !Array.isArray(body) || body.length > 32)
+      throw new Error("Invalid Circle fee response.");
+    const fee = selectFinalizedCctpFee(body);
+    if (fee === null)
       throw new Error("No unambiguous finalized forwarding estimate.");
     const quote = validateProviderFee(
       {
