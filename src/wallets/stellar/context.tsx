@@ -32,26 +32,19 @@ import {
   type WalletAvailabilityStatus,
 } from "./capabilities";
 
-const WALLET_KEY = "hyperion.stellar.walletId";
-function readSavedWallet(): string | null {
-  try {
-    return localStorage.getItem(WALLET_KEY);
-  } catch {
-    return null;
-  }
-}
-function saveWallet(id: string | null) {
-  try {
-    if (id) localStorage.setItem(WALLET_KEY, id);
-    else localStorage.removeItem(WALLET_KEY);
-  } catch {
-    /* Wallet access still works without browser storage. */
-  }
-}
+import {
+  isRecognizedWalletPreference,
+  readWalletPreference,
+  saveWalletPreference,
+} from "./preference";
+
 const Context = createContext<StellarWalletContextValue | null>(null);
 
 export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
+  const restorationAllowed = useRef(true);
+  const [rememberedWallet, setRememberedWallet] = useState<StellarWalletId | null>(null);
+  const [preferenceError, setPreferenceError] = useState<string | null>(null);
   const [walletId, setWalletId] = useState<StellarWalletId | null>(null);
   const [isConnecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,11 +61,6 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       });
     return () => {
       active = false;
-      attempt.current++;
-      connectionGeneration.current.advance();
-      coordinator.current.abandon(new Error("Wallet connection closed before signing completed."));
-      pending.current?.(null);
-      pending.current = null;
     };
   }, [pickerOpen]);
   const [authorizing, setAuthorizing] = useState<StellarWalletId | null>(null);
@@ -95,23 +83,41 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     const version = attempt.current;
-    const saved = readSavedWallet();
-    // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
-    if (isWalletId(saved) && saved === "freighter")
-      void connectionGeneration.current
-        .run(() => walletAddress(saved, false))
-        .then((value) => {
-          if (active && attempt.current === version) {
-            setAddress(value);
-            setWalletId(saved);
-            connectionGeneration.current.advance();
-          }
-        })
-        .catch(() => {
-          /* Explicit connection remains available. */
-        });
+    // Hydrate browser storage after mount; cleanup also covers strict-mode remounts.
+    queueMicrotask(() => {
+      if (!active) return;
+      const preference = readWalletPreference();
+      const saved = preference.id;
+      setRememberedWallet(isWalletId(saved) ? saved : null);
+      setPreferenceError(
+        preference.error ??
+          (!isRecognizedWalletPreference(saved)
+            ? "The saved wallet preference is not recognized. Clear it before connecting."
+            : null),
+      );
+      // Only Freighter offers a silent address lookup. Other wallets require a user gesture.
+      if (isWalletId(saved) && saved === "freighter")
+        void connectionGeneration.current
+          .run(() => walletAddress(saved, false))
+          .then((value) => {
+            if (active && restorationAllowed.current && attempt.current === version) {
+              setAddress(value);
+              setWalletId(saved);
+              connectionGeneration.current.advance();
+            }
+          })
+          .catch(() => {
+            /* Explicit connection remains available. */
+          });
+    });
+
     return () => {
       active = false;
+      attempt.current++;
+      connectionGeneration.current.advance();
+      coordinator.current.abandon(new Error("Wallet connection closed before signing completed."));
+      pending.current?.(null);
+      pending.current = null;
     };
   }, []);
 
@@ -152,7 +158,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       setAddress(value);
       setWalletId(id);
       connectionGeneration.current.advance();
-      saveWallet(id);
+      const storageError = saveWalletPreference(id);
+      setPreferenceError(storageError);
+      if (!storageError) setRememberedWallet(id);
       pending.current(value);
       pending.current = null;
       setPickerOpen(false);
@@ -177,7 +185,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     );
     setAddress(null);
     setWalletId(null);
-    saveWallet(null);
+    const storageError = saveWalletPreference(null);
+    setPreferenceError(storageError);
+    if (!storageError) setRememberedWallet(null);
     return Promise.resolve();
   }, [closePicker]);
 
@@ -187,6 +197,14 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         "Stopped waiting for this signature. Close the wallet prompt and review before trying again.",
       ),
     );
+  }, []);
+
+  const clearRememberedWallet = useCallback(() => {
+    // Clear only the preference. An explicit connection or signed checkpoint stays intact.
+    restorationAllowed.current = false;
+    const storageError = saveWalletPreference(null);
+    setPreferenceError(storageError);
+    if (!storageError) setRememberedWallet(null);
   }, []);
 
   const signTransaction = useCallback(
@@ -242,6 +260,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       isConnecting,
       isSigning: pendingSigningRequest !== null,
       error,
+      rememberedWallet,
+      preferenceError,
+      clearRememberedWallet,
       pendingSigningRequest,
       connect,
       disconnect,
@@ -253,6 +274,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       walletId,
       isConnecting,
       error,
+      rememberedWallet,
+      preferenceError,
+      clearRememberedWallet,
       pendingSigningRequest,
       connect,
       disconnect,

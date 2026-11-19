@@ -17,6 +17,9 @@ export interface StellarWalletContextValue {
   // can show the pending approval and offer an explicit way out if the wallet goes silent.
   isSigning: boolean;
   error: string | null;
+  rememberedWallet: string | null;
+  preferenceError: string | null;
+  clearRememberedWallet: () => void;
   pendingSigningRequest: PendingSigningRequest | null;
   connect: () => Promise<string | null>;
   disconnect: () => Promise<void>;

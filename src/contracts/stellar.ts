@@ -85,6 +85,7 @@ export interface TransactionResult {
   status: "confirmed" | "pending" | "failed";
   txHash: string;
   nonce?: string;
+  failure?: SubmissionFailure;
 }
 export interface LiveQuote {
   route: number;
@@ -380,6 +381,17 @@ function contractMethods(contract: string) {
 }
 
 export function errorMessage(error: unknown): string {
+  if (error instanceof SubmissionFailure) {
+    const label = {
+      build: "Transaction preparation",
+      simulation: "Transaction simulation",
+      approval: "Wallet approval",
+      checkpoint: "Recovery checkpoint",
+      broadcast: "Source broadcast",
+      confirmation: "Source confirmation",
+    }[error.stage];
+    return `${label}: ${error.message}`;
+  }
   const message = error instanceof Error ? error.message : String(error);
   const code = /Error\(Contract, #(\d+)\)/.exec(message)?.[1];
   if (code) {
@@ -387,6 +399,45 @@ export function errorMessage(error: unknown): string {
     if (name) return `${name}: ${describeError(name).summary}`;
   }
   return message.split("\n")[0] ?? "The network request failed. Please try again.";
+}
+
+export type SubmissionFailureStage =
+  "build" | "simulation" | "approval" | "checkpoint" | "broadcast" | "confirmation";
+
+export class SubmissionFailure extends Error {
+  constructor(
+    readonly stage: SubmissionFailureStage,
+    message: string,
+    readonly txHash?: string,
+  ) {
+    super(message);
+    this.name = "SubmissionFailure";
+  }
+}
+
+export function classifySubmissionFailure(
+  stage: SubmissionFailureStage,
+  error: unknown,
+  txHash?: string,
+): SubmissionFailure {
+  if (error instanceof SubmissionFailure) return error;
+  const message = errorMessage(error).slice(0, 400);
+  const publicHash =
+    (stage === "broadcast" || stage === "confirmation") && /^[0-9a-f]{64}$/i.test(txHash ?? "")
+      ? txHash
+      : undefined;
+  return new SubmissionFailure(stage, message, publicHash);
+}
+
+async function submissionStage<T>(
+  stage: SubmissionFailureStage,
+  action: () => T | Promise<T>,
+): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    throw classifySubmissionFailure(stage, error);
+  }
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -931,15 +982,20 @@ export async function simulateOperation(
     .addOperation(operation)
     .setTimeout(TRANSACTION_TIMEOUT_SECONDS)
     .build();
-  const simulation = await client.simulateTransaction(transaction);
+  const simulation = await submissionStage("simulation", () =>
+    client.simulateTransaction(transaction),
+  );
   if (!rpc.Api.isSimulationSuccess(simulation)) {
-    throw new Error(
+    throw classifySubmissionFailure(
+      "simulation",
       rpc.Api.isSimulationError(simulation)
         ? simulation.error
         : "Contract state needs restoration. Ask the operator to restore it.",
     );
   }
-  const prepared = rpc.assembleTransaction(transaction, simulation).build();
+  const prepared = await submissionStage("simulation", () =>
+    rpc.assembleTransaction(transaction, simulation).build(),
+  );
   const envelope = prepared.toEnvelope();
   if (envelope.type !== "envelopeTypeTx" || envelope.v1.tx.ext.type !== "sorobanData")
     throw new Error("The simulation did not assemble a Soroban envelope.");
@@ -977,42 +1033,47 @@ export async function submitOperation(
   simulated?: SimulatedOperation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
-  const client = server();
-  progress?.("preparing");
-  const network = await client.getNetwork();
-  if (network.passphrase !== TESTNET.networkPassphrase)
-    throw new Error("The RPC endpoint is not Stellar Testnet.");
-  let prepared: Transaction;
-  if (simulated) {
-    if (!validateEnvelopeOperation(operation, simulated.preparedTransaction)) {
-      throw new Error(
-        "Displayed operation does not correspond to the envelope sent to the wallet.",
-      );
+  const prepared = await submissionStage("build", async () => {
+    const client = server();
+    progress?.("preparing");
+    const network = await client.getNetwork();
+    if (network.passphrase !== TESTNET.networkPassphrase)
+      throw new Error("The RPC endpoint is not Stellar Testnet.");
+    let prepared: Transaction;
+    if (simulated) {
+      if (!validateEnvelopeOperation(operation, simulated.preparedTransaction)) {
+        throw new Error(
+          "Displayed operation does not correspond to the envelope sent to the wallet.",
+        );
+      }
+      prepared = simulated.preparedTransaction;
+      const envelope = prepared.toEnvelope();
+      if (
+        envelope.type !== "envelopeTypeTx" ||
+        envelope.v1.tx.ext.type !== "sorobanData" ||
+        simulated.totalFee !== BigInt(prepared.fee) ||
+        simulated.resourceFee !== envelope.v1.tx.ext.sorobanData.resourceFee ||
+        simulated.networkFee !== simulated.totalFee - simulated.resourceFee
+      )
+        throw new Error(
+          "The displayed simulation fees changed. Review a fresh simulation before signing.",
+        );
+      if (
+        prepared.source !== sender ||
+        prepared.toXdr() !== simulated.envelopeXdr ||
+        prepared.sequence !== simulated.sequence
+      )
+        throw new Error(
+          "The reviewed simulation changed. Review a fresh simulation before signing.",
+        );
+    } else {
+      const sim = await simulateOperation(sender, operation);
+      prepared = sim.preparedTransaction;
     }
-    prepared = simulated.preparedTransaction;
-    const envelope = prepared.toEnvelope();
-    if (
-      envelope.type !== "envelopeTypeTx" ||
-      envelope.v1.tx.ext.type !== "sorobanData" ||
-      simulated.totalFee !== BigInt(prepared.fee) ||
-      simulated.resourceFee !== envelope.v1.tx.ext.sorobanData.resourceFee ||
-      simulated.networkFee !== simulated.totalFee - simulated.resourceFee
-    )
-      throw new Error(
-        "The displayed simulation fees changed. Review a fresh simulation before signing.",
-      );
-    if (
-      prepared.source !== sender ||
-      prepared.toXdr() !== simulated.envelopeXdr ||
-      prepared.sequence !== simulated.sequence
-    )
-      throw new Error("The reviewed simulation changed. Review a fresh simulation before signing.");
-  } else {
-    const sim = await simulateOperation(sender, operation);
-    prepared = sim.preparedTransaction;
-  }
-  await verifyAccountSequence(client, sender, prepared.sequence);
-  progress?.("signing");
+    await verifyAccountSequence(client, sender, prepared.sequence);
+    progress?.("signing");
+    return prepared;
+  });
   return signAndSubmit(prepared, sign, progress, approval, reconcile, signal);
 }
 
@@ -1025,24 +1086,20 @@ export async function submitClassicOperations(
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
-  const client = server();
-  if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
-    throw new Error("The RPC endpoint is not Stellar Testnet.");
-  const account = await client.getAccount(sender);
-  const builder = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: TESTNET.networkPassphrase,
+  const prepared = await submissionStage("build", async () => {
+    const client = server();
+    if ((await client.getNetwork()).passphrase !== TESTNET.networkPassphrase)
+      throw new Error("The RPC endpoint is not Stellar Testnet.");
+    const account = await client.getAccount(sender);
+    const builder = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: TESTNET.networkPassphrase,
+    });
+    const preparedOperations = typeof operations === "function" ? await operations() : operations;
+    for (const operation of preparedOperations) builder.addOperation(operation);
+    return builder.setTimeout(TRANSACTION_TIMEOUT_SECONDS).build();
   });
-  const preparedOperations = typeof operations === "function" ? await operations() : operations;
-  for (const operation of preparedOperations) builder.addOperation(operation);
-  return signAndSubmit(
-    builder.setTimeout(TRANSACTION_TIMEOUT_SECONDS).build(),
-    sign,
-    progress,
-    approval,
-    reconcile,
-    signal,
-  );
+  return signAndSubmit(prepared, sign, progress, approval, reconcile, signal);
 }
 
 async function signAndSubmit(
@@ -1054,71 +1111,92 @@ async function signAndSubmit(
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
   const client = server();
-  progress?.("signing");
-  if (transactionDeadline(prepared).notYetValid)
-    throw new Error("The transaction envelope is not yet valid. Review a fresh transaction.");
-  if (transactionDeadline(prepared).expired)
-    throw new Error("The signed transaction envelope has expired. Review again.");
-  const signOptions = { networkPassphrase: TESTNET.networkPassphrase };
-  const signed = await sign(
-    prepared.toXdr(),
-    approval ? { ...signOptions, approval } : signOptions,
-  );
-  const signedTransaction = TransactionBuilder.fromXdr(
-    signed.signedTxXdr,
-    TESTNET.networkPassphrase,
-  );
-  if (toHex(signedTransaction.hash()) !== toHex(prepared.hash())) {
-    throw new Error("The wallet returned a different transaction. Nothing was submitted.");
-  }
-  if ("innerTransaction" in signedTransaction || signedTransaction.sequence !== prepared.sequence) {
-    throw new Error(
-      "The transaction sequence was modified. Stale sequence cannot be silently changed inside a reviewed signed envelope.",
-    );
-  }
-  if (transactionDeadline(signedTransaction).notYetValid)
-    throw new Error("The transaction envelope is not yet valid. Nothing was submitted.");
-  if (transactionDeadline(signedTransaction).expired)
-    throw new Error(
-      "The signed transaction envelope expired before broadcast. Nothing was submitted.",
-    );
-  const hash = toHex(prepared.hash()).slice(2);
-  if (reconcile) {
-    if (reconcile.isSuperseded?.()) {
-      throw new Error("The review was superseded before signing completed. Nothing was submitted.");
+  const signedTransaction = await submissionStage("approval", async () => {
+    progress?.("signing");
+    if (transactionDeadline(prepared).notYetValid)
+      throw new Error("The transaction envelope is not yet valid. Review a fresh transaction.");
+    if (transactionDeadline(prepared).expired)
+      throw new Error("The signed transaction envelope has expired. Review again.");
+    const signOptions = { networkPassphrase: TESTNET.networkPassphrase };
+    let signed: Awaited<ReturnType<WalletSigner>>;
+    try {
+      signed = await sign(prepared.toXdr(), approval ? { ...signOptions, approval } : signOptions);
+    } catch (error) {
+      throw classifySubmissionFailure("approval", error);
     }
-    const currentAccount = reconcile.getCurrentAccount
-      ? reconcile.getCurrentAccount()
-      : reconcile.expectedAccount;
-    if (currentAccount !== reconcile.expectedAccount) {
-      if (reconcile.onAccountSwitch) {
-        await reconcile.onAccountSwitch(hash, signedTransaction);
-      }
-      throw new Error(
-        "Wallet account switched. The transaction was preserved in recovery and not submitted.",
+    const signedTransaction = TransactionBuilder.fromXdr(
+      signed.signedTxXdr,
+      TESTNET.networkPassphrase,
+    );
+    if (toHex(signedTransaction.hash()) !== toHex(prepared.hash())) {
+      throw classifySubmissionFailure(
+        "approval",
+        "The wallet returned a different transaction. Nothing was submitted.",
       );
     }
-    if (reconcile.validate) {
-      await reconcile.validate(hash, signedTransaction);
+    if (
+      "innerTransaction" in signedTransaction ||
+      signedTransaction.sequence !== prepared.sequence
+    ) {
+      throw new Error(
+        "The transaction sequence was modified. Stale sequence cannot be silently changed inside a reviewed signed envelope.",
+      );
     }
-  }
-  progress?.("submitting", hash);
+    if (transactionDeadline(signedTransaction).notYetValid)
+      throw new Error("The transaction envelope is not yet valid. Nothing was submitted.");
+    if (transactionDeadline(signedTransaction).expired)
+      throw new Error(
+        "The signed transaction envelope expired before broadcast. Nothing was submitted.",
+      );
+    return signedTransaction;
+  });
+  const hash = toHex(prepared.hash()).slice(2);
+  await submissionStage("checkpoint", async () => {
+    if (reconcile) {
+      if (reconcile.isSuperseded?.()) {
+        throw new Error(
+          "The review was superseded before signing completed. Nothing was submitted.",
+        );
+      }
+      const currentAccount = reconcile.getCurrentAccount
+        ? reconcile.getCurrentAccount()
+        : reconcile.expectedAccount;
+      if (currentAccount !== reconcile.expectedAccount) {
+        if (reconcile.onAccountSwitch) {
+          await reconcile.onAccountSwitch(hash, signedTransaction);
+        }
+        throw new Error(
+          "Wallet account switched. The transaction was preserved in recovery and not submitted.",
+        );
+      }
+      if (reconcile.validate) {
+        await reconcile.validate(hash, signedTransaction);
+      }
+    }
+    progress?.("submitting", hash);
+  });
   try {
     const submitted = await client.sendTransaction(signedTransaction);
     if (submitted.status === "ERROR")
-      throw new Error(
+      throw classifySubmissionFailure(
+        "broadcast",
         "The network rejected the signed transaction. Refresh the quote and try again.",
+        hash,
       );
     if (submitted.status === "TRY_AGAIN_LATER")
-      throw new Error("The network is busy. Nothing was accepted; please try again.");
+      throw classifySubmissionFailure(
+        "broadcast",
+        "The network is busy. Nothing was accepted; please try again.",
+        hash,
+      );
   } catch (error) {
-    if (
-      error instanceof Error &&
-      /network rejected|Nothing was accepted|superseded|switched|sequence/i.test(error.message)
-    )
-      throw error;
+    if (error instanceof SubmissionFailure) throw error;
     // A network timeout after submission has an unknown outcome. Preserve the real hash for checking.
-    return { status: "pending", txHash: hash };
+    return {
+      status: "pending",
+      txHash: hash,
+      failure: classifySubmissionFailure("broadcast", error, hash),
+    };
   }
   progress?.("pending", hash);
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -1128,8 +1206,12 @@ async function signAndSubmit(
     let result: TransactionResult | null;
     try {
       result = await readTransaction(hash);
-    } catch {
-      return { status: "pending", txHash: hash };
+    } catch (error) {
+      return {
+        status: "pending",
+        txHash: hash,
+        failure: classifySubmissionFailure("confirmation", error, hash),
+      };
     }
     if (signal?.aborted) return { status: "pending", txHash: hash };
     if (result && result.status !== "pending") {
