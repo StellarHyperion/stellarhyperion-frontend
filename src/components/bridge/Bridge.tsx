@@ -28,6 +28,8 @@ import {
   batchClaimSettlementSupport,
   getClaims,
   quoteTransfer,
+  TRANSACTION_TIMEOUT_SECONDS,
+  quoteFreshness,
   readLane,
   readTransaction,
   simulateBridgeOut,
@@ -35,6 +37,7 @@ import {
   submitSettleClaim,
   submitSettleClaims,
   validateRecipient,
+  quoteBreakdown,
   type LaneState,
   type LiveQuote,
   type PendingClaim,
@@ -47,6 +50,7 @@ import {
   USDC,
   XLM,
   accountAssets,
+  accountTrustlineReserve,
   issuerVerificationLabel,
   conversionExecutionIntent,
   conversionRoute,
@@ -55,9 +59,11 @@ import {
   submitConversion,
   stellarAsset,
   trustlineLabel,
+  trustlineReserveImpact,
   type Conversion,
   type SourceAsset,
   type TradeQuote,
+  type TrustlineReservePreview,
 } from "../../contracts/assets";
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import {
@@ -65,6 +71,7 @@ import {
   getOperationOwnership,
   releaseOperationOwnership,
   saveCheckpoint,
+  assertCheckpointStorage,
   useTransferCheckpoint,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
@@ -194,15 +201,39 @@ function QuoteDetails({
 }) {
   const resourceFee = simulation?.resourceFee;
   const networkFee = simulation?.networkFee;
+  const breakdown = quoteBreakdown(quote);
+
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+  const freshness = quoteFreshness(quote, now);
   return (
     <dl className={styles.summary}>
       <div>
-        <dt>Bridge amount</dt>
-        <dd>{formatUnits(quote.grossAmount, 7)} USDC</dd>
+        <dt>Requested source amount</dt>
+        <dd>{formatUnits(breakdown.requestedSourceAmount, 7)} USDC</dd>
       </div>
       <div>
-        <dt>Hyperion fee</dt>
-        <dd>{formatUnits(quote.fee, 7)} USDC</dd>
+        <dt>Actual source debit</dt>
+        <dd>{formatUnits(breakdown.actualSourceDebit, 7)} USDC</dd>
+      </div>
+      <div>
+        <dt>Protocol fee</dt>
+        <dd>{formatUnits(breakdown.protocolFee, 7)} USDC</dd>
+      </div>
+      <div>
+        <dt>Representable bridge amount</dt>
+        <dd>{formatUnits(breakdown.representableBridgeAmount, 7)} USDC</dd>
+      </div>
+      <div>
+        <dt>Retained precision dust</dt>
+        <dd>{formatUnits(breakdown.retainedDust, 7)} USDC</dd>
       </div>
       <div>
         <dt>{quote.route === 0 ? "Circle forwarding budget" : "Axelar relay gas budget"}</dt>
@@ -246,6 +277,30 @@ function QuoteDetails({
         <dd>
           {formatUnits(quote.destinationAmount, destinationDecimals(quote.route))}{" "}
           {receiveSymbol(quote.route)}
+        </dd>
+      </div>
+      <div>
+        <dt>Provider observation</dt>
+        <dd>
+          {freshness === "current" ? "Current" : freshness === "stale" ? "Stale" : "Unknown"} ·{" "}
+          {quote.observedAt ? new Date(quote.observedAt).toLocaleString() : "Not observed"}
+        </dd>
+      </div>
+      <div>
+        <dt>Contract observation</dt>
+        <dd>
+          {quote.observations?.contractAt
+            ? new Date(quote.observations.contractAt).toLocaleString()
+            : "Not observed"}{" "}
+          · ledger {quote.ledger}
+        </dd>
+      </div>
+      <div>
+        <dt>Quote scope</dt>
+        <dd>
+          {quote.destination} · {quote.route === 0 ? "Circle CCTP" : "Axelar ITS"} · {quote.adapter}{" "}
+          · ledger {quote.ledger}
+          <span> · Stellar Testnet</span>
         </dd>
       </div>
     </dl>
@@ -369,6 +424,12 @@ function PendingTransferCard({
   const continueBridge = async () => {
     if (!review || !sameAccount || checking || cardSimulating || !!cardSimError || !cardSimulation)
       return;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setChecking(true);
     setError(null);
     try {
@@ -405,16 +466,18 @@ function PendingTransferCard({
             : checkpoint.stage === "conversion"
               ? current?.status === "confirmed"
                 ? "Conversion confirmed"
-                : "Conversion submitted"
+                : "Conversion source status unknown"
               : current?.status === "confirmed"
                 ? "Transfer confirmed on Stellar"
-                : "Transfer submitted"}
+                : "Transfer source status unknown"}
         </h2>
       </div>
       <p>
         {checkpoint.stage === "conversion"
           ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
-          : "Follow destination delivery in your transfer activity. A Stellar confirmation starts the bridge journey."}
+          : current?.status === "confirmed"
+            ? "The source transaction is confirmed. Follow destination delivery separately in transfer activity."
+            : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
       <a
         className={styles.transactionLink}
@@ -602,6 +665,8 @@ export function Bridge() {
     addTrustline: boolean;
     simulation: SimulatedOperation | null;
   } | null>(null);
+  const [reserve, setReserve] = useState<TrustlineReservePreview | null>(null);
+  const [reserveError, setReserveError] = useState<string | null>(null);
   const laneKey = `${destination}:${route}:${refresh}`;
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
@@ -767,13 +832,23 @@ export function Bridge() {
     if (!wallet.address) return;
     const account = wallet.address;
     const controller = new AbortController();
-    void accountAssets(account, controller.signal)
-      .then((assets) => {
-        if (!controller.signal.aborted) setAccounts({ account, assets, error: null });
+    void Promise.all([
+      accountAssets(account, controller.signal),
+      accountTrustlineReserve(account, controller.signal),
+    ])
+      .then(([assets, nextReserve]) => {
+        if (!controller.signal.aborted) {
+          setAccounts({ account, assets, error: null });
+          setReserve(nextReserve);
+          setReserveError(null);
+        }
       })
       .catch((cause: unknown) => {
-        if (!controller.signal.aborted)
+        if (!controller.signal.aborted) {
           setAccounts({ account, assets: [], error: errorMessage(cause) });
+          setReserve(null);
+          setReserveError(errorMessage(cause));
+        }
       });
     return () => {
       controller.abort();
@@ -817,7 +892,15 @@ export function Bridge() {
   }, [valid, quote, wallet.address, locked, recipient, simKey]);
 
   const submit = async () => {
-    if (!reviewed || !wallet.address || busy || checkpoint) return;
+    if (
+      !reviewed ||
+      !wallet.address ||
+      busy ||
+      checkpoint ||
+      reviewedReserveInsufficient ||
+      (!!reviewed.quote.conversion && !reserve)
+    )
+      return;
     if (reviewApproval?.account !== wallet.address) {
       setReviewing(false);
       setReviewApproval(null);
@@ -833,6 +916,12 @@ export function Bridge() {
       return;
     }
     const reviewedQuote = reviewed.quote;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setReviewing(false);
     const controller = new AbortController();
     waitController.current?.abort();
@@ -981,6 +1070,26 @@ export function Bridge() {
     quote.sourceAmount > conservativeMax &&
     isUsdcSource;
 
+  const needsTrustline = !balances.some((asset) => asset.id === USDC.id);
+  // The reserve a new trustline locks, and the network fee and (for an XLM source) the amount
+  // the conversion itself spends, all come out of the same XLM balance. Fold them together here
+  // so the review screen discloses the one number that actually decides whether signing is safe,
+  // not just the trustline reserve in isolation.
+  const reserveImpact =
+    quote?.conversion && reserve
+      ? trustlineReserveImpact(reserve, quote.conversion, needsTrustline)
+      : null;
+  const trustlineReserveInsufficient =
+    !!quote?.conversion && !!reserveImpact && reserveImpact.projectedSpendable < 0n;
+  const trustlineReserveUnknown = !!quote?.conversion && reserve === null;
+  // The review dialog shows a frozen snapshot (`reviewed`), which can lag the live `quote` while
+  // the dialog stays open, so its disclosure is computed from that same snapshot rather than from
+  // whatever is live, keeping the number on screen identical to what is about to be signed.
+  const reviewedImpact =
+    reviewed?.quote.conversion && reserve
+      ? trustlineReserveImpact(reserve, reviewed.quote.conversion, reviewed.addTrustline)
+      : null;
+  const reviewedReserveInsufficient = !!reviewedImpact && reviewedImpact.projectedSpendable < 0n;
   return (
     <>
       {checkpoint && (
@@ -1235,6 +1344,28 @@ export function Bridge() {
             {`This amount exceeds the available route limit. Maximum bridgeable: ${formatUnits(conservativeMax, 7)} USDC.`}
           </p>
         )}
+        {quote?.conversion && reserveImpact && (
+          <p className={styles.assetNote} role={trustlineReserveInsufficient ? "alert" : "status"}>
+            {reserveImpact.addsTrustline
+              ? `Signing also opens your USDC trustline, locking ${formatUnits(reserveImpact.trustlineReserve, 7)} XLM (${reserveImpact.trustlineReserve} stroops) in reserve. `
+              : "You already hold a USDC trustline; no new reserve is locked. "}
+            Network fee: {formatUnits(reserveImpact.networkFee, 7)} XLM.
+            {reserveImpact.sourceSpend > 0n &&
+              ` Converting spends up to ${formatUnits(reserveImpact.sourceSpend, 7)} XLM.`}{" "}
+            Spendable XLM after signing: {formatUnits(reserveImpact.projectedSpendable, 7)} XLM.
+          </p>
+        )}
+        {quote?.conversion && needsTrustline && reserveError && (
+          <p className={styles.error}>{reserveError}</p>
+        )}
+        {result?.failure && (
+          <p role="status" className={styles.assetNote}>
+            {result.failure.stage === "broadcast"
+              ? "The source broadcast outcome is unknown."
+              : "Source confirmation is temporarily unavailable."}{" "}
+            Check the saved source hash before approving another transaction.
+          </p>
+        )}
         {busy && (
           <p role="status" className={styles.progress}>
             <LoaderCircle className={styles.spinner} size={16} aria-hidden="true" />
@@ -1298,7 +1429,9 @@ export function Bridge() {
                 !!insufficient ||
                 sourceBalance === undefined ||
                 activeSource.trustline === "frozen" ||
-                activeSource.trustline === "unauthorized"
+                activeSource.trustline === "unauthorized" ||
+                trustlineReserveUnknown ||
+                trustlineReserveInsufficient
               }
               onClick={() => {
                 if (!wallet.address || !quote || (!quote.conversion && !simulation)) return;
@@ -1311,7 +1444,7 @@ export function Bridge() {
                   key: quoteKey,
                   quote,
                   simulation,
-                  addTrustline: !balances.some((asset) => asset.id === USDC.id),
+                  addTrustline: needsTrustline,
                 });
                 setReviewing(true);
               }}
@@ -1429,6 +1562,21 @@ export function Bridge() {
               addTrustline={reviewed.addTrustline}
             />
           )}
+          {reviewed.quote.conversion && reviewedImpact && (
+            <p
+              className={styles.reviewNote}
+              role={reviewedReserveInsufficient ? "alert" : undefined}
+            >
+              {reviewedImpact.addsTrustline
+                ? `This signature also opens your USDC trustline, locking ${formatUnits(reviewedImpact.trustlineReserve, 7)} XLM (${reviewedImpact.trustlineReserve} stroops) as reserve.`
+                : "Your USDC trustline already exists; no new reserve is locked."}{" "}
+              Network fee {formatUnits(reviewedImpact.networkFee, 7)} XLM
+              {reviewedImpact.sourceSpend > 0n &&
+                `, up to ${formatUnits(reviewedImpact.sourceSpend, 7)} XLM converted`}
+              . Spendable XLM after signing: {formatUnits(reviewedImpact.projectedSpendable, 7)}{" "}
+              XLM.
+            </p>
+          )}
           <QuoteDetails quote={reviewed.quote.bridge} simulation={reviewed.simulation} />
           {reviewed.quote.conversion && (
             <p className={styles.reviewNote}>
@@ -1438,7 +1586,15 @@ export function Bridge() {
             </p>
           )}
           <p className={styles.reviewNote}>
+            Recovery saves source hashes in this browser. Private sessions and browser cleanup can
+            remove them; keep a copy of the signed source hash before leaving.
+          </p>
+          <p className={styles.reviewNote}>
             Source confirmation starts the transfer. Destination delivery is verified separately.
+          </p>
+          <p className={styles.reviewNote}>
+            The signed transaction expires after {TRANSACTION_TIMEOUT_SECONDS} seconds. Expired
+            signatures are never broadcast; review again to create a fresh envelope.
           </p>
           {reviewed.simulation && (
             <p className={styles.address}>
@@ -1455,7 +1611,10 @@ export function Bridge() {
             type="button"
             className={styles.primary}
             disabled={
-              !reviewed.quote.conversion && (simulating || !!simulationError || !simulation)
+              busy ||
+              reviewedReserveInsufficient ||
+              (!!reviewed.quote.conversion && !reserve) ||
+              (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
             }
             onClick={() => {
               void submit();
