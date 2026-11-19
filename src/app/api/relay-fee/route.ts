@@ -17,7 +17,7 @@ export async function GET() {
       cache: "no-store",
     });
     const value = (await response.text()).trim().replace(/^"(\d+)"$/, "$1");
-    if (!response.ok || !/^\d+$/.test(value) || BigInt(value) <= 0n)
+    if (!response.ok || value.length > 39 || !/^\d+$/.test(value) || BigInt(value) <= 0n)
       throw new Error("Invalid gas estimate");
     const quote = validateProviderFee(
       {
@@ -29,10 +29,7 @@ export async function GET() {
       },
       { token: "XLM", destination: "ethereum-sepolia" },
     );
-    return NextResponse.json(
-      quote,
-      { headers: { "Cache-Control": "no-store" } },
-    );
+    return NextResponse.json(quote, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return NextResponse.json(
       { error: "Relay gas pricing is unavailable. No transfer can be prepared." },

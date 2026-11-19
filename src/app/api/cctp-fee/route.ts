@@ -4,22 +4,23 @@ import { relayBudget } from "../../../lib/relay-budget";
 import { validateProviderFee } from "../../../lib/fee-schema";
 
 export async function GET(request: Request) {
-  let domain: number;
+  let destination: ReturnType<typeof destinationFor>;
   try {
-    domain = destinationFor(new URL(request.url).searchParams.get("destination") ?? "").cctpDomain;
+    destination = destinationFor(new URL(request.url).searchParams.get("destination") ?? "");
   } catch {
     return NextResponse.json({ error: "Choose a supported destination testnet." }, { status: 400 });
   }
   try {
     const response = await fetch(
-      `https://iris-api-sandbox.circle.com/v2/burn/USDC/fees/27/${domain}?forward=true`,
+      `https://iris-api-sandbox.circle.com/v2/burn/USDC/fees/27/${destination.cctpDomain}?forward=true`,
       {
         signal: AbortSignal.timeout(15000),
         cache: "no-store",
       },
     );
     const body: unknown = await response.json();
-    if (!response.ok || !Array.isArray(body)) throw new Error("Invalid Circle fee response.");
+    if (!response.ok || !Array.isArray(body) || body.length > 32)
+      throw new Error("Invalid Circle fee response.");
     const fee = body.find(
       (
         item: unknown,
@@ -41,18 +42,15 @@ export async function GET(request: Request) {
         estimatedAmount: String(BigInt(fee.forwardFee.med) * 10n),
         token: "USDC",
         decimals: 7,
-        destination: destinationFor(new URL(request.url).searchParams.get("destination") ?? "").key,
+        destination: destination.key,
         finality: 2000,
       },
       {
         token: "USDC",
-        destination: destinationFor(new URL(request.url).searchParams.get("destination") ?? "").key,
+        destination: destination.key,
       },
     );
-    return NextResponse.json(
-      quote,
-      { headers: { "Cache-Control": "no-store" } },
-    );
+    return NextResponse.json(quote, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return NextResponse.json(
       { error: "Circle forwarding pricing is unavailable. Try again later." },
