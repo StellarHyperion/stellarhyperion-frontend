@@ -448,16 +448,18 @@ function PendingTransferCard({
             : checkpoint.stage === "conversion"
               ? current?.status === "confirmed"
                 ? "Conversion confirmed"
-                : "Conversion submitted"
+                : "Conversion source status unknown"
               : current?.status === "confirmed"
                 ? "Transfer confirmed on Stellar"
-                : "Transfer submitted"}
+                : "Transfer source status unknown"}
         </h2>
       </div>
       <p>
         {checkpoint.stage === "conversion"
           ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
-          : "Follow destination delivery in your transfer activity. A Stellar confirmation starts the bridge journey."}
+          : current?.status === "confirmed"
+            ? "The source transaction is confirmed. Follow destination delivery separately in transfer activity."
+            : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
       <a
         className={styles.transactionLink}
