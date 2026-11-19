@@ -28,6 +28,7 @@ import {
   batchClaimSettlementSupport,
   getClaims,
   quoteTransfer,
+  TRANSACTION_TIMEOUT_SECONDS,
   quoteFreshness,
   readLane,
   readTransaction,
@@ -1556,6 +1557,10 @@ export function Bridge() {
           )}
           <p className={styles.reviewNote}>
             Source confirmation starts the transfer. Destination delivery is verified separately.
+          </p>
+          <p className={styles.reviewNote}>
+            The signed transaction expires after {TRANSACTION_TIMEOUT_SECONDS} seconds. Expired
+            signatures are never broadcast; review again to create a fresh envelope.
           </p>
           {reviewed.simulation && (
             <p className={styles.address}>
