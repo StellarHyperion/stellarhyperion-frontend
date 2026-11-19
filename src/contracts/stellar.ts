@@ -48,11 +48,13 @@ export function transactionDeadline(
   transaction: unknown,
   now = Math.floor(Date.now() / 1000),
 ): TransactionDeadline {
+  if (!transaction || typeof transaction !== "object")
+    throw new Error("The transaction has no envelope time bounds.");
   const value = transaction as {
     timeBounds?: { minTime: string; maxTime: string };
     innerTransaction?: { timeBounds?: { minTime: string; maxTime: string } };
   };
-  const bounds = value?.timeBounds ?? value?.innerTransaction?.timeBounds;
+  const bounds = value.timeBounds ?? value.innerTransaction?.timeBounds;
   if (!bounds) throw new Error("The transaction has no envelope time bounds.");
   const minTime = Number(bounds.minTime);
   const maxTime = Number(bounds.maxTime);

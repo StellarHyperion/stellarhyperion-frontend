@@ -169,6 +169,29 @@ describe("Signed Stellar submission failure boundaries", () => {
     expect(send).not.toHaveBeenCalled();
     expect(progress.mock.calls.some((call) => call[0] === "submitting")).toBe(false);
   });
+  it("rejects a quote whose gross debit includes retained dust or whose payout floors to zero", () => {
+    const value: LiveQuote = {
+      route: 0,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000000n,
+      grossAmount: 9999995n,
+      fee: 30005n,
+      netAmount: 9969990n,
+      representableAmount: 996999n,
+      destinationAmount: 946999n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 500000n,
+    };
+    expect(() => quoteBreakdown({ ...value, grossAmount: value.requestedAmount })).toThrow(
+      /conserve/,
+    );
+    expect(() => quoteBreakdown({ ...value, destinationAmount: 0n })).toThrow(/conserve/);
+    expect(() => quoteBreakdown({ ...value, netAmount: 0n, representableAmount: 0n })).toThrow(
+      /conserve/,
+    );
+  });
 
   it("classifies simulation transport failure without wallet approval or broadcast", async () => {
     const { simulation, send } = setup();
