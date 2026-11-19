@@ -315,21 +315,19 @@ describe("Recovered USDC must still be spendable", () => {
     it("blocks insufficient or unauthorized canonical USDC despite total balance", async () => {
       vi.stubGlobal(
         "fetch",
-        vi
-          .fn()
-          .mockResolvedValue(
-            Response.json({
-              balances: [
-                {
-                  asset_type: "credit_alphanum4",
-                  asset_code: TESTNET.usdcCode,
-                  asset_issuer: TESTNET.usdcIssuer,
-                  balance: "1",
-                  ...extra,
-                },
-              ],
-            }),
-          ),
+        vi.fn().mockResolvedValue(
+          Response.json({
+            balances: [
+              {
+                asset_type: "credit_alphanum4",
+                asset_code: TESTNET.usdcCode,
+                asset_issuer: TESTNET.usdcIssuer,
+                balance: "1",
+                ...extra,
+              },
+            ],
+          }),
+        ),
       );
       await expect(requireRecoveredUsdc(account.publicKey(), 10000000n)).rejects.toThrow(
         /not currently available/,
@@ -339,22 +337,20 @@ describe("Recovered USDC must still be spendable", () => {
   it("accepts authorized spendable canonical USDC", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          Response.json({
-            balances: [
-              {
-                asset_type: "credit_alphanum4",
-                asset_code: TESTNET.usdcCode,
-                asset_issuer: TESTNET.usdcIssuer,
-                balance: "1",
-                selling_liabilities: "0",
-                is_authorized: true,
-              },
-            ],
-          }),
-        ),
+      vi.fn().mockResolvedValue(
+        Response.json({
+          balances: [
+            {
+              asset_type: "credit_alphanum4",
+              asset_code: TESTNET.usdcCode,
+              asset_issuer: TESTNET.usdcIssuer,
+              balance: "1",
+              selling_liabilities: "0",
+              is_authorized: true,
+            },
+          ],
+        }),
+      ),
     );
     await expect(requireRecoveredUsdc(account.publicKey(), 10000000n)).resolves.toBeUndefined();
   });
