@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchTransferByTx, fetchTransfers } from "../src/api/backend";
+import {
+  destinationDeliveryVerified,
+  fetchTransferByTx,
+  fetchTransfers,
+  type FormattedTransfer,
+} from "../src/api/backend";
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -34,5 +39,19 @@ describe("Real indexer client", () => {
     expect(fetcher.mock.calls[0]?.[0]).toBe(
       "https://indexer.example/v1/transfers?search=hash+%26+recipient&offset=40",
     );
+  });
+  it("withdraws delivered status after a payment proof is invalidated", () => {
+    const transfer = {
+      stage: "delivered",
+      destination: { delivered: true, amount: "9", decimals: 6, txHash: "b" },
+      proofRevision: {
+        status: "invalidated",
+        previousTxHash: "b",
+        replacementTxHash: null,
+        reason: "destination reorg",
+      },
+    } as unknown as FormattedTransfer;
+    expect(destinationDeliveryVerified(transfer)).toBe(false);
+    expect(destinationDeliveryVerified({ ...transfer, proofRevision: null })).toBe(true);
   });
 });

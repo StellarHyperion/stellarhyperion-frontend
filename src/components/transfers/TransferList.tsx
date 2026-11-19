@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { type ReactElement } from "react";
 import { ExternalLink } from "lucide-react";
-import { getRouteName, type FormattedTransfer, type TransferLifecycleStage } from "../../api";
+import {
+  destinationDeliveryVerified,
+  getRouteName,
+  type FormattedTransfer,
+  type TransferLifecycleStage,
+} from "../../api";
 import { formatTokenAmount, getExplorerUrl, shortenAddress, shortenTxHash } from "../../lib/format";
 import styles from "./TransferList.module.css";
 
@@ -129,19 +134,25 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
               </span>
             </p>
           )}
+          {t.proofRevision && t.proofRevision.status !== "valid" && (
+            <p className={styles.claimInfo} role="status">
+              Evidence {t.proofRevision.status}: destination proof changed. This is not a duplicate
+              source transfer.
+            </p>
+          )}
 
           <div className={styles.cardBottom}>
             <div className={styles.amountGroup}>
               <span className={styles.netAmount}>
                 <small className={styles.amountLabel}>
-                  {t.destination.delivered &&
+                  {destinationDeliveryVerified(t) &&
                   t.destination.amount &&
                   t.destination.decimals !== undefined &&
                   t.destination.decimals !== null
                     ? "Received"
                     : "Bridged before relay fees"}
                 </small>
-                {t.destination.delivered &&
+                {destinationDeliveryVerified(t) &&
                 t.destination.amount &&
                 t.destination.decimals !== undefined &&
                 t.destination.decimals !== null ? (

@@ -18,6 +18,13 @@ export type TransferLifecycleStage =
   | "settled"
   | "failed";
 
+export interface ProofRevision {
+  readonly status: "valid" | "reconciled" | "invalidated";
+  readonly previousTxHash: string | null;
+  readonly replacementTxHash: string | null;
+  readonly reason: string | null;
+}
+
 export interface FormattedTransfer {
   readonly id: string;
   readonly stage: TransferLifecycleStage;
@@ -59,6 +66,19 @@ export interface FormattedTransfer {
     readonly id: string;
     readonly settled: boolean;
   } | null;
+  readonly proofRevision?: ProofRevision | null;
+}
+
+export function destinationDeliveryVerified(transfer: FormattedTransfer): boolean {
+  return (
+    transfer.stage === "delivered" &&
+    transfer.destination.delivered &&
+    !!transfer.destination.txHash &&
+    !!transfer.destination.amount &&
+    transfer.destination.decimals !== null &&
+    transfer.destination.decimals !== undefined &&
+    transfer.proofRevision?.status !== "invalidated"
+  );
 }
 
 export interface TransfersResponse {

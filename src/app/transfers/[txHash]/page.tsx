@@ -2,7 +2,12 @@
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import { Column } from "../../../components/chrome";
-import { fetchTransferByTx, getRouteName, type FormattedTransfer } from "../../../api";
+import {
+  destinationDeliveryVerified,
+  fetchTransferByTx,
+  getRouteName,
+  type FormattedTransfer,
+} from "../../../api";
 import { readTransaction, errorMessage, type TransactionResult } from "../../../contracts";
 import { formatTokenAmount, getExplorerUrl } from "../../../lib/format";
 import styles from "./page.module.css";
@@ -98,13 +103,48 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
             {formatTokenAmount(record.origin.fee, record.origin.decimals)}{" "}
             {record.origin.symbol ?? "token"}.
           </p>
-          {record.destination.delivered && record.destination.amount && (
+          {destinationDeliveryVerified(record) && record.destination.amount && (
             <p>
               Received: {formatTokenAmount(record.destination.amount, record.destination.decimals)}{" "}
               {record.destination.symbol ?? ""}.
             </p>
           )}
           <p style={{ overflowWrap: "anywhere" }}>Recipient: {record.destination.recipient}</p>
+          {record.proofRevision && record.proofRevision.status !== "valid" && (
+            <section aria-label="Proof revision notice">
+              <p role="status">
+                Destination evidence was {record.proofRevision.status}; this is a proof revision,
+                not a second source transfer.
+              </p>
+              {record.proofRevision.previousTxHash && (
+                <a
+                  href={getExplorerUrl(
+                    record.destination.chain,
+                    "tx",
+                    record.proofRevision.previousTxHash,
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Inspect original destination reference
+                </a>
+              )}
+              {record.proofRevision.replacementTxHash && (
+                <a
+                  href={getExplorerUrl(
+                    record.destination.chain,
+                    "tx",
+                    record.proofRevision.replacementTxHash,
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Inspect replacement destination reference
+                </a>
+              )}
+              {record.proofRevision.reason && <p>{record.proofRevision.reason}</p>}
+            </section>
+          )}
           {record.rail?.railStatus && <p>Rail reports: {record.rail.railStatus}</p>}
           {record.destination.txHash && (
             <a
@@ -131,7 +171,7 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
             </div>
           ) : (
             <p>
-              {record.destination.delivered
+              {destinationDeliveryVerified(record)
                 ? "No recovery claim. This transfer was delivered to the destination wallet."
                 : "No recovery claim has been recorded for this transfer. A pending transfer does not automatically create a claim."}
             </p>
