@@ -1,4 +1,4 @@
-import { Keypair, Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
+import { FeeBumpTransaction, Keypair, Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
 import { TESTNET } from "../../config/testnet";
 import type { WalletApprovalProvenance } from "./types";
 
@@ -14,8 +14,22 @@ export function assertWalletApproval(approval: WalletApprovalProvenance, account
 }
 
 export function verifyWalletSignature(original: string, signed: string, account: string): string {
-  const requested = TransactionBuilder.fromXdr(original, TESTNET.networkPassphrase);
-  const result = TransactionBuilder.fromXdr(signed, TESTNET.networkPassphrase);
+  let requested: Transaction | FeeBumpTransaction;
+  let result: Transaction | FeeBumpTransaction;
+  try {
+    requested = TransactionBuilder.fromXdr(original, TESTNET.networkPassphrase);
+  } catch {
+    throw new Error("The transaction to sign is unreadable.");
+  }
+  try {
+    result = TransactionBuilder.fromXdr(signed, TESTNET.networkPassphrase);
+  } catch {
+    throw new Error("The wallet returned an unreadable transaction envelope.");
+  }
+  if (requested instanceof FeeBumpTransaction || result instanceof FeeBumpTransaction)
+    throw new Error(
+      "The wallet returned an unsupported fee-bump envelope. Hyperion signs standard transactions only.",
+    );
   if (!(requested instanceof Transaction) || !(result instanceof Transaction))
     throw new Error("The wallet returned an unsupported transaction envelope.");
   const requestedHash = requested.hash();

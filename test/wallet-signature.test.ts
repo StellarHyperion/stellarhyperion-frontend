@@ -110,4 +110,55 @@ describe("Wallet signature verification", () => {
       "did not sign",
     );
   });
+  it("rejects a fee-bump envelope as the returned XDR with 'unsupported'", () => {
+    const tx = transaction();
+    const original = tx.toXdr();
+    tx.sign(signer);
+    const feeSource = Keypair.random();
+    const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+      feeSource,
+      "200",
+      tx,
+      Networks.TESTNET,
+    );
+    feeBump.sign(feeSource);
+    expect(() => verifyWalletSignature(original, feeBump.toXdr(), signer.publicKey())).toThrow(
+      "unsupported",
+    );
+  });
+  it("rejects a fee-bump envelope as the original XDR with 'unsupported'", () => {
+    const tx = transaction();
+    tx.sign(signer);
+    const feeSource = Keypair.random();
+    const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+      feeSource,
+      "200",
+      tx,
+      Networks.TESTNET,
+    );
+    feeBump.sign(feeSource);
+    expect(() => verifyWalletSignature(feeBump.toXdr(), tx.toXdr(), signer.publicKey())).toThrow(
+      "unsupported",
+    );
+  });
+  it("rejects garbage, empty, and truncated XDR with 'unreadable'", () => {
+    const tx = transaction();
+    const original = tx.toXdr();
+    tx.sign(signer);
+    const signed = tx.toXdr();
+    expect(() =>
+      verifyWalletSignature(original, "not-valid-xdr-at-all", signer.publicKey()),
+    ).toThrow("unreadable");
+    expect(() => verifyWalletSignature(original, "", signer.publicKey())).toThrow("unreadable");
+    expect(() => verifyWalletSignature(original, signed.slice(0, 20), signer.publicKey())).toThrow(
+      "unreadable",
+    );
+    expect(() => verifyWalletSignature("not-valid-xdr-at-all", signed, signer.publicKey())).toThrow(
+      "unreadable",
+    );
+    expect(() => verifyWalletSignature("", signed, signer.publicKey())).toThrow("unreadable");
+    expect(() => verifyWalletSignature(original.slice(0, 20), signed, signer.publicKey())).toThrow(
+      "unreadable",
+    );
+  });
 });

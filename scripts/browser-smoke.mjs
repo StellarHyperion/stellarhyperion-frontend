@@ -44,6 +44,10 @@ try {
   await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
   await page.getByText("Freighter", { exact: true }).waitFor();
   await page.getByText("Albedo", { exact: true }).waitFor();
+  for (const walletName of ["Freighter", "Albedo", "xBull", "LOBSTR"])
+    await page.getByRole("dialog").getByText(walletName, { exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
   for (const route of ["/", "/transfers"]) {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}${route}`, { waitUntil: "networkidle" });
