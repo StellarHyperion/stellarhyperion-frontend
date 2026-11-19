@@ -126,6 +126,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const closePicker = useCallback(() => {
     attempt.current++;
+    connectionGeneration.current.advance();
     pending.current?.(null);
     pending.current = null;
     setPickerOpen(false);
