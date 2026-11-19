@@ -20,6 +20,8 @@ import {
   TESTNET,
   destinationFor,
   destinationDecimals,
+  deploymentIdentityMismatch,
+  STELLAR_DEPLOYMENT,
   type BridgeRoute,
   type DestinationKey,
 } from "../../config/testnet";
@@ -28,6 +30,8 @@ import {
   batchClaimSettlementSupport,
   getClaims,
   quoteTransfer,
+  TRANSACTION_TIMEOUT_SECONDS,
+  quoteFreshness,
   readLane,
   readTransaction,
   simulateBridgeOut,
@@ -35,6 +39,7 @@ import {
   submitSettleClaim,
   submitSettleClaims,
   validateRecipient,
+  quoteBreakdown,
   type LaneState,
   type LiveQuote,
   type PendingClaim,
@@ -47,7 +52,9 @@ import {
   USDC,
   XLM,
   accountAssets,
+  accountTrustlineReserve,
   issuerVerificationLabel,
+  isCanonicalUsdc,
   conversionExecutionIntent,
   conversionRoute,
   quoteTrade,
@@ -55,10 +62,12 @@ import {
   submitConversion,
   stellarAsset,
   trustlineLabel,
+  trustlineReserveImpact,
   type Conversion,
   type ConversionPathComparison,
   type SourceAsset,
   type TradeQuote,
+  type TrustlineReservePreview,
 } from "../../contracts/assets";
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import {
@@ -66,12 +75,19 @@ import {
   getOperationOwnership,
   releaseOperationOwnership,
   saveCheckpoint,
+  assertCheckpointStorage,
   useTransferCheckpoint,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
 import { useStellarWallet } from "../../wallets";
 import type { WalletApprovalProvenance } from "../../wallets/stellar";
-import { AssetIcon, DestinationPicker, ReviewDialog, SourceAssetPicker } from "./AssetPicker";
+import {
+  AssetIcon,
+  CopyableAddress,
+  DestinationPicker,
+  ReviewDialog,
+  SourceAssetPicker,
+} from "./AssetPicker";
 import styles from "./Bridge.module.css";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
@@ -195,15 +211,39 @@ function QuoteDetails({
 }) {
   const resourceFee = simulation?.resourceFee;
   const networkFee = simulation?.networkFee;
+  const breakdown = quoteBreakdown(quote);
+
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+  const freshness = quoteFreshness(quote, now);
   return (
     <dl className={styles.summary}>
       <div>
-        <dt>Bridge amount</dt>
-        <dd>{formatUnits(quote.grossAmount, 7)} USDC</dd>
+        <dt>Requested source amount</dt>
+        <dd>{formatUnits(breakdown.requestedSourceAmount, 7)} USDC</dd>
       </div>
       <div>
-        <dt>Hyperion fee</dt>
-        <dd>{formatUnits(quote.fee, 7)} USDC</dd>
+        <dt>Actual source debit</dt>
+        <dd>{formatUnits(breakdown.actualSourceDebit, 7)} USDC</dd>
+      </div>
+      <div>
+        <dt>Protocol fee</dt>
+        <dd>{formatUnits(breakdown.protocolFee, 7)} USDC</dd>
+      </div>
+      <div>
+        <dt>Representable bridge amount</dt>
+        <dd>{formatUnits(breakdown.representableBridgeAmount, 7)} USDC</dd>
+      </div>
+      <div>
+        <dt>Retained precision dust</dt>
+        <dd>{formatUnits(breakdown.retainedDust, 7)} USDC</dd>
       </div>
       <div>
         <dt>{quote.route === 0 ? "Circle forwarding budget" : "Axelar relay gas budget"}</dt>
@@ -240,6 +280,30 @@ function QuoteDetails({
         <dd>
           {formatUnits(quote.destinationAmount, destinationDecimals(quote.route))}{" "}
           {receiveSymbol(quote.route)}
+        </dd>
+      </div>
+      <div>
+        <dt>Provider observation</dt>
+        <dd>
+          {freshness === "current" ? "Current" : freshness === "stale" ? "Stale" : "Unknown"} ·{" "}
+          {quote.observedAt ? new Date(quote.observedAt).toLocaleString() : "Not observed"}
+        </dd>
+      </div>
+      <div>
+        <dt>Contract observation</dt>
+        <dd>
+          {quote.observations?.contractAt
+            ? new Date(quote.observations.contractAt).toLocaleString()
+            : "Not observed"}{" "}
+          · ledger {quote.ledger}
+        </dd>
+      </div>
+      <div>
+        <dt>Quote scope</dt>
+        <dd>
+          {quote.destination} · {quote.route === 0 ? "Circle CCTP" : "Axelar ITS"} · {quote.adapter}{" "}
+          · ledger {quote.ledger}
+          <span> · Stellar Testnet</span>
         </dd>
       </div>
     </dl>
@@ -379,6 +443,24 @@ function PendingTransferCard({
         ? latest
         : null;
   const sameAccount = wallet.address === checkpoint.account;
+  const actionRef = useRef<HTMLButtonElement>(null);
+  const recoveryMessageRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const focus = () => {
+      const action = actionRef.current;
+      if (action && !action.disabled) action.focus();
+      else recoveryMessageRef.current?.focus();
+    };
+    const frame = requestAnimationFrame(focus);
+    const onHashChange = () => {
+      if (window.location.hash === "#pending-recovery") focus();
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("hashchange", onHashChange);
+    };
+  }, [busy, checking, checkpoint.txHash]);
   const check = async () => {
     if (checking || busy) return;
     setChecking(true);
@@ -414,6 +496,12 @@ function PendingTransferCard({
   const continueBridge = async () => {
     if (!review || !sameAccount || checking || cardSimulating || !!cardSimError || !cardSimulation)
       return;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setChecking(true);
     setError(null);
     try {
@@ -441,7 +529,12 @@ function PendingTransferCard({
     }
   };
   return (
-    <section className={styles.pending} aria-label="Transfer recovery">
+    <section
+      id="pending-recovery"
+      className={styles.pending}
+      aria-label="Transfer recovery"
+      tabIndex={-1}
+    >
       <div className={styles.pendingTitle}>
         <ShieldCheck size={18} aria-hidden="true" />
         <h2>
@@ -450,16 +543,24 @@ function PendingTransferCard({
             : checkpoint.stage === "conversion"
               ? current?.status === "confirmed"
                 ? "Conversion confirmed"
-                : "Conversion submitted"
+                : "Conversion source status unknown"
               : current?.status === "confirmed"
                 ? "Transfer confirmed on Stellar"
-                : "Transfer submitted"}
+                : "Transfer source status unknown"}
         </h2>
       </div>
-      <p>
+      <p id="pending-recovery-message" ref={recoveryMessageRef} role="status" tabIndex={-1}>
         {checkpoint.stage === "conversion"
-          ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
-          : "Follow destination delivery in your transfer activity. A Stellar confirmation starts the bridge journey."}
+          ? current?.status === "confirmed"
+            ? "Conversion confirmed on Stellar. Your bridge is a separate transaction and still requires your wallet approval."
+            : current?.status === "failed"
+              ? "Conversion failed on Stellar. No bridge transaction was submitted."
+              : "This saved signed hash does not establish broadcast or confirmation. Check the conversion source status before continuing with USDC."
+          : current?.status === "confirmed"
+            ? "Source transaction confirmed on Stellar. Destination delivery is tracked separately."
+            : current?.status === "failed"
+              ? "Source transaction failed on Stellar. No destination delivery was initiated."
+              : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
       <a
         className={styles.transactionLink}
@@ -521,6 +622,8 @@ function PendingTransferCard({
       {current?.status === "failed" ||
       (checkpoint.stage === "bridge" && current?.status === "confirmed") ? (
         <button
+          id="pending-recovery-action"
+          ref={actionRef}
           type="button"
           className={styles.secondary}
           onClick={onReset}
@@ -530,6 +633,8 @@ function PendingTransferCard({
         </button>
       ) : (
         <button
+          id="pending-recovery-action"
+          ref={actionRef}
           type="button"
           className={styles.secondary}
           onClick={() => {
@@ -647,6 +752,8 @@ export function Bridge() {
     addTrustline: boolean;
     simulation: SimulatedOperation | null;
   } | null>(null);
+  const [reserve, setReserve] = useState<TrustlineReservePreview | null>(null);
+  const [reserveError, setReserveError] = useState<string | null>(null);
   const laneKey = `${destination}:${route}:${refresh}`;
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
@@ -693,7 +800,7 @@ export function Bridge() {
   const xlmSpendable = xlmAsset?.available !== undefined ? parseUnits(xlmAsset.available, 7) : 0n;
   // Conservative maximum: for USDC source requires a live quote with relay pricing;
   // for non-USDC source the spendable asset balance is the binding spending cap.
-  const isUsdcSource = source.id === USDC.id;
+  const isUsdcSource = isCanonicalUsdc(source);
   const trustlineOk = activeSource.trustline === "present" || activeSource.trustline === "native";
   const conservativeMax: bigint | null = isUsdcSource
     ? quote !== null && lane !== null
@@ -736,6 +843,13 @@ export function Bridge() {
     !locked &&
     simulatedState?.key !== simKey;
   const chain = destinationFor(destination);
+  const deploymentMismatch = deploymentIdentityMismatch(TESTNET.router, TESTNET.token);
+  const destinationRepresentation =
+    route === 0
+      ? chain.usdc
+      : lane?.available && lane.destinationToken
+        ? lane.destinationToken
+        : null;
   const waitController = useRef<AbortController | null>(null);
   const waitGeneration = useRef(0);
   const [shareStatus, setShareStatus] = useState<string | null>(null);
@@ -812,13 +926,23 @@ export function Bridge() {
     if (!wallet.address) return;
     const account = wallet.address;
     const controller = new AbortController();
-    void accountAssets(account, controller.signal)
-      .then((assets) => {
-        if (!controller.signal.aborted) setAccounts({ account, assets, error: null });
+    void Promise.all([
+      accountAssets(account, controller.signal),
+      accountTrustlineReserve(account, controller.signal),
+    ])
+      .then(([assets, nextReserve]) => {
+        if (!controller.signal.aborted) {
+          setAccounts({ account, assets, error: null });
+          setReserve(nextReserve);
+          setReserveError(null);
+        }
       })
       .catch((cause: unknown) => {
-        if (!controller.signal.aborted)
+        if (!controller.signal.aborted) {
           setAccounts({ account, assets: [], error: errorMessage(cause) });
+          setReserve(null);
+          setReserveError(errorMessage(cause));
+        }
       });
     return () => {
       controller.abort();
@@ -862,7 +986,15 @@ export function Bridge() {
   }, [valid, quote, wallet.address, locked, recipient, simKey]);
 
   const submit = async () => {
-    if (!reviewed || !wallet.address || busy || checkpoint) return;
+    if (
+      !reviewed ||
+      !wallet.address ||
+      busy ||
+      checkpoint ||
+      reviewedReserveInsufficient ||
+      (!!reviewed.quote.conversion && !reserve)
+    )
+      return;
     if (reviewApproval?.account !== wallet.address) {
       setReviewing(false);
       setReviewApproval(null);
@@ -878,6 +1010,12 @@ export function Bridge() {
       return;
     }
     const reviewedQuote = reviewed.quote;
+    try {
+      assertCheckpointStorage();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
     setReviewing(false);
     const controller = new AbortController();
     waitController.current?.abort();
@@ -926,6 +1064,7 @@ export function Bridge() {
     let converted: TransferCheckpoint | null = null;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
       router: TESTNET.router,
+      token: TESTNET.token,
       account: sender,
       recipient: validateRecipient(recipient),
       destination,
@@ -1026,6 +1165,26 @@ export function Bridge() {
     quote.sourceAmount > conservativeMax &&
     isUsdcSource;
 
+  const needsTrustline = !balances.some((asset) => asset.id === USDC.id);
+  // The reserve a new trustline locks, and the network fee and (for an XLM source) the amount
+  // the conversion itself spends, all come out of the same XLM balance. Fold them together here
+  // so the review screen discloses the one number that actually decides whether signing is safe,
+  // not just the trustline reserve in isolation.
+  const reserveImpact =
+    quote?.conversion && reserve
+      ? trustlineReserveImpact(reserve, quote.conversion, needsTrustline)
+      : null;
+  const trustlineReserveInsufficient =
+    !!quote?.conversion && !!reserveImpact && reserveImpact.projectedSpendable < 0n;
+  const trustlineReserveUnknown = !!quote?.conversion && reserve === null;
+  // The review dialog shows a frozen snapshot (`reviewed`), which can lag the live `quote` while
+  // the dialog stays open, so its disclosure is computed from that same snapshot rather than from
+  // whatever is live, keeping the number on screen identical to what is about to be signed.
+  const reviewedImpact =
+    reviewed?.quote.conversion && reserve
+      ? trustlineReserveImpact(reserve, reviewed.quote.conversion, reviewed.addTrustline)
+      : null;
+  const reviewedReserveInsufficient = !!reviewedImpact && reviewedImpact.projectedSpendable < 0n;
   return (
     <>
       {checkpoint && (
@@ -1179,9 +1338,101 @@ export function Bridge() {
           </div>
           <p className={styles.balance}>
             {route === 0
-              ? "Native USDC. Automatic destination minting."
-              : "ITS representation of Stellar USDC, not Circle's native USDC."}
+              ? "Circle CCTP delivers native USDC after Stellar source confirmation; destination delivery is separate."
+              : "Axelar ITS delivers a representation of Stellar USDC, not Circle's native USDC. Destination delivery is separate."}
           </p>
+          <details className={styles.identityDetails}>
+            <summary>Inspect canonical USDC identity</summary>
+            <p>
+              Stellar USDC is identified by its code and issuer. The configured token contract and
+              router are compared with the checked-in Stellar Testnet deployment; a mismatch blocks
+              bridge readiness.
+            </p>
+            <dl>
+              <div>
+                <dt>Stellar asset</dt>
+                <dd>{STELLAR_DEPLOYMENT.usdcCode} (7 decimals)</dd>
+              </div>
+              <div>
+                <dt>Canonical issuer</dt>
+                <dd>
+                  <CopyableAddress
+                    value={STELLAR_DEPLOYMENT.usdcIssuer}
+                    label="canonical USDC issuer"
+                  />
+                </dd>
+              </div>
+              <div>
+                <dt>Configured Stellar token contract (SAC)</dt>
+                <dd>
+                  <CopyableAddress value={TESTNET.token} label="configured Stellar USDC contract" />
+                </dd>
+              </div>
+              <div>
+                <dt>Verified deployment token contract</dt>
+                <dd>
+                  <CopyableAddress
+                    value={STELLAR_DEPLOYMENT.usdcToken}
+                    label="verified Stellar USDC contract"
+                  />
+                </dd>
+              </div>
+              <div>
+                <dt>Configured bridge router</dt>
+                <dd>
+                  <CopyableAddress value={TESTNET.router} label="configured bridge router" />
+                </dd>
+              </div>
+              <div>
+                <dt>Verified deployment router</dt>
+                <dd>
+                  <CopyableAddress
+                    value={STELLAR_DEPLOYMENT.router}
+                    label="verified deployment router"
+                  />
+                </dd>
+              </div>
+              <div>
+                <dt>Deployment identity</dt>
+                <dd role={deploymentMismatch ? "alert" : "status"}>
+                  {deploymentMismatch ??
+                    "Configured router and USDC contract match the verified deployment."}
+                </dd>
+              </div>
+              <div>
+                <dt>Selected destination representation</dt>
+                <dd>
+                  {route === 0
+                    ? "Circle CCTP native USDC (6 decimals)"
+                    : "Axelar ITS USDC representation (7 decimals)"}
+                  {destinationRepresentation ? (
+                    <CopyableAddress
+                      value={destinationRepresentation}
+                      label={
+                        route === 0
+                          ? "native destination USDC contract"
+                          : "ITS destination token"
+                      }
+                    />
+                  ) : (
+                    <span>Address is shown after the ITS lane is independently verified.</span>
+                  )}
+                </dd>
+              </div>
+              {route === 1 && (
+                <div>
+                  <dt>Axelar ITS service</dt>
+                  <dd>
+                    <CopyableAddress value={chain.its} label="Axelar ITS service contract" />
+                  </dd>
+                </div>
+              )}
+            </dl>
+            <p>
+              Stellar source confirmation starts processing; it does not confirm destination
+              delivery. Track the destination leg separately.
+            </p>
+          </details>
         </div>
         <div className={styles.recipientField}>
           <label htmlFor="recipient">
@@ -1280,6 +1531,28 @@ export function Bridge() {
             {`This amount exceeds the available route limit. Maximum bridgeable: ${formatUnits(conservativeMax, 7)} USDC.`}
           </p>
         )}
+        {quote?.conversion && reserveImpact && (
+          <p className={styles.assetNote} role={trustlineReserveInsufficient ? "alert" : "status"}>
+            {reserveImpact.addsTrustline
+              ? `Signing also opens your USDC trustline, locking ${formatUnits(reserveImpact.trustlineReserve, 7)} XLM (${reserveImpact.trustlineReserve} stroops) in reserve. `
+              : "You already hold a USDC trustline; no new reserve is locked. "}
+            Network fee: {formatUnits(reserveImpact.networkFee, 7)} XLM.
+            {reserveImpact.sourceSpend > 0n &&
+              ` Converting spends up to ${formatUnits(reserveImpact.sourceSpend, 7)} XLM.`}{" "}
+            Spendable XLM after signing: {formatUnits(reserveImpact.projectedSpendable, 7)} XLM.
+          </p>
+        )}
+        {quote?.conversion && needsTrustline && reserveError && (
+          <p className={styles.error}>{reserveError}</p>
+        )}
+        {result?.failure && (
+          <p role="status" className={styles.assetNote}>
+            {result.failure.stage === "broadcast"
+              ? "The source broadcast outcome is unknown."
+              : "Source confirmation is temporarily unavailable."}{" "}
+            Check the saved source hash before approving another transaction.
+          </p>
+        )}
         {busy && (
           <p role="status" className={styles.progress}>
             <LoaderCircle className={styles.spinner} size={16} aria-hidden="true" />
@@ -1343,7 +1616,9 @@ export function Bridge() {
                 !!insufficient ||
                 sourceBalance === undefined ||
                 activeSource.trustline === "frozen" ||
-                activeSource.trustline === "unauthorized"
+                activeSource.trustline === "unauthorized" ||
+                trustlineReserveUnknown ||
+                trustlineReserveInsufficient
               }
               onClick={() => {
                 if (!wallet.address || !quote || (!quote.conversion && !simulation)) return;
@@ -1356,7 +1631,7 @@ export function Bridge() {
                   key: quoteKey,
                   quote,
                   simulation,
-                  addTrustline: !balances.some((asset) => asset.id === USDC.id),
+                  addTrustline: needsTrustline,
                 });
                 setReviewing(true);
               }}
@@ -1474,6 +1749,21 @@ export function Bridge() {
               addTrustline={reviewed.addTrustline}
             />
           )}
+          {reviewed.quote.conversion && reviewedImpact && (
+            <p
+              className={styles.reviewNote}
+              role={reviewedReserveInsufficient ? "alert" : undefined}
+            >
+              {reviewedImpact.addsTrustline
+                ? `This signature also opens your USDC trustline, locking ${formatUnits(reviewedImpact.trustlineReserve, 7)} XLM (${reviewedImpact.trustlineReserve} stroops) as reserve.`
+                : "Your USDC trustline already exists; no new reserve is locked."}{" "}
+              Network fee {formatUnits(reviewedImpact.networkFee, 7)} XLM
+              {reviewedImpact.sourceSpend > 0n &&
+                `, up to ${formatUnits(reviewedImpact.sourceSpend, 7)} XLM converted`}
+              . Spendable XLM after signing: {formatUnits(reviewedImpact.projectedSpendable, 7)}{" "}
+              XLM.
+            </p>
+          )}
           <QuoteDetails quote={reviewed.quote.bridge} simulation={reviewed.simulation} />
           {reviewed.quote.conversion && (
             <p className={styles.reviewNote}>
@@ -1483,7 +1773,15 @@ export function Bridge() {
             </p>
           )}
           <p className={styles.reviewNote}>
+            Recovery saves source hashes in this browser. Private sessions and browser cleanup can
+            remove them; keep a copy of the signed source hash before leaving.
+          </p>
+          <p className={styles.reviewNote}>
             Source confirmation starts the transfer. Destination delivery is verified separately.
+          </p>
+          <p className={styles.reviewNote}>
+            The signed transaction expires after {TRANSACTION_TIMEOUT_SECONDS} seconds. Expired
+            signatures are never broadcast; review again to create a fresh envelope.
           </p>
           {reviewed.simulation && (
             <p className={styles.address}>
@@ -1500,7 +1798,10 @@ export function Bridge() {
             type="button"
             className={styles.primary}
             disabled={
-              !reviewed.quote.conversion && (simulating || !!simulationError || !simulation)
+              busy ||
+              reviewedReserveInsufficient ||
+              (!!reviewed.quote.conversion && !reserve) ||
+              (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
             }
             onClick={() => {
               void submit();

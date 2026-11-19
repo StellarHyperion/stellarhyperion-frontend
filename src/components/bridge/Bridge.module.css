@@ -173,6 +173,48 @@
   color: var(--text-secondary);
   line-height: 1.5;
 }
+.identityDetails {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.identityDetails summary {
+  min-block-size: 44px;
+  padding-block: 12px;
+  width: fit-content;
+  cursor: pointer;
+}
+.identityDetails > p {
+  margin: 0;
+}
+.identityDetails dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+.identityDetails dl div {
+  display: grid;
+  gap: 3px;
+}
+.identityDetails dt {
+  font-family: var(--face-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.identityDetails dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.identityDetails dd [class*="copyAddress"] {
+  display: flex;
+}
+.identityDetails dd [role="alert"] {
+  color: var(--state-failed);
+}
 .connector {
   display: grid;
   place-items: center;
@@ -334,10 +376,12 @@
   display: grid;
   gap: var(--space-1);
   color: var(--text-secondary);
-  font-size: var(--type-mono-sm-size);
+  font-size: 0.875rem;
 }
 
 .pathComparison summary {
+  min-block-size: 44px;
+  padding-block: 12px;
   width: fit-content;
   cursor: pointer;
   color: var(--text-primary);
