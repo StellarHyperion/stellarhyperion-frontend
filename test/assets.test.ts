@@ -3,6 +3,12 @@ import { Account, Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
 import {
   quoteConversion,
   accountAssets,
+  accountTrustlineReserve,
+  trustlineReservePreview,
+  trustlineReserveImpact,
+  submitConversion,
+  type Conversion,
+  type SourceAsset,
   conversionExecutionIntent,
   conversionRoute,
   conversionOperations,
@@ -12,7 +18,6 @@ import {
   searchAssets,
   spendableBalance,
   stellarAsset,
-  submitConversion,
   suggestSourceSpend,
   USDC,
   XLM,
@@ -392,6 +397,149 @@ describe("Independently verified testnet bridge lanes", () => {
       "base-sepolia": [0],
       "arc-testnet": [0],
     });
+  });
+});
+describe("Trustline reserve and network fee disclosure", () => {
+  it("uses observed base reserve and liabilities, rejecting invalid reserve counters", () => {
+    const reserve = trustlineReservePreview(40000000n, 2, 1, 1, 6000000n, 10000000n);
+    expect(reserve.currentMinimumBalance).toBe(24000000n);
+    expect(reserve.availableAfterTrustline).toBe(0n);
+    expect(() => trustlineReservePreview(40000000n, Number.NaN)).toThrow(/Invalid/);
+    expect(() => trustlineReservePreview(40000000n, 2.5)).toThrow(/Invalid/);
+    expect(() => trustlineReservePreview(40000000n, 0, 0, 9)).toThrow(/Invalid/);
+  });
+
+  it("reads the account reserve needed for an atomic trustline from real Horizon balances", async () => {
+    // Horizon's account resource has no top-level `balance` field; the native balance lives in
+    // `balances` alongside every other trustline, exactly like a real funded testnet account.
+    const request = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          subentry_count: 2,
+          num_sponsoring: 0,
+          num_sponsored: 0,
+          balances: [
+            {
+              asset_type: "credit_alphanum4",
+              asset_code: "USDC",
+              asset_issuer: USDC.issuer,
+              balance: "0.0000000",
+              is_authorized: true,
+            },
+            { asset_type: "native", balance: "3.0000000" },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", request);
+    request.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ _embedded: { records: [{ base_reserve_in_stroops: 5000000 }] } }),
+      ),
+    );
+    await expect(accountTrustlineReserve(TESTNET.reader)).resolves.toMatchObject({
+      nativeBalance: 30000000n,
+      currentMinimumBalance: 20000000n,
+      trustlineReserve: 5000000n,
+      availableAfterTrustline: 5000000n,
+    });
+    expect(trustlineReservePreview(30000000n, 2).availableAfterTrustline).toBe(5000000n);
+  });
+  it("refuses an account response with no native balance entry instead of reading undefined", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ subentry_count: 0, balances: [] }))),
+    );
+    await expect(accountTrustlineReserve(TESTNET.reader)).rejects.toThrow(
+      "Invalid Stellar account reserve data.",
+    );
+  });
+});
+describe("Trustline reserve and network fee disclosure", () => {
+  const foo: SourceAsset = {
+    id: `FOO:${USDC.issuer}`,
+    code: "FOO",
+    issuer: USDC.issuer,
+    verification: "wallet-trustline",
+    trustline: "present",
+  };
+  it("locks a trustline reserve and the signed transaction's network fee out of spendable XLM", () => {
+    const conversion: Conversion = {
+      source: foo,
+      sourceMax: 3000000n,
+      usdcAmount: 2000000n,
+      path: [],
+    };
+    const exact = trustlineReserveImpact(trustlineReservePreview(20000200n, 1), conversion, true);
+    expect(exact.addsTrustline).toBe(true);
+    expect(exact.networkFee).toBe(200n);
+    expect(exact.sourceSpend).toBe(0n);
+    expect(exact.projectedSpendable).toBe(0n);
+    const oneStroopShort = trustlineReserveImpact(
+      trustlineReservePreview(20000199n, 1),
+      conversion,
+      true,
+    );
+    expect(oneStroopShort.projectedSpendable).toBe(-1n);
+  });
+  it("also counts the XLM a conversion itself spends when the source asset is XLM", () => {
+    const conversion: Conversion = {
+      source: XLM,
+      sourceMax: 30000000n,
+      usdcAmount: 2000000n,
+      path: [],
+    };
+    const impact = trustlineReserveImpact(trustlineReservePreview(50000200n, 0), conversion, true);
+    expect(impact.sourceSpend).toBe(30000000n);
+    expect(impact.projectedSpendable).toBe(5000000n);
+  });
+  it("skips the second reserve and the second operation fee once the trustline already exists", () => {
+    const conversion: Conversion = { source: foo, sourceMax: 1n, usdcAmount: 1n, path: [] };
+    const impact = trustlineReserveImpact(trustlineReservePreview(10000100n, 1), conversion, false);
+    expect(impact.addsTrustline).toBe(false);
+    expect(impact.networkFee).toBe(100n);
+    expect(impact.projectedSpendable).toBe(-5000000n);
+  });
+  it("refuses to ask the wallet to sign when the reserve for the combined transaction is short", async () => {
+    // submitConversion reads the account twice (once for the source balance, once for the
+    // reserve), so each fetch call needs its own Response body rather than one reused instance.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) =>
+        url.includes("/ledgers?")
+          ? Promise.resolve(
+              new Response(
+                JSON.stringify({ _embedded: { records: [{ base_reserve_in_stroops: 5000000 }] } }),
+              ),
+            )
+          : new Response(
+              JSON.stringify({
+                subentry_count: 1,
+                num_sponsoring: 0,
+                num_sponsored: 0,
+                balances: [
+                  { asset_type: "native", balance: "2.0000199" },
+                  {
+                    asset_type: "credit_alphanum4",
+                    asset_code: foo.code,
+                    asset_issuer: foo.issuer,
+                    balance: "5.0000000",
+                    is_authorized: true,
+                  },
+                ],
+              }),
+            ),
+      ),
+    );
+    const conversion: Conversion = {
+      source: foo,
+      sourceMax: 1000000n,
+      usdcAmount: 900000n,
+      path: [],
+    };
+    const sign = vi.fn(() => Promise.resolve({ signedTxXdr: "unused" }));
+    await expect(submitConversion(TESTNET.reader, conversion, sign)).rejects.toThrow(/reserve/i);
+    expect(sign).not.toHaveBeenCalled();
   });
 });
 describe("Interrupted transfer recovery", () => {
