@@ -69,6 +69,13 @@ export interface PendingClaim {
   token: string;
   amount: bigint;
   settled: boolean;
+  sourceTxHash: string | null;
+  sourceTransferId: string | null;
+}
+
+function optionalProvenance(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return value;
 }
 
 function server() {
@@ -612,6 +619,8 @@ export async function getClaim(id: bigint): Promise<PendingClaim> {
     token: address(result.token),
     amount: integer(result.amount),
     settled: result.settled === true,
+    sourceTxHash: optionalProvenance(result.source_tx_hash ?? result.origin_tx_hash),
+    sourceTransferId: optionalProvenance(result.source_transfer_id ?? result.transfer_id),
   };
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchTransferByTx, fetchTransfers } from "../src/api/backend";
+import { fetchTransferByTx, fetchTransfers, normalizeTransfersResponse } from "../src/api/backend";
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -33,6 +33,40 @@ describe("Real indexer client", () => {
     expect(await fetchTransfers({ search: "hash & recipient", offset: "40" })).toEqual(payload);
     expect(fetcher.mock.calls[0]?.[0]).toBe(
       "https://indexer.example/v1/transfers?search=hash+%26+recipient&offset=40",
+    );
+  });
+  it("renders the supported older data shape without inventing evidence", () => {
+    const result = normalizeTransfersResponse({
+      data: [
+        {
+          id: "legacy-1",
+          stage: "initiated",
+          route: 1,
+          origin: {
+            chain: "stellar",
+            nonce: "7",
+            sender: "G...",
+            token: "C...",
+            grossAmount: "100",
+            fee: "1",
+            netAmount: "99",
+            block: "1",
+            txHash: "a".repeat(64),
+            observedAt: "2026-01-01T00:00:00Z",
+          },
+          destination: {
+            chain: "sepolia",
+            recipient: "0x1111111111111111111111111111111111111111",
+            delivered: false,
+          },
+        },
+      ],
+    });
+    expect(result.transfers).toHaveLength(1);
+    expect(result.transfers[0]?.destination.amount).toBeNull();
+    expect(result.transfers[0]?.claim).toBeNull();
+    expect(result.transfers[0]?.destination.recipient).toBe(
+      "0x1111111111111111111111111111111111111111",
     );
   });
 });

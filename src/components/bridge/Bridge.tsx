@@ -182,6 +182,9 @@ function PendingTransferCard({
         {checkpoint.txHash.slice(0, 12)}...{checkpoint.txHash.slice(-8)}{" "}
         <ArrowUpRight size={14} aria-hidden="true" />
       </a>
+      <p>
+        Stage: {checkpoint.stage} · Network: Stellar Testnet · Public transaction reference above
+      </p>
       {checkpoint.stage === "bridge" && (
         <Link href={`/transfers/${checkpoint.txHash}`}>
           Track transfer <ArrowRight size={14} aria-hidden="true" />
@@ -254,7 +257,7 @@ function PendingTransferCard({
 
 export function Bridge() {
   const wallet = useStellarWallet();
-  const checkpoint = useTransferCheckpoint();
+  const checkpoint = useTransferCheckpoint(wallet.address ?? undefined);
   const [source, setSource] = useState<SourceAsset>(USDC);
   const [destination, setDestination] = useState<DestinationKey>("sepolia");
   const [route, setRoute] = useState<BridgeRoute>(1);
@@ -429,7 +432,7 @@ export function Bridge() {
     }
   };
   const reset = () => {
-    saveCheckpoint(null);
+    saveCheckpoint(null, wallet.address ?? undefined);
     setResult(null);
     setError(null);
     setAmount("");
@@ -875,7 +878,18 @@ export function ClaimRecovery() {
           )}
           {claim && (
             <>
+              <p className={styles.reviewNote}>
+                Verified from the current on-chain claim. The settler pays the recorded recipient,
+                never the wallet that performs recovery.
+              </p>
               <p className={styles.address}>Recipient: {claim.recipient}</p>
+              <p>
+                Source transfer: {claim.sourceTxHash ?? "unknown (not supplied by the contract)"}
+              </p>
+              <p>
+                Source association:{" "}
+                {claim.sourceTransferId ?? "unknown (not supplied by the contract)"}
+              </p>
               <p>
                 Amount:{" "}
                 {claim.token === TESTNET.token
