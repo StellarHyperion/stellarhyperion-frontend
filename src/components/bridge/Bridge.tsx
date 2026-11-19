@@ -35,6 +35,7 @@ import {
   submitSettleClaim,
   submitSettleClaims,
   validateRecipient,
+  quoteBreakdown,
   type LaneState,
   type LiveQuote,
   type PendingClaim,
@@ -194,15 +195,29 @@ function QuoteDetails({
 }) {
   const resourceFee = simulation?.resourceFee;
   const networkFee = simulation?.networkFee;
+  const breakdown = quoteBreakdown(quote);
+
   return (
     <dl className={styles.summary}>
       <div>
-        <dt>Bridge amount</dt>
-        <dd>{formatUnits(quote.grossAmount, 7)} USDC</dd>
+        <dt>Requested source amount</dt>
+        <dd>{formatUnits(breakdown.requestedSourceAmount, 7)} USDC</dd>
       </div>
       <div>
-        <dt>Hyperion fee</dt>
-        <dd>{formatUnits(quote.fee, 7)} USDC</dd>
+        <dt>Actual source debit</dt>
+        <dd>{formatUnits(breakdown.actualSourceDebit, 7)} USDC</dd>
+      </div>
+      <div>
+        <dt>Protocol fee</dt>
+        <dd>{formatUnits(breakdown.protocolFee, 7)} USDC</dd>
+      </div>
+      <div>
+        <dt>Representable bridge amount</dt>
+        <dd>{formatUnits(breakdown.representableBridgeAmount, 7)} USDC</dd>
+      </div>
+      <div>
+        <dt>Retained precision dust</dt>
+        <dd>{formatUnits(breakdown.retainedDust, 7)} USDC</dd>
       </div>
       <div>
         <dt>{quote.route === 0 ? "Circle forwarding budget" : "Axelar relay gas budget"}</dt>
