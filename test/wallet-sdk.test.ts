@@ -349,6 +349,32 @@ describe("An outstanding approval resolves to an explicit failure instead of han
 });
 
 describe("Connection generation tracking", () => {
+  it("releases a superseded account request before its old adapter responds", async () => {
+    let finishOld!: (value: { address: string }) => void;
+    api.freighter.requestAccess.mockImplementationOnce(
+      () => new Promise((resolve) => (finishOld = resolve)),
+    );
+    const tracker = createGenerationTracker();
+    const oldRequest = tracker.run(() => walletAddress("freighter"));
+    await vi.waitFor(() => expect(api.freighter.requestAccess).toHaveBeenCalled());
+    tracker.advance();
+    await expect(oldRequest).rejects.toThrow("wallet connection changed");
+    await expect(tracker.run(() => walletAddress("freighter"))).resolves.toBe(signer.publicKey());
+    finishOld({ address: Keypair.random().publicKey() });
+    await Promise.resolve();
+    await expect(oldRequest).rejects.toThrow("wallet connection changed");
+  });
+
+  it("never starts an old generation's deferred action after reconnection", async () => {
+    const tracker = createGenerationTracker();
+    const action = vi.fn(() => Promise.resolve("stale"));
+    const oldRequest = tracker.run(action);
+    tracker.advance();
+    await expect(oldRequest).rejects.toThrow("wallet connection changed");
+    expect(action).not.toHaveBeenCalled();
+    await expect(tracker.run(() => Promise.resolve("current"))).resolves.toBe("current");
+  });
+
   it("starts at zero and advances monotonically", () => {
     const tracker = createGenerationTracker();
     expect(tracker.value()).toBe(0);
