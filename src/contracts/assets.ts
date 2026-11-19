@@ -21,6 +21,7 @@ export interface SourceAsset {
   balance?: string;
   sellingLiabilities?: string;
   available?: string;
+  nativeMinimumReserve?: string;
 }
 export type AssetVerification =
   "configured" | "wallet-trustline" | "horizon-search" | "horizon-path";
@@ -124,6 +125,23 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
   if (!StrKey.isValidEd25519PublicKey(account)) throw new Error("Invalid Stellar account.");
   const body = await horizon(`/accounts/${account}`, signal);
   if (!Array.isArray(body.balances)) throw new Error("Invalid Stellar account balances.");
+  let nativeMinimumReserve: bigint | null = null;
+  const counts = [body.subentry_count, body.num_sponsoring, body.num_sponsored];
+  if (
+    counts.every((value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  ) {
+    const ledger = records(await horizon("/ledgers?order=desc&limit=1", signal))[0];
+    const base = ledger?.base_reserve_in_stroops;
+    const entries =
+      2 + Number(body.subentry_count) + Number(body.num_sponsoring) - Number(body.num_sponsored);
+    if (
+      Number.isSafeInteger(entries) &&
+      entries >= 0 &&
+      ((typeof base === "number" && Number.isSafeInteger(base) && base > 0) ||
+        (typeof base === "string" && /^[1-9]\d*$/.test(base)))
+    )
+      nativeMinimumReserve = BigInt(entries) * BigInt(base);
+  }
   return body.balances.flatMap((entry: Record<string, unknown>) => {
     if (typeof entry.balance !== "string") return [];
     if (entry.asset_type === "native") {
@@ -131,10 +149,15 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
         typeof entry.selling_liabilities === "string" ? entry.selling_liabilities : "0.0000000";
       const total = parseUnits(entry.balance, 7);
       const liabilities = parseUnits(sellingLiabilities, 7);
-      const availableUnits = total > liabilities ? total - liabilities : 0n;
+      const afterReserve =
+        nativeMinimumReserve === null ? 0n : total - liabilities - nativeMinimumReserve;
+      const availableUnits = afterReserve > 0n ? afterReserve : 0n;
       return [
         {
           ...XLM,
+          ...(nativeMinimumReserve === null
+            ? {}
+            : { nativeMinimumReserve: formatSpendableUnits(nativeMinimumReserve) }),
           balance: entry.balance,
           sellingLiabilities,
           available: formatSpendableUnits(availableUnits),

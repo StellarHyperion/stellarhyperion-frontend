@@ -13,6 +13,11 @@ import {
 import { toHex } from "@hyperion/protocol";
 import { submitSettleClaim, submitOperation, simulateOperation } from "../src/contracts/stellar";
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
+import {
+  planMaxUsdcAmount,
+  planMaxSourceAmount,
+  XLM_MINIMUM_RESERVE,
+} from "../src/lib/max-planner";
 
 // Deterministic test-only signer; this test never connects to a network.
 const key = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(7));
@@ -311,5 +316,226 @@ describe("Signed Stellar submission failure boundaries", () => {
       }),
     ).rejects.toThrow("switched");
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("Spendable-balance maximum amount planner", () => {
+  // Shared fixture values in 7-decimal (stroop-equivalent) units.
+  // 100 USDC = 1_000_000_000n, 10 XLM = 100_000_000n, 50 USDC flow cap = 500_000_000n.
+  const usdc100 = 1_000_000_000n;
+  const xlm10 = 100_000_000n;
+  const flow50 = 500_000_000n;
+  const gas1xlm = 10_000_000n; // 1 XLM estimated relay gas (ITS route)
+  const gas1usdc = 10_000_000n; // 1 USDC estimated relay gas (CCTP route)
+
+  describe("planMaxUsdcAmount - ITS route (route 1)", () => {
+    it("returns min(usdcSpendable, flowAvailable) when XLM covers gas and reserve", () => {
+      const result = planMaxUsdcAmount({
+        route: 1,
+        usdcSpendable: usdc100,
+        xlmSpendable: xlm10,
+        flowAvailable: flow50,
+        estimatedRelayGas: gas1xlm,
+      });
+      // xlm10 (100_000_000) - relayBudget(gas1xlm) - XLM_MINIMUM_RESERVE
+      // relayBudget(10_000_000) = ceil(10_000_000 * 110 / 100) = 11_000_000
+      // 100_000_000 - 11_000_000 - 20_000_000 = 69_000_000 >= 0 -> ok
+      // cap = min(usdc100, flow50) = flow50
+      expect(result).toBe(flow50);
+    });
+
+    it("caps at usdcSpendable when it is below flowAvailable", () => {
+      const result = planMaxUsdcAmount({
+        route: 1,
+        usdcSpendable: 300_000_000n, // 30 USDC
+        xlmSpendable: xlm10,
+        flowAvailable: flow50,
+        estimatedRelayGas: gas1xlm,
+      });
+      expect(result).toBe(300_000_000n);
+    });
+
+    it("returns null when XLM cannot cover relay gas and minimum reserve", () => {
+      // xlmSpendable just below threshold: relayBudget(gas1xlm) + XLM_MINIMUM_RESERVE
+      // = 11_000_000 + 20_000_000 = 31_000_000; give 30_000_000 -> insufficient
+      const result = planMaxUsdcAmount({
+        route: 1,
+        usdcSpendable: usdc100,
+        xlmSpendable: 30_000_000n,
+        flowAvailable: flow50,
+        estimatedRelayGas: gas1xlm,
+      });
+      expect(result).toBeNull();
+    });
+
+    it("returns null when estimatedRelayGas is zero (missing pricing)", () => {
+      const result = planMaxUsdcAmount({
+        route: 1,
+        usdcSpendable: usdc100,
+        xlmSpendable: xlm10,
+        flowAvailable: flow50,
+        estimatedRelayGas: 0n,
+      });
+      expect(result).toBeNull();
+    });
+
+    it("returns null when flowAvailable is zero", () => {
+      const result = planMaxUsdcAmount({
+        route: 1,
+        usdcSpendable: usdc100,
+        xlmSpendable: xlm10,
+        flowAvailable: 0n,
+        estimatedRelayGas: gas1xlm,
+      });
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("planMaxUsdcAmount - CCTP route (route 0)", () => {
+    it("subtracts relay budget from USDC balance and caps at flowAvailable", () => {
+      // relayBudget(gas1usdc) = 11_000_000
+      // usdcAfterRelay = usdc100 - 11_000_000 = 989_000_000
+      // cap = min(989_000_000, flow50) = flow50
+      const result = planMaxUsdcAmount({
+        route: 0,
+        usdcSpendable: usdc100,
+        xlmSpendable: xlm10,
+        flowAvailable: flow50,
+        estimatedRelayGas: gas1usdc,
+      });
+      expect(result).toBe(flow50);
+    });
+
+    it("caps at usdcAfterRelay when it is below flowAvailable", () => {
+      const tinyUsdc = 15_000_000n; // 1.5 USDC
+      // relayBudget(gas1usdc) = 11_000_000
+      // usdcAfterRelay = 15_000_000 - 11_000_000 = 4_000_000
+      // cap = min(4_000_000, flow50) = 4_000_000
+      const result = planMaxUsdcAmount({
+        route: 0,
+        usdcSpendable: tinyUsdc,
+        xlmSpendable: xlm10,
+        flowAvailable: flow50,
+        estimatedRelayGas: gas1usdc,
+      });
+      expect(result).toBe(4_000_000n);
+    });
+
+    it("returns null when relay budget exceeds usdcSpendable", () => {
+      // usdcSpendable = 5_000_000 (0.5 USDC); relayBudget = 11_000_000 -> negative
+      const result = planMaxUsdcAmount({
+        route: 0,
+        usdcSpendable: 5_000_000n,
+        xlmSpendable: xlm10,
+        flowAvailable: flow50,
+        estimatedRelayGas: gas1usdc,
+      });
+      expect(result).toBeNull();
+    });
+
+    it("returns null when estimatedRelayGas is zero (missing pricing)", () => {
+      const result = planMaxUsdcAmount({
+        route: 0,
+        usdcSpendable: usdc100,
+        xlmSpendable: xlm10,
+        flowAvailable: flow50,
+        estimatedRelayGas: 0n,
+      });
+      expect(result).toBeNull();
+    });
+
+    it("requires native transaction fee funds on the CCTP route", () => {
+      // CCTP forwarding uses USDC, but its transaction still needs native fee funds.
+      const result = planMaxUsdcAmount({
+        route: 0,
+        usdcSpendable: usdc100,
+        xlmSpendable: 0n,
+        flowAvailable: flow50,
+        estimatedRelayGas: gas1usdc,
+      });
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("planMaxUsdcAmount - flowAvailable cap", () => {
+    it("never exceeds flowAvailable regardless of balance on ITS route", () => {
+      const result = planMaxUsdcAmount({
+        route: 1,
+        usdcSpendable: 10_000_000_000n, // 1000 USDC
+        xlmSpendable: 1_000_000_000n, // 100 XLM
+        flowAvailable: flow50,
+        estimatedRelayGas: gas1xlm,
+      });
+      expect(result).toBe(flow50);
+    });
+
+    it("never exceeds flowAvailable regardless of balance on CCTP route", () => {
+      const result = planMaxUsdcAmount({
+        route: 0,
+        usdcSpendable: 10_000_000_000n,
+        xlmSpendable: xlm10,
+        flowAvailable: flow50,
+        estimatedRelayGas: gas1usdc,
+      });
+      expect(result).toBe(flow50);
+    });
+  });
+
+  describe("planMaxSourceAmount - non-USDC source", () => {
+    it("returns spendableSourceUnits when trustline is present", () => {
+      const result = planMaxSourceAmount({
+        spendableSourceUnits: 500_000_000n,
+        trustlineOk: true,
+      });
+      expect(result).toBe(500_000_000n);
+    });
+
+    it("returns spendableSourceUnits when trustline is native (XLM)", () => {
+      const result = planMaxSourceAmount({
+        spendableSourceUnits: 200_000_000n,
+        trustlineOk: true,
+      });
+      expect(result).toBe(200_000_000n);
+    });
+
+    it("returns null when trustline is frozen", () => {
+      const result = planMaxSourceAmount({
+        spendableSourceUnits: 500_000_000n,
+        trustlineOk: false,
+      });
+      expect(result).toBeNull();
+    });
+
+    it("returns null when spendable balance is zero", () => {
+      const result = planMaxSourceAmount({
+        spendableSourceUnits: 0n,
+        trustlineOk: true,
+      });
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("Exact integer preservation", () => {
+    it("XLM_MINIMUM_RESERVE is a positive bigint with 7-decimal stroop precision", () => {
+      expect(typeof XLM_MINIMUM_RESERVE).toBe("bigint");
+      expect(XLM_MINIMUM_RESERVE).toBe(20_000_000n);
+    });
+
+    it("planMaxUsdcAmount preserves exact bigint arithmetic without float rounding", () => {
+      // Use an amount that would lose precision under float arithmetic.
+      const oddBalance = 999_999_999n;
+      const oddFlow = 999_999_997n;
+      const result = planMaxUsdcAmount({
+        route: 0,
+        usdcSpendable: oddBalance,
+        xlmSpendable: xlm10,
+        flowAvailable: oddFlow,
+        estimatedRelayGas: gas1usdc,
+      });
+      // relayBudget(10_000_000) = 11_000_000
+      // usdcAfterRelay = 999_999_999 - 11_000_000 = 988_999_999
+      // cap = min(988_999_999, 999_999_997) = 988_999_999
+      expect(result).toBe(988_999_999n);
+    });
   });
 });
