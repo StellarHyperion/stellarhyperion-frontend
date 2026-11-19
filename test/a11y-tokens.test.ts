@@ -1,3 +1,4 @@
+import { Header, ThemeSelector } from "../src/components/nav";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -34,8 +35,7 @@ describe("Accessibility and Design Token Audits", () => {
     expect(globalsCss).toContain("color-scheme: light;");
   });
 
-  it("exports Header and ThemeSelector with System, Dark, and Light options", async () => {
-    const { Header, ThemeSelector } = await import("../src/components/nav");
+  it("exports Header and ThemeSelector with System, Dark, and Light options", () => {
     expect(Header).toBeDefined();
     expect(ThemeSelector).toBeDefined();
   });
