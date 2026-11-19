@@ -1074,7 +1074,7 @@ export async function resolveCheckpointTransaction(
           ? false
           : null;
     if (expectedSuccess !== null) {
-      if (rpcResult.txHash !== checkpoint.txHash || rpcResult.feeBump)
+      if (rpcResult.txHash !== checkpoint.txHash || ("feeBump" in rpcResult && rpcResult.feeBump))
         return unknownRecovery("RPC returned conflicting transaction identity.");
       const envelopeXdr =
         "envelopeXdr" in rpcResult ? rpcResult.envelopeXdr.toXdr("base64") : undefined;
