@@ -14,6 +14,9 @@ export interface StellarWalletContextValue {
   isConnected: boolean;
   isConnecting: boolean;
   error: string | null;
+  rememberedWallet: string | null;
+  preferenceError: string | null;
+  clearRememberedWallet: () => void;
   pendingSigningRequest: PendingSigningRequest | null;
   connect: () => Promise<string | null>;
   disconnect: () => Promise<void>;
