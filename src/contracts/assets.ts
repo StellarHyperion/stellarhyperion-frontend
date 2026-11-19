@@ -36,6 +36,7 @@ export interface SourceAsset {
   available?: string;
   /** Native XLM only: the account's live minimum reserve. Absent when it could not be confirmed. */
   nativeMinimumReserve?: string;
+  nativeFeeMargin?: string;
   metadata?: PublicAssetMetadata;
 }
 export type AssetVerification =
@@ -164,6 +165,8 @@ export function trustlineReservePreview(
     nativeBalance < 0n ||
     sellingLiabilities < 0n ||
     baseReserve <= 0n ||
+    baseReserve > 0xffffffffn ||
+    !Number.isSafeInteger(2 + subentryCount + numSponsoring - numSponsored) ||
     ![subentryCount, numSponsoring, numSponsored].every((v) => Number.isSafeInteger(v) && v >= 0) ||
     2 + subentryCount + numSponsoring - numSponsored < 0
   )
@@ -202,21 +205,18 @@ export async function accountTrustlineReserve(
   );
   if (!native) throw new Error("Invalid Stellar account reserve data.");
   const ledger = records(await horizon("/ledgers?order=desc&limit=1", signal))[0];
-  if (
-    !ledger ||
-    !Number.isSafeInteger(ledger.base_reserve_in_stroops) ||
-    Number(ledger.base_reserve_in_stroops) <= 0
-  )
-    throw new Error("The current Stellar base reserve is unavailable.");
+  const baseReserve = ledgerStroops(ledger?.base_reserve_in_stroops);
+  if (typeof body.num_sponsoring !== "number" || typeof body.num_sponsored !== "number")
+    throw new Error("Invalid Stellar account reserve data.");
   const selling = (native as unknown as Record<string, unknown>).selling_liabilities;
   if (selling !== undefined && typeof selling !== "string")
     throw new Error("Invalid Stellar liabilities.");
   return trustlineReservePreview(
     parseUnits(native.balance, 7),
     body.subentry_count,
-    typeof body.num_sponsoring === "number" ? body.num_sponsoring : 0,
-    typeof body.num_sponsored === "number" ? body.num_sponsored : 0,
-    BigInt(Number(ledger.base_reserve_in_stroops)),
+    body.num_sponsoring,
+    body.num_sponsored,
+    baseReserve,
     selling === undefined ? 0n : parseUnits(selling, 7),
   );
 }
@@ -262,21 +262,23 @@ interface LedgerReserveParams {
   baseFee: bigint;
   baseReserve: bigint;
 }
+function ledgerStroops(value: unknown): bigint {
+  if (!(
+    (typeof value === "number" && Number.isSafeInteger(value) && value > 0) ||
+    (typeof value === "string" && /^[1-9]\d{0,9}$/.test(value))
+  ))
+    throw new Error(RESERVE_UNAVAILABLE);
+  const amount = BigInt(value);
+  if (amount > 0xffffffffn) throw new Error(RESERVE_UNAVAILABLE);
+  return amount;
+}
 /** The network's current base fee and base reserve, read live from the latest ledger. */
 async function ledgerReserveParams(signal?: AbortSignal): Promise<LedgerReserveParams> {
   const [ledger] = records(await horizon("/ledgers?order=desc&limit=1", signal));
-  const baseFee = ledger?.base_fee_in_stroops;
-  const baseReserve = ledger?.base_reserve_in_stroops;
-  if (
-    typeof baseFee !== "number" ||
-    typeof baseReserve !== "number" ||
-    !Number.isInteger(baseFee) ||
-    !Number.isInteger(baseReserve) ||
-    baseFee <= 0 ||
-    baseReserve <= 0
-  )
-    throw new Error(RESERVE_UNAVAILABLE);
-  return { baseFee: BigInt(baseFee), baseReserve: BigInt(baseReserve) };
+  return {
+    baseFee: ledgerStroops(ledger?.base_fee_in_stroops),
+    baseReserve: ledgerStroops(ledger?.base_reserve_in_stroops),
+  };
 }
 
 /**
@@ -291,7 +293,15 @@ export function minimumXlmReserve(
   baseReserve: bigint,
 ): bigint {
   const entries = 2 + subentryCount + numSponsoring - numSponsored;
-  if (!Number.isInteger(entries) || entries < 2)
+  if (
+    ![subentryCount, numSponsoring, numSponsored].every(
+      (count) => Number.isSafeInteger(count) && count >= 0,
+    ) ||
+    !Number.isSafeInteger(entries) ||
+    entries < 0 ||
+    baseReserve <= 0n ||
+    baseReserve > 0xffffffffn
+  )
     throw new Error("Invalid Stellar reserve accounting.");
   return BigInt(entries) * baseReserve;
 }
@@ -303,6 +313,8 @@ export function spendableXlm(
   reserve: bigint,
   feeMargin: bigint,
 ): bigint {
+  if ([balance, sellingLiabilities, reserve, feeMargin].some((amount) => amount < 0n))
+    throw new Error("Invalid Stellar spendable balance data.");
   const spendable = balance - sellingLiabilities - reserve - feeMargin;
   return spendable > 0n ? spendable : 0n;
 }
@@ -316,9 +328,31 @@ export function xlmShortfall(
   native: SourceAsset | undefined,
   required: bigint,
 ): "ok" | "insufficient" | "unknown" {
-  if (required <= 0n) return "ok";
-  if (native?.nativeMinimumReserve === undefined) return "unknown";
-  return parseUnits(native.available ?? "0.0000000", 7) >= required ? "ok" : "insufficient";
+  if (
+    required < 0n ||
+    native?.id !== XLM.id ||
+    native.code !== XLM.code ||
+    native.issuer !== null ||
+    native.nativeMinimumReserve === undefined ||
+    native.nativeFeeMargin === undefined ||
+    native.balance === undefined ||
+    native.available === undefined
+  )
+    return "unknown";
+  try {
+    const balance = parseUnits(native.balance, 7);
+    const liabilities = parseUnits(native.sellingLiabilities ?? "0", 7);
+    const reserve = parseUnits(native.nativeMinimumReserve, 7);
+    const feeMargin = parseUnits(native.nativeFeeMargin, 7);
+    const available = parseUnits(native.available, 7);
+    if ([balance, liabilities, reserve, available].some((amount) => amount < 0n) || feeMargin <= 0n)
+      return "unknown";
+    return balance - liabilities - reserve - feeMargin >= required && available >= required
+      ? "ok"
+      : "insufficient";
+  } catch {
+    return "unknown";
+  }
 }
 
 export async function accountAssets(account: string, signal?: AbortSignal): Promise<SourceAsset[]> {
@@ -336,34 +370,42 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
     Number.isSafeInteger(body.num_sponsoring) &&
     body.num_sponsoring >= 0
       ? body.num_sponsoring
-      : 0;
+      : null;
   const numSponsored =
     typeof body.num_sponsored === "number" &&
     Number.isSafeInteger(body.num_sponsored) &&
     body.num_sponsored >= 0
       ? body.num_sponsored
-      : 0;
+      : null;
   const reserve =
-    subentryCount === null
+    subentryCount === null || numSponsoring === null || numSponsored === null
       ? null
       : await ledgerReserveParams(signal)
-          .then((params) => ({ params, subentryCount, numSponsoring, numSponsored }))
-          .catch(() => null);
+          .then((params) => ({
+            params,
+            minReserve: minimumXlmReserve(
+              subentryCount,
+              numSponsoring,
+              numSponsored,
+              params.baseReserve,
+            ),
+          }))
+          .catch((cause: unknown) => {
+            if (signal?.aborted) throw cause;
+            return null;
+          });
   return body.balances.flatMap((entry: Record<string, unknown>): SourceAsset[] => {
     if (typeof entry.balance !== "string") return [];
     if (entry.asset_type === "native") {
+      if (entry.selling_liabilities !== undefined && typeof entry.selling_liabilities !== "string")
+        return [{ ...XLM, balance: entry.balance, available: "0.0000000" }];
       const sellingLiabilities =
         typeof entry.selling_liabilities === "string" ? entry.selling_liabilities : "0.0000000";
       if (!reserve)
         return [{ ...XLM, balance: entry.balance, sellingLiabilities, available: "0.0000000" }];
       const balance = parseUnits(entry.balance, 7);
       const liabilities = parseUnits(sellingLiabilities, 7);
-      const minReserve = minimumXlmReserve(
-        reserve.subentryCount,
-        reserve.numSponsoring,
-        reserve.numSponsored,
-        reserve.params.baseReserve,
-      );
+      const minReserve = reserve.minReserve;
       const feeMargin = XLM_FEE_MARGIN_OPERATIONS * reserve.params.baseFee;
       const availableUnits = spendableXlm(balance, liabilities, minReserve, feeMargin);
       return [
@@ -372,6 +414,7 @@ export async function accountAssets(account: string, signal?: AbortSignal): Prom
           balance: entry.balance,
           sellingLiabilities,
           nativeMinimumReserve: formatSpendableUnits(minReserve),
+          nativeFeeMargin: formatSpendableUnits(feeMargin),
           available: formatSpendableUnits(availableUnits),
         },
       ];
