@@ -10,19 +10,25 @@ import {
   rpc,
   type xdr,
 } from "@stellar/stellar-sdk";
-import { toHex } from "@hyperion/protocol";
+import { sorobanErrorCode, toHex } from "@hyperion/protocol";
 import {
+  classifySubmissionFailure,
+  describeBindingLimit,
+  SubmissionFailure,
+  quoteFreshness,
   quoteBreakdown,
   type LiveQuote,
   submitSettleClaim,
   submitOperation,
   simulateOperation,
+  TransferLimitError,
 } from "../src/contracts/stellar";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
 
-import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
+import { STELLAR_DEPLOYMENT, TESTNET, supportedLanes } from "../src/config/testnet";
+import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
 import {
   planMaxUsdcAmount,
   planMaxSourceAmount,
@@ -121,6 +127,61 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
+    const checkpointKey = "hyperion.testnet.pending-transfer";
+    const values = new Map<string, string>([[checkpointKey, "existing signed hash"]]);
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+      removeItem: (key: string) => void values.delete(key),
+    };
+    expect(inspectCheckpointStorage(storage)).toMatchObject({
+      available: true,
+      persistent: null,
+      kind: "transaction-recovery",
+      reason: null,
+    });
+    expect([...values]).toEqual([[checkpointKey, "existing signed hash"]]);
+    const blocked = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("quota");
+      },
+      removeItem: () => undefined,
+    };
+    expect(inspectCheckpointStorage(blocked)).toMatchObject({
+      available: false,
+      persistent: false,
+      kind: "transaction-recovery",
+    });
+  });
+  it("rejects a store that silently drops writes before an approval can rely on it", () => {
+    expect(
+      inspectCheckpointStorage({
+        getItem: () => null,
+        setItem: () => undefined,
+        removeItem: () => undefined,
+      }),
+    ).toMatchObject({
+      available: false,
+      persistent: false,
+      reason: "The browser did not retain the recovery probe.",
+    });
+  });
+  it("classifies bounded pre-broadcast failures without attaching a fake hash", () => {
+    const failure = classifySubmissionFailure("approval", new Error("declined\nsecret details"));
+    expect(failure).toBeInstanceOf(SubmissionFailure);
+    expect(failure.stage).toBe("approval");
+    expect(failure.message).toBe("declined");
+    expect(failure.txHash).toBeUndefined();
+  });
+  it("labels provider observations by freshness without implying delivery", () => {
+    const observedAt = "2026-11-18T20:00:00.000Z";
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:29.000Z"))).toBe("current");
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T20:00:31.000Z"))).toBe("stale");
+    expect(quoteFreshness({ observedAt: "not-a-date" })).toBe("unknown");
+    expect(quoteFreshness({ observedAt }, Date.parse("2026-11-18T19:59:59.000Z"))).toBe("unknown");
+  });
   it("recovers the exact precision dust a CCTP route's six-decimal destination truncates", () => {
     // 7-decimal Stellar USDC minus the fee leaves 9,969,995 base units -- not a multiple of
     // the 10-unit quantum that six-decimal Circle USDC can represent, so the trailing 5 base
@@ -171,6 +232,26 @@ describe("Signed Stellar submission failure boundaries", () => {
     });
   });
 
+  it("never broadcasts a valid signature returned after its envelope deadline", async () => {
+    const { send } = setup();
+    const approval = vi.fn(async (envelope: string) => {
+      const signed = await sign(envelope);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 181000);
+      return signed;
+    });
+    const progress = vi.fn();
+    await expect(
+      submitOperation(
+        TESTNET.reader,
+        new Contract(TESTNET.router).call("noop"),
+        approval,
+        progress,
+      ),
+    ).rejects.toThrow(/expired before broadcast/);
+    expect(approval).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
+    expect(progress.mock.calls.some((call) => call[0] === "submitting")).toBe(false);
+  });
   it("rejects a quote whose gross debit includes retained dust or whose payout floors to zero", () => {
     const value: LiveQuote = {
       route: 0,
@@ -193,6 +274,45 @@ describe("Signed Stellar submission failure boundaries", () => {
     expect(() => quoteBreakdown({ ...value, netAmount: 0n, representableAmount: 0n })).toThrow(
       /conserve/,
     );
+  });
+
+  it("classifies simulation transport failure without wallet approval or broadcast", async () => {
+    const { simulation, send } = setup();
+    simulation.mockReset().mockRejectedValue(new Error("Provider unavailable"));
+    const approve = vi.fn();
+    await expect(
+      submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), approve),
+    ).rejects.toMatchObject({ stage: "simulation", txHash: undefined });
+    expect(approve).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("blocks broadcast when required checkpoint persistence fails", async () => {
+    const { send } = setup();
+    const progress = (phase: string) => {
+      if (phase === "submitting") throw new Error("Recovery storage is unavailable");
+    };
+    await expect(
+      submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), sign, progress),
+    ).rejects.toMatchObject({ stage: "checkpoint", txHash: undefined });
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("retains the actual signed hash and broadcast stage for an uncertain network send", async () => {
+    const { send } = setup();
+    send.mockRejectedValueOnce(new Error("Provider timed out"));
+    const result = await submitOperation(
+      TESTNET.reader,
+      new Contract(TESTNET.router).call("noop"),
+      sign,
+    );
+    expect(result.status).toBe("pending");
+    expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.failure).toMatchObject({ stage: "broadcast", txHash: result.txHash });
+  });
+  it("keeps classification bounded and strips hashes from pre-broadcast stages", () => {
+    expect(
+      classifySubmissionFailure("build", new Error("x".repeat(1000)), "a".repeat(64)),
+    ).toMatchObject({ stage: "build", message: "x".repeat(400), txHash: undefined });
+    expect(classifySubmissionFailure("broadcast", "timeout", "fake").txHash).toBeUndefined();
   });
 
   it("never asks the wallet or submits when simulation fails", async () => {
@@ -240,7 +360,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       return Promise.reject(new Error("timeout"));
     });
     const result = await submitSettleClaim(key.publicKey(), 1n, sign);
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
   });
   it("reports a known network rejection instead of source confirmation", async () => {
@@ -372,7 +496,11 @@ describe("Signed Stellar submission failure boundaries", () => {
       undefined,
       sim,
     );
-    expect(result).toEqual({ status: "pending", txHash: hash });
+    expect(result).toMatchObject({
+      status: "pending",
+      txHash: hash,
+      failure: { stage: "broadcast", txHash: hash },
+    });
     expect(wallet).toHaveBeenCalledTimes(1);
     expect(submittedXdr).toBe(sim.envelopeXdr);
     expect(send).toHaveBeenCalledTimes(1);
@@ -779,9 +907,12 @@ describe("Checkpoint staleness guards", () => {
     bridgeAmount: "10000000",
     stage: "bridge",
     txHash: "0".repeat(64),
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
   const sameIntent = {
     account: checkpoint.account,
+    recipient: checkpoint.recipient,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
     destination: checkpoint.destination,
     route: checkpoint.route,
     bridgeAmount: checkpoint.bridgeAmount,
@@ -807,6 +938,12 @@ describe("Checkpoint staleness guards", () => {
   it("rejects a stale confirmation when the amount changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, bridgeAmount: "20000000" })).toBe(false);
   });
+  it("rejects a stale confirmation when recipient or issuer-specific source identity changes", () => {
+    expect(checkpointMatches(checkpoint, { ...sameIntent, recipient: "0x" + "b".repeat(40) })).toBe(
+      false,
+    );
+    expect(checkpointMatches(checkpoint, { ...sameIntent, source: USDC })).toBe(false);
+  });
   it("rejects a stale confirmation when the stage changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, stage: "conversion" })).toBe(false);
   });
@@ -824,6 +961,7 @@ describe("Source identity and explorer access", () => {
     bridgeAmount: "10000000",
     stage: "bridge" as const,
     txHash: realHash,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
 
   it("preserves the real signed hash exactly in a saved checkpoint", () => {
@@ -912,5 +1050,93 @@ describe("Concurrent and repeated submission boundaries", () => {
     expect((rejected?.reason as Error).message).toMatch("network rejected");
     expect(walletA).toHaveBeenCalledTimes(1);
     expect(walletB).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Binding flow-limit diagnostics", () => {
+  it.each([null, -1n, 1n << 127n])(
+    "does not invent current capacity from unavailable or invalid values (%s)",
+    (available) => {
+      const code = sorobanErrorCode("FlowLimitExceeded");
+      const diagnostic = describeBindingLimit(code, 10_000_000n, available, "sepolia", 1);
+      expect(diagnostic.available).toBeNull();
+      expect(diagnostic.summary).toContain("capacity is unavailable");
+      expect(diagnostic.nextStep).not.toContain("Reduce the amount");
+      expect(diagnostic.nextStep).toContain("Refresh the quote");
+    },
+  );
+  it.each([undefined, null, -1, NaN, Infinity, "", "1.1", "-1", "999999999999999999999999"])(
+    "keeps malformed reason %s unclassified",
+    (reason) => {
+      const diagnostic = describeBindingLimit(reason, 10_000_000n, 0n, "sepolia", 1);
+      expect(diagnostic.code).toBeNull();
+      expect(diagnostic.kind).toBe("other");
+    },
+  );
+  it("names the exact flow-window headroom and an exact amount to retry", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 10_000_000n, 2_500_000n, "sepolia", 1);
+    expect(diagnostic.kind).toBe("flow");
+    expect(diagnostic.available).toBe(2_500_000n);
+    expect(diagnostic.requested).toBe(10_000_000n);
+    expect(diagnostic.retryable).toBe(true);
+    expect(diagnostic.summary).toContain("0.25");
+    expect(diagnostic.summary).toContain("Axelar ITS");
+    expect(diagnostic.nextStep).toContain("0.25");
+    // The Sepolia lane also carries Circle CCTP on this deployment, so it is a real next step.
+    expect(diagnostic.alternateLanes.map((lane) => lane.provider)).toEqual(["Circle CCTP"]);
+    expect(diagnostic.nextStep).toContain("Circle CCTP");
+  });
+  it("tells the sender to wait when the flow window has no headroom left at all", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 5_000_000n, 0n, "sepolia", 1);
+    expect(diagnostic.available).toBe(0n);
+    expect(diagnostic.nextStep).toContain("fully used");
+    expect(diagnostic.nextStep).not.toContain("Reduce the amount");
+  });
+  it("never offers a lane this testnet deployment does not independently support", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    // Only Sepolia carries Axelar ITS; the Circle CCTP lane on another destination has no
+    // alternate lane to offer, and the diagnostic must not invent one.
+    const diagnostic = describeBindingLimit(code, 5_000_000n, 1_000_000n, "base-sepolia", 0);
+    expect(diagnostic.alternateLanes).toEqual([]);
+    expect(diagnostic.nextStep).not.toContain("also supports");
+  });
+  it("reports the route's maximum transfer cap as non-retryable without inventing a value", () => {
+    const code = sorobanErrorCode("ExceedsRouteLimit");
+    if (code === null) throw new Error("ExceedsRouteLimit has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 50_000_000n, 0n, "sepolia", 0);
+    expect(diagnostic.kind).toBe("routeMax");
+    expect(diagnostic.available).toBeNull();
+    expect(diagnostic.retryable).toBe(false);
+    expect(diagnostic.nextStep).toContain("Split it into smaller transfers");
+  });
+  it("marks a liquidity shortfall as retryable and suggests a smaller amount or a wait", () => {
+    const code = sorobanErrorCode("InsufficientLiquidity");
+    if (code === null) throw new Error("InsufficientLiquidity has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 50_000_000n, 0n, "sepolia", 0);
+    expect(diagnostic.kind).toBe("liquidity");
+    expect(diagnostic.retryable).toBe(true);
+    expect(diagnostic.nextStep).toContain("liquidity");
+  });
+  it("composes the thrown error message from the same summary and next step", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 10_000_000n, 2_500_000n, "sepolia", 1);
+    const error = new TransferLimitError(diagnostic);
+    expect(error.diagnostic).toBe(diagnostic);
+    expect(error.message).toBe(`${diagnostic.summary} ${diagnostic.nextStep}`);
+  });
+  it("only ever names testnet lanes this deployment actually carries", () => {
+    expect(supportedLanes("sepolia").map((lane) => lane.provider)).toEqual([
+      "Circle CCTP",
+      "Axelar ITS",
+    ]);
+    for (const destination of ["base-sepolia", "arc-testnet"] as const) {
+      expect(supportedLanes(destination).map((lane) => lane.provider)).toEqual(["Circle CCTP"]);
+    }
   });
 });
