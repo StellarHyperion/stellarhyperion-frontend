@@ -1291,7 +1291,9 @@ export function Bridge() {
     isUsdcSource;
   const validationSummary = [
     inputError ? { id: "send-amount", label: "amount" } : null,
-    inputError?.toLowerCase().includes("recipient") ? { id: "recipient", label: "recipient" } : null,
+    inputError?.toLowerCase().includes("recipient")
+      ? { id: "recipient", label: "recipient" }
+      : null,
     insufficient ? { id: "send-amount", label: "available balance" } : null,
     exceedsFlow ? { id: "send-amount", label: "route limit" } : null,
   ].filter((item): item is { id: string; label: string } => item !== null);
@@ -1373,7 +1375,7 @@ export function Bridge() {
             <input
               id="send-amount"
               aria-label="Amount to send"
-              aria-invalid={inputError !== null || insufficient || exceedsFlow}
+              aria-invalid={(inputError !== null || insufficient) ?? exceedsFlow}
               aria-describedby={validationSummary.length ? "bridge-validation-summary" : undefined}
               inputMode="decimal"
               autoComplete="off"
@@ -1601,7 +1603,7 @@ export function Bridge() {
           <input
             id="recipient"
             aria-label={`Recipient on ${chain.name}`}
-            aria-invalid={inputError?.toLowerCase().includes("recipient") || undefined}
+            aria-invalid={inputError?.toLowerCase().includes("recipient") ?? undefined}
             aria-describedby={validationSummary.length ? "bridge-validation-summary" : undefined}
             autoComplete="off"
             spellCheck={false}
@@ -1677,7 +1679,12 @@ export function Bridge() {
           )
         )}
         {(error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
-          <div id="bridge-validation-summary" role="alert" aria-live="polite" className={styles.error}>
+          <div
+            id="bridge-validation-summary"
+            role="alert"
+            aria-live="polite"
+            className={styles.error}
+          >
             <strong>Review before continuing.</strong>
             <p>{error ?? wallet.error ?? quoteError ?? laneError ?? inputError}</p>
             {validationSummary.length > 0 && (
@@ -1792,48 +1799,52 @@ export function Bridge() {
         ) : (
           !checkpoint && (
             <>
-            <button
-              type="button"
-              className={styles.primary}
-              aria-describedby={actionHelp ? "bridge-action-help" : undefined}
-              disabled={
-                !quote ||
-                (!quote.conversion && !simulation) ||
-                busy ||
-                !!insufficient ||
-                xlmStatus !== "ok" ||
-                sourceBalance === undefined ||
-                activeSource.trustline === "frozen" ||
-                activeSource.trustline === "unauthorized" ||
-                trustlineReserveUnknown ||
-                trustlineReserveInsufficient
-              }
-              onClick={() => {
-                if (!wallet.address || !quote || (!quote.conversion && !simulation)) return;
-                setReviewApproval({
-                  account: wallet.address,
-                  network: TESTNET.networkPassphrase,
-                  operation: quote.conversion ? "conversion" : "bridge",
-                });
-                setReviewed({
-                  key: quoteKey,
-                  quote,
-                  simulation,
-                  addTrustline: needsTrustline,
-                });
-                setReviewing(true);
-              }}
-            >
-              {fetching
-                ? "Finding your route..."
-                : simulating
-                  ? "Estimating bridge fees..."
-                  : simulationError
-                    ? "Refresh to retry simulation"
-                    : "Review transfer"}
-              <ArrowRight size={18} aria-hidden="true" />
-            </button>
-            {actionHelp && <p id="bridge-action-help" role="status" className={styles.reviewNote}>{actionHelp}</p>}
+              <button
+                type="button"
+                className={styles.primary}
+                aria-describedby={actionHelp ? "bridge-action-help" : undefined}
+                disabled={
+                  !quote ||
+                  (!quote.conversion && !simulation) ||
+                  busy ||
+                  !!insufficient ||
+                  xlmStatus !== "ok" ||
+                  sourceBalance === undefined ||
+                  activeSource.trustline === "frozen" ||
+                  activeSource.trustline === "unauthorized" ||
+                  trustlineReserveUnknown ||
+                  trustlineReserveInsufficient
+                }
+                onClick={() => {
+                  if (!wallet.address || !quote || (!quote.conversion && !simulation)) return;
+                  setReviewApproval({
+                    account: wallet.address,
+                    network: TESTNET.networkPassphrase,
+                    operation: quote.conversion ? "conversion" : "bridge",
+                  });
+                  setReviewed({
+                    key: quoteKey,
+                    quote,
+                    simulation,
+                    addTrustline: needsTrustline,
+                  });
+                  setReviewing(true);
+                }}
+              >
+                {fetching
+                  ? "Finding your route..."
+                  : simulating
+                    ? "Estimating bridge fees..."
+                    : simulationError
+                      ? "Refresh to retry simulation"
+                      : "Review transfer"}
+                <ArrowRight size={18} aria-hidden="true" />
+              </button>
+              {actionHelp && (
+                <p id="bridge-action-help" role="status" className={styles.reviewNote}>
+                  {actionHelp}
+                </p>
+              )}
             </>
           )
         )}
