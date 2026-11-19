@@ -391,6 +391,24 @@ function PendingTransferCard({
         ? latest
         : null;
   const sameAccount = wallet.address === checkpoint.account;
+  const actionRef = useRef<HTMLButtonElement>(null);
+  const recoveryMessageRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const focus = () => {
+      const action = actionRef.current;
+      if (action && !action.disabled) action.focus();
+      else recoveryMessageRef.current?.focus();
+    };
+    const frame = requestAnimationFrame(focus);
+    const onHashChange = () => {
+      if (window.location.hash === "#pending-recovery") focus();
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("hashchange", onHashChange);
+    };
+  }, [busy, checking, checkpoint.txHash]);
   const check = async () => {
     if (checking || busy) return;
     setChecking(true);
@@ -459,7 +477,12 @@ function PendingTransferCard({
     }
   };
   return (
-    <section className={styles.pending} aria-label="Transfer recovery">
+    <section
+      id="pending-recovery"
+      className={styles.pending}
+      aria-label="Transfer recovery"
+      tabIndex={-1}
+    >
       <div className={styles.pendingTitle}>
         <ShieldCheck size={18} aria-hidden="true" />
         <h2>
@@ -474,12 +497,18 @@ function PendingTransferCard({
                 : "Transfer source status unknown"}
         </h2>
       </div>
-      <p>
+      <p id="pending-recovery-message" ref={recoveryMessageRef} role="status" tabIndex={-1}>
         {checkpoint.stage === "conversion"
-          ? "Your conversion and bridge are separate transactions. Check the conversion before continuing with USDC."
+          ? current?.status === "confirmed"
+            ? "Conversion confirmed on Stellar. Your bridge is a separate transaction and still requires your wallet approval."
+            : current?.status === "failed"
+              ? "Conversion failed on Stellar. No bridge transaction was submitted."
+              : "This saved signed hash does not establish broadcast or confirmation. Check the conversion source status before continuing with USDC."
           : current?.status === "confirmed"
-            ? "The source transaction is confirmed. Follow destination delivery separately in transfer activity."
-            : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
+            ? "Source transaction confirmed on Stellar. Destination delivery is tracked separately."
+            : current?.status === "failed"
+              ? "Source transaction failed on Stellar. No destination delivery was initiated."
+              : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
       <a
         className={styles.transactionLink}
@@ -541,6 +570,8 @@ function PendingTransferCard({
       {current?.status === "failed" ||
       (checkpoint.stage === "bridge" && current?.status === "confirmed") ? (
         <button
+          id="pending-recovery-action"
+          ref={actionRef}
           type="button"
           className={styles.secondary}
           onClick={onReset}
@@ -550,6 +581,8 @@ function PendingTransferCard({
         </button>
       ) : (
         <button
+          id="pending-recovery-action"
+          ref={actionRef}
           type="button"
           className={styles.secondary}
           onClick={() => {
@@ -979,6 +1012,7 @@ export function Bridge() {
     let converted: TransferCheckpoint | null = null;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
       router: TESTNET.router,
+      token: TESTNET.token,
       account: sender,
       recipient: validateRecipient(recipient),
       destination,
