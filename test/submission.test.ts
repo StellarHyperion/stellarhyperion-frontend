@@ -11,7 +11,13 @@ import {
   type xdr,
 } from "@stellar/stellar-sdk";
 import { toHex } from "@hyperion/protocol";
-import { quoteBreakdown, type LiveQuote, submitSettleClaim, submitOperation, simulateOperation } from "../src/contracts/stellar";
+import {
+  quoteBreakdown,
+  type LiveQuote,
+  submitSettleClaim,
+  submitOperation,
+  simulateOperation,
+} from "../src/contracts/stellar";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
@@ -124,6 +130,30 @@ describe("Signed Stellar submission failure boundaries", () => {
       representableBridgeAmount: 9970009n,
       retainedDust: 0n,
     });
+  });
+
+  it("rejects a quote whose gross debit includes retained dust or whose payout floors to zero", () => {
+    const value: LiveQuote = {
+      route: 0,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000000n,
+      grossAmount: 9999995n,
+      fee: 30005n,
+      netAmount: 9969990n,
+      representableAmount: 996999n,
+      destinationAmount: 946999n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 500000n,
+    };
+    expect(() => quoteBreakdown({ ...value, grossAmount: value.requestedAmount })).toThrow(
+      /conserve/,
+    );
+    expect(() => quoteBreakdown({ ...value, destinationAmount: 0n })).toThrow(/conserve/);
+    expect(() => quoteBreakdown({ ...value, netAmount: 0n, representableAmount: 0n })).toThrow(
+      /conserve/,
+    );
   });
 
   it("never asks the wallet or submits when simulation fails", async () => {
