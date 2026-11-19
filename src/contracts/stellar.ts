@@ -51,6 +51,15 @@ export interface LiveQuote {
   fee: bigint;
   netAmount: bigint;
   destinationAmount: bigint;
+  /**
+   * `netAmount` truncated down to the destination's decimal precision, expressed in
+   * destination-native base units, before the relay gas deduction folded into
+   * `destinationAmount`. Equal to `netAmount` whenever source and destination decimals match
+   * (Axelar ITS). This is the router's own `destination_amount`, computed from the
+   * `destination_decimals` passed into `quote_routes`, so it never drifts from what is
+   * actually signed.
+   */
+  representableAmount: bigint;
   flowAvailable: bigint;
   ledger: number;
   adapter: string;
@@ -60,6 +69,40 @@ export interface LiveQuote {
   estimatedRelayGas?: bigint;
   resourceFee?: bigint;
   networkFee?: bigint;
+}
+
+export interface QuoteBreakdown {
+  readonly requestedSourceAmount: bigint;
+  readonly actualSourceDebit: bigint;
+  readonly protocolFee: bigint;
+  readonly representableBridgeAmount: bigint;
+  readonly retainedDust: bigint;
+}
+
+/** Exact source units: the router leaves unrepresentable precision dust in the account. */
+export function quoteBreakdown(quote: LiveQuote): QuoteBreakdown {
+  const quantum = 10n ** BigInt(7 - destinationDecimals(quote.route));
+  const representableBridgeAmount = quote.representableAmount * quantum;
+  if (
+    quote.requestedAmount <= 0n ||
+    quote.requestedAmount > I128_MAX ||
+    quote.fee < 0n ||
+    quote.fee >= quote.requestedAmount ||
+    representableBridgeAmount <= 0n ||
+    representableBridgeAmount !== quote.netAmount ||
+    quote.grossAmount !== quote.fee + representableBridgeAmount ||
+    quote.grossAmount > quote.requestedAmount ||
+    quote.requestedAmount - quote.grossAmount >= quantum ||
+    quote.destinationAmount <= 0n
+  )
+    throw new Error("The live quote does not conserve its exact source and destination amounts.");
+  return {
+    requestedSourceAmount: quote.requestedAmount,
+    actualSourceDebit: quote.grossAmount,
+    protocolFee: quote.fee,
+    representableBridgeAmount,
+    retainedDust: quote.requestedAmount - quote.grossAmount,
+  };
 }
 export interface LaneState {
   available: boolean;
@@ -582,9 +625,13 @@ export async function quoteTransfer(
   if (estimatedRelayGas <= 0n || estimatedRelayGas > relayGas)
     throw new Error("Invalid live fee estimate.");
   if (relayGas <= 0n || relayGas > I128_MAX) throw new Error("Invalid relay gas estimate.");
-  if (route === 0 && (relayGas % 10n !== 0n || relayGas >= integer(quote.net_amount)))
+  // See `quoteBreakdown` for what this quantum represents: it must divide the relay gas
+  // exactly so the gas deduction below lands on a destination-representable boundary too.
+  const quantum = 10n ** BigInt(7 - destinationDecimals(route));
+  if (route === 0 && (relayGas % quantum !== 0n || relayGas >= integer(quote.net_amount)))
     throw new Error("Increase the amount to cover Circle's destination forwarding fee.");
-  return {
+  const representableAmount = integer(quote.destination_amount);
+  const result: LiveQuote = {
     relayGas,
     estimatedRelayGas,
     route,
@@ -594,10 +641,13 @@ export async function quoteTransfer(
     grossAmount: integer(quote.gross_amount),
     fee: integer(quote.fee),
     netAmount: integer(quote.net_amount),
-    destinationAmount: integer(quote.destination_amount) - (route === 0 ? relayGas / 10n : 0n),
+    destinationAmount: representableAmount - (route === 0 ? relayGas / quantum : 0n),
+    representableAmount,
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
   };
+  quoteBreakdown(result);
+  return result;
 }
 
 export async function readBalance(account: string): Promise<bigint> {

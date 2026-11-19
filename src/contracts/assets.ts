@@ -1,4 +1,4 @@
-import { Asset, Operation, StrKey, type xdr } from "@stellar/stellar-sdk";
+import { Asset, BASE_FEE, Operation, StrKey, type xdr } from "@stellar/stellar-sdk";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import { TESTNET, type BridgeRoute, type DestinationKey } from "../config/testnet";
 import {
@@ -26,6 +26,15 @@ export interface SourceAsset {
 export type AssetVerification =
   "configured" | "wallet-trustline" | "horizon-search" | "horizon-path";
 export type TrustlineState = "native" | "present" | "not-checked" | "frozen" | "unauthorized";
+export interface TrustlineReservePreview {
+  readonly nativeBalance: bigint;
+  readonly sellingLiabilities: bigint;
+  readonly baseReserve: bigint;
+  readonly currentMinimumBalance: bigint;
+  readonly trustlineReserve: bigint;
+  readonly availableAfterTrustline: bigint;
+}
+export const STELLAR_BASE_RESERVE = 5000000n;
 
 export const XLM: SourceAsset = {
   id: "native",
@@ -112,6 +121,105 @@ async function horizon(path: string, signal?: AbortSignal): Promise<Record<strin
   const body: unknown = await response.json();
   if (!body || typeof body !== "object") throw new Error("Invalid Stellar asset response.");
   return body as Record<string, unknown>;
+}
+
+export function trustlineReservePreview(
+  nativeBalance: bigint,
+  subentryCount: number,
+  numSponsoring = 0,
+  numSponsored = 0,
+  baseReserve = STELLAR_BASE_RESERVE,
+  sellingLiabilities = 0n,
+): TrustlineReservePreview {
+  if (
+    nativeBalance < 0n ||
+    sellingLiabilities < 0n ||
+    baseReserve <= 0n ||
+    ![subentryCount, numSponsoring, numSponsored].every((v) => Number.isSafeInteger(v) && v >= 0) ||
+    2 + subentryCount + numSponsoring - numSponsored < 0
+  )
+    throw new Error("Invalid Stellar reserve data.");
+  const currentMinimumBalance =
+    BigInt(2 + subentryCount + numSponsoring - numSponsored) * baseReserve;
+  const trustlineReserve = baseReserve;
+  return {
+    nativeBalance,
+    sellingLiabilities,
+    baseReserve,
+    currentMinimumBalance,
+    trustlineReserve,
+    availableAfterTrustline:
+      nativeBalance - sellingLiabilities - currentMinimumBalance - trustlineReserve,
+  };
+}
+
+export async function accountTrustlineReserve(
+  account: string,
+  signal?: AbortSignal,
+): Promise<TrustlineReservePreview> {
+  if (!StrKey.isValidEd25519PublicKey(account)) throw new Error("Invalid Stellar account.");
+  const body = await horizon(`/accounts/${account}`, signal);
+  if (!Array.isArray(body.balances) || typeof body.subentry_count !== "number")
+    throw new Error("Invalid Stellar account reserve data.");
+  // Horizon's account resource has no top-level `balance`; the native balance is the entry in
+  // `balances` whose `asset_type` is "native". Reading it from the wrong place would silently
+  // read `undefined` and never reflect a real account's actual lumens.
+  const native = body.balances.find(
+    (entry): entry is { asset_type: string; balance: string } =>
+      !!entry &&
+      typeof entry === "object" &&
+      (entry as Record<string, unknown>).asset_type === "native" &&
+      typeof (entry as Record<string, unknown>).balance === "string",
+  );
+  if (!native) throw new Error("Invalid Stellar account reserve data.");
+  const ledger = records(await horizon("/ledgers?order=desc&limit=1", signal))[0];
+  if (
+    !ledger ||
+    !Number.isSafeInteger(ledger.base_reserve_in_stroops) ||
+    Number(ledger.base_reserve_in_stroops) <= 0
+  )
+    throw new Error("The current Stellar base reserve is unavailable.");
+  const selling = (native as unknown as Record<string, unknown>).selling_liabilities;
+  if (selling !== undefined && typeof selling !== "string")
+    throw new Error("Invalid Stellar liabilities.");
+  return trustlineReservePreview(
+    parseUnits(native.balance, 7),
+    body.subentry_count,
+    typeof body.num_sponsoring === "number" ? body.num_sponsoring : 0,
+    typeof body.num_sponsored === "number" ? body.num_sponsored : 0,
+    BigInt(Number(ledger.base_reserve_in_stroops)),
+    selling === undefined ? 0n : parseUnits(selling, 7),
+  );
+}
+
+export interface TrustlineReserveImpact extends TrustlineReservePreview {
+  readonly addsTrustline: boolean;
+  readonly networkFee: bigint;
+  readonly sourceSpend: bigint;
+  readonly projectedSpendable: bigint;
+}
+
+// The reserve preview above is account-only (what a new trustline would lock up). This folds in
+// the specific conversion about to be signed: the network fee for the combined transaction (one
+// operation per signature when no trustline is needed, two when it is) and, when the source asset
+// being spent is XLM itself, the exact integer amount that pathPaymentStrictReceive can take as
+// sendMax. Both come out of the same spendable XLM the trustline reserve just locked into.
+export function trustlineReserveImpact(
+  reserve: TrustlineReservePreview,
+  conversion: Conversion,
+  addsTrustline: boolean,
+): TrustlineReserveImpact {
+  const networkFee = BigInt(BASE_FEE) * BigInt(addsTrustline ? 2 : 1);
+  const sourceSpend = conversion.source.id === XLM.id ? conversion.sourceMax : 0n;
+  const reservedForTrustline = addsTrustline ? reserve.trustlineReserve : 0n;
+  const projectedSpendable =
+    reserve.nativeBalance -
+    reserve.sellingLiabilities -
+    reserve.currentMinimumBalance -
+    reservedForTrustline -
+    networkFee -
+    sourceSpend;
+  return { ...reserve, addsTrustline, networkFee, sourceSpend, projectedSpendable };
 }
 function records(body: Record<string, unknown>): Record<string, unknown>[] {
   const embedded = body._embedded as { records?: unknown } | undefined;
@@ -404,11 +512,24 @@ export async function submitConversion(
         ? `Insufficient available ${conversion.source.code} balance. Selling liabilities reduce your spendable balance to ${spendableBalance(sourceAsset)} ${conversion.source.code}.`
         : `Insufficient ${conversion.source.code} balance.`,
     );
+  const addTrustline = !assets.some((asset) => asset.id === USDC.id);
+  // Re-read the reserve right before building the transaction (never trust UI-cached state) and
+  // refuse to ask the wallet to sign when the combined trustline-plus-conversion would leave the
+  // account below its minimum balance. This is the one place every caller of submitConversion
+  // passes through, so it holds even if a stale quote slipped past the review screen's own check.
+  const reserve = await accountTrustlineReserve(sender);
+  const impact = trustlineReserveImpact(reserve, conversion, addTrustline);
+  if (impact.projectedSpendable < 0n)
+    throw new Error(
+      addTrustline
+        ? `Adding the USDC trustline locks ${formatUnits(reserve.trustlineReserve, 7)} XLM in reserve. Your balance cannot cover that reserve, the network fee and this conversion.`
+        : "Your XLM balance cannot cover this conversion and its network fee.",
+    );
   return submitClassicOperations(
     sender,
     async () => {
       const current = await revalidateConversion(conversion);
-      return conversionOperations(sender, current, !assets.some((asset) => asset.id === USDC.id));
+      return conversionOperations(sender, current, addTrustline);
     },
     sign,
     progress,
