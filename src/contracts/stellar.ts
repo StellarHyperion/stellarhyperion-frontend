@@ -895,6 +895,7 @@ async function readTransactionFrom(
   };
 }
 async function collectTransactionEvidence(hash: string, signal?: AbortSignal) {
+  if (signal?.aborted) throw new DOMException("Transaction lookup cancelled.", "AbortError");
   const readSignal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(5000)])
     : AbortSignal.timeout(5000);
@@ -1626,7 +1627,7 @@ async function signAndSubmit(
     if (signal?.aborted) return { status: "pending", txHash: hash };
     let result: TransactionResult | null;
     try {
-      result = await readTransaction(hash);
+      result = await readTransaction(hash, signal);
     } catch (error) {
       return {
         status: "pending",
