@@ -48,11 +48,13 @@ export function transactionDeadline(
   transaction: unknown,
   now = Math.floor(Date.now() / 1000),
 ): TransactionDeadline {
+  if (!transaction || typeof transaction !== "object")
+    throw new Error("The transaction has no envelope time bounds.");
   const value = transaction as {
     timeBounds?: { minTime: string; maxTime: string };
     innerTransaction?: { timeBounds?: { minTime: string; maxTime: string } };
   };
-  const bounds = value?.timeBounds ?? value?.innerTransaction?.timeBounds;
+  const bounds = value.timeBounds ?? value.innerTransaction?.timeBounds;
   if (!bounds) throw new Error("The transaction has no envelope time bounds.");
   const minTime = Number(bounds.minTime);
   const maxTime = Number(bounds.maxTime);
@@ -379,6 +381,17 @@ function contractMethods(contract: string) {
 }
 
 export function errorMessage(error: unknown): string {
+  if (error instanceof SubmissionFailure) {
+    const label = {
+      build: "Transaction preparation",
+      simulation: "Transaction simulation",
+      approval: "Wallet approval",
+      checkpoint: "Recovery checkpoint",
+      broadcast: "Source broadcast",
+      confirmation: "Source confirmation",
+    }[error.stage];
+    return `${label}: ${error.message}`;
+  }
   const message = error instanceof Error ? error.message : String(error);
   const code = /Error\(Contract, #(\d+)\)/.exec(message)?.[1];
   if (code) {

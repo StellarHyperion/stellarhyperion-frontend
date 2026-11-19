@@ -188,7 +188,7 @@ export async function accountTrustlineReserve(
     typeof body.num_sponsoring === "number" ? body.num_sponsoring : 0,
     typeof body.num_sponsored === "number" ? body.num_sponsored : 0,
     BigInt(Number(ledger.base_reserve_in_stroops)),
-    selling === undefined ? 0n : parseUnits(selling as string, 7),
+    selling === undefined ? 0n : parseUnits(selling, 7),
   );
 }
 
