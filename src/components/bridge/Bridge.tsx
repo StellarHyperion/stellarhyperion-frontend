@@ -188,6 +188,24 @@ function ConversionIntent({
   );
 }
 
+function ConversionDetails({ conversion }: { conversion: NonNullable<TradeQuote["conversion"]> }) {
+  const path = [conversion.source, ...conversion.path, USDC]
+    .map((asset) =>
+      asset.issuer
+        ? `${asset.code} (${asset.issuer.slice(0, 7)}...${asset.issuer.slice(-7)})`
+        : asset.code,
+    )
+    .join(" -> ");
+  return (
+    <p className={styles.assetNote}>
+      Convert up to {formatUnits(conversion.sourceMax, 7)} {conversion.source.code} into at least{" "}
+      {formatUnits(conversion.usdcAmount, 7)} Stellar USDC. Quoted path: {path}. Liquidity is
+      rechecked immediately before wallet approval; signing is blocked if this minimum cannot be
+      met.
+    </p>
+  );
+}
+
 function PendingTransferCard({
   checkpoint,
   busy,
@@ -422,6 +440,7 @@ export function Bridge() {
   const [reviewing, setReviewing] = useState(false);
   const [reviewApproval, setReviewApproval] = useState<WalletApprovalProvenance | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [quoteVersion, setQuoteVersion] = useState(0);
   const [laneState, setLaneState] = useState<{
     key: string;
     value: LaneState | null;
@@ -456,7 +475,7 @@ export function Bridge() {
   const laneKey = `${destination}:${route}:${refresh}`;
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
-  const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}`;
+  const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
   const quote = quoted?.key === quoteKey && lane?.available ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
   const simKey = `${quoteKey}:${wallet.address}`;
@@ -515,6 +534,10 @@ export function Bridge() {
   const simulating =
     valid && !!wallet.address && !!quote && !locked && simulatedState?.key !== simKey;
   const chain = destinationFor(destination);
+  const invalidateQuote = () => {
+    setQuoteVersion((version) => version + 1);
+    setQuoted(null);
+  };
   useEffect(() => {
     let active = true;
     const load = () => {
@@ -752,6 +775,7 @@ export function Bridge() {
             disabled={locked}
             onClick={() => {
               setRefresh((value) => value + 1);
+              invalidateQuote();
             }}
           >
             <RefreshCw size={17} aria-hidden="true" />
@@ -776,6 +800,7 @@ export function Bridge() {
               disabled={locked}
               onChange={(event) => {
                 setAmount(event.target.value);
+                invalidateQuote();
                 setError(null);
               }}
             />
@@ -903,6 +928,7 @@ export function Bridge() {
             }}
             onChange={(event) => {
               setRecipient(event.target.value);
+              invalidateQuote();
               setError(null);
             }}
           />
@@ -944,13 +970,7 @@ export function Bridge() {
               simulating={simulating}
               simulationError={simulationError}
             />
-            {quote.conversion && (
-              <p className={styles.assetNote}>
-                Convert up to {formatUnits(quote.sourceAmount, 7)} {source.code} into{" "}
-                {formatUnits(quote.bridge.requestedAmount, 7)} USDC, then bridge. Price tolerance:
-                0.5%. Two wallet signatures. If bridging stops, USDC stays in your wallet.
-              </p>
-            )}
+            {quote.conversion && <ConversionDetails conversion={quote.conversion} />}
             <p className={styles.assetNote}>
               Quoted at Stellar ledger {quote.bridge.ledger}. Fees are checked again before signing.
             </p>
@@ -1077,6 +1097,7 @@ export function Bridge() {
           balances={balances}
           onSelect={(asset) => {
             setSource(asset);
+            invalidateQuote();
             setError(null);
           }}
           onClose={() => {
@@ -1091,6 +1112,7 @@ export function Bridge() {
           onSelect={(next, bridge) => {
             setDestination(next);
             setRoute(bridge);
+            invalidateQuote();
             setError(null);
           }}
           onClose={() => {
