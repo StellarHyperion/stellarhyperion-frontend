@@ -473,7 +473,7 @@ export function Bridge() {
     key: string;
     quote: TradeQuote;
     addTrustline: boolean;
-    simulation: SimulatedOperation;
+    simulation: SimulatedOperation | null;
   } | null>(null);
   const laneKey = `${destination}:${route}:${refresh}`;
   const lane = laneState?.key === laneKey ? laneState.value : null;
@@ -557,7 +557,12 @@ export function Bridge() {
   const fetching =
     valid && !locked && !laneError && (!lane || (lane.available && quoted?.key !== quoteKey));
   const simulating =
-    valid && !!wallet.address && !!quote && !locked && simulatedState?.key !== simKey;
+    valid &&
+    !!wallet.address &&
+    !!quote &&
+    !quote.conversion &&
+    !locked &&
+    simulatedState?.key !== simKey;
   const chain = destinationFor(destination);
   const invalidateQuote = () => {
     setQuoteVersion((version) => version + 1);
@@ -616,7 +621,8 @@ export function Bridge() {
   }, [valid, lane, locked, destination, activeSource, amount, route, quoteKey]);
   useEffect(() => {
     const sender = wallet.address;
-    if (!valid || !quote || !sender || locked) return;
+    // Conversion funds the later bridge. Simulate that bridge only after conversion confirms.
+    if (!valid || !quote || quote.conversion || !sender || locked) return;
     let active = true;
     const timer = setTimeout(() => {
       void simulateBridgeOut(sender, quote.bridge, recipient)
@@ -759,7 +765,7 @@ export function Bridge() {
         },
         { ...reviewApproval, operation: "bridge" },
         bridgeReconcile,
-        reviewed.simulation,
+        reviewed.simulation ?? undefined,
       );
       setResult(submitted);
     } catch (cause) {
@@ -1078,6 +1084,7 @@ export function Bridge() {
               className={styles.primary}
               disabled={
                 !quote ||
+                (!quote.conversion && !simulation) ||
                 busy ||
                 !!insufficient ||
                 sourceBalance === undefined ||
@@ -1085,7 +1092,7 @@ export function Bridge() {
                 activeSource.trustline === "unauthorized"
               }
               onClick={() => {
-                if (!wallet.address || !quote || !simulation) return;
+                if (!wallet.address || !quote || (!quote.conversion && !simulation)) return;
                 setReviewApproval({
                   account: wallet.address,
                   network: TESTNET.networkPassphrase,
@@ -1100,7 +1107,13 @@ export function Bridge() {
                 setReviewing(true);
               }}
             >
-              {fetching ? "Finding your route..." : "Review transfer"}
+              {fetching
+                ? "Finding your route..."
+                : simulating
+                  ? "Estimating bridge fees..."
+                  : simulationError
+                    ? "Refresh to retry simulation"
+                    : "Review transfer"}
               <ArrowRight size={18} aria-hidden="true" />
             </button>
           )
@@ -1210,17 +1223,20 @@ export function Bridge() {
           <QuoteDetails quote={reviewed.quote.bridge} simulation={reviewed.simulation} />
           {reviewed.quote.conversion && (
             <p className={styles.reviewNote}>
-              Two signatures: convert to USDC, then bridge. Price tolerance is 0.5%. If the bridge
-              cannot proceed, your converted USDC remains in your wallet.
+              Two signatures: convert to USDC, then review the bridge simulation and its fees. Price
+              tolerance is 0.5%. If the bridge cannot proceed, your converted USDC remains in your
+              wallet.
             </p>
           )}
           <p className={styles.reviewNote}>
             Source confirmation starts the transfer. Destination delivery is verified separately.
           </p>
-          <p className={styles.address}>
-            Operation: bridge_out_with_gas ({formatUnits(reviewed.simulation.totalFee, 7)} XLM total
-            envelope fee)
-          </p>
+          {reviewed.simulation && (
+            <p className={styles.address}>
+              Operation: bridge_out_with_gas ({formatUnits(reviewed.simulation.totalFee, 7)} XLM
+              total envelope fee)
+            </p>
+          )}
           {simulationError && (
             <p role="alert" className={styles.error}>
               Simulation failed: {simulationError}. Approval blocked.
@@ -1229,7 +1245,9 @@ export function Bridge() {
           <button
             type="button"
             className={styles.primary}
-            disabled={simulating || !!simulationError || !simulation}
+            disabled={
+              !reviewed.quote.conversion && (simulating || !!simulationError || !simulation)
+            }
             onClick={() => {
               void submit();
             }}
