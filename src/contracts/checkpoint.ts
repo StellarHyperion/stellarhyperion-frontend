@@ -3,7 +3,10 @@ import { StrKey } from "@stellar/stellar-sdk";
 import { TESTNET, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
 
 export interface TransferCheckpoint {
+  schemaVersion?: 1;
+  revision?: number;
   router: string;
+  networkPassphrase?: string;
   account: string;
   recipient: string;
   destination: DestinationKey;
@@ -36,7 +39,10 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as {
+      schemaVersion?: number;
+      revision?: number;
       router: string;
+      networkPassphrase?: string;
       account: string;
       recipient: string;
       destination: string;
@@ -46,7 +52,9 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       txHash: string;
     };
     if (
+      (value.schemaVersion !== undefined && value.schemaVersion !== 1) ||
       value.router !== TESTNET.router ||
+      (value.networkPassphrase !== undefined && typeof value.networkPassphrase !== "string") ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
       !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||
       /^0x0{40}$/.test(value.recipient) ||
@@ -58,12 +66,56 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     )
       return null;
     destinationFor(value.destination);
+    const { schemaVersion, ...rest } = value;
     return {
-      ...value,
+      ...rest,
+      ...(schemaVersion === undefined ? {} : { schemaVersion: 1 as const }),
       destination: destinationFor(value.destination).key,
       route: value.route,
       stage: value.stage,
     };
+  } catch {
+    return null;
+  }
+}
+
+export function checkpointNetworkMatches(checkpoint: TransferCheckpoint): boolean {
+  return (
+    checkpoint.networkPassphrase === undefined ||
+    checkpoint.networkPassphrase === TESTNET.networkPassphrase
+  );
+}
+
+export type CheckpointComparison = "same" | "compatible" | "conflict";
+export function compareCheckpoints(
+  left: TransferCheckpoint,
+  right: TransferCheckpoint,
+): CheckpointComparison {
+  if (left.txHash === right.txHash) return "same";
+  const sameIntent =
+    left.account === right.account &&
+    left.recipient === right.recipient &&
+    left.destination === right.destination &&
+    left.route === right.route &&
+    left.bridgeAmount === right.bridgeAmount;
+  if (left.stage === "conversion" && right.stage === "bridge" && sameIntent) return "compatible";
+  if (right.stage === "conversion" && left.stage === "bridge" && sameIntent) return "compatible";
+  return "conflict";
+}
+
+export function exportCheckpoint(checkpoint: TransferCheckpoint): string {
+  return JSON.stringify({
+    exportVersion: 1,
+    ...checkpoint,
+    networkPassphrase: TESTNET.networkPassphrase,
+  });
+}
+
+export function importCheckpoint(raw: string): TransferCheckpoint | null {
+  try {
+    const value = JSON.parse(raw) as { exportVersion?: number };
+    if (value.exportVersion !== 1) return null;
+    return parseCheckpoint(JSON.stringify(value));
   } catch {
     return null;
   }
@@ -86,27 +138,23 @@ export function checkpointMatches(
 }
 export function saveCheckpoint(value: TransferCheckpoint | null) {
   const existing = parseCheckpoint(snapshot());
-  if (
-    value &&
-    existing &&
-    value.txHash !== existing.txHash &&
-    !(
-      existing.stage === "conversion" &&
-      value.stage === "bridge" &&
-      existing.account === value.account &&
-      existing.recipient === value.recipient &&
-      existing.destination === value.destination &&
-      existing.route === value.route &&
-      existing.bridgeAmount === value.bridgeAmount
-    )
-  )
+  if (value && existing && compareCheckpoints(existing, value) === "conflict")
     throw new Error(
       "A previous transaction remains pending. Check its outcome before submitting another.",
     );
   if (value) memoryCheckpoint = JSON.stringify(value);
   try {
     if (typeof localStorage !== "undefined") {
-      if (value) localStorage.setItem(key, JSON.stringify(value));
+      if (value)
+        localStorage.setItem(
+          key,
+          JSON.stringify({
+            ...value,
+            schemaVersion: 1,
+            networkPassphrase: TESTNET.networkPassphrase,
+            revision: (existing?.revision ?? 0) + 1,
+          }),
+        );
       else localStorage.removeItem(key);
     }
     checkpointPersistenceFailed = false;

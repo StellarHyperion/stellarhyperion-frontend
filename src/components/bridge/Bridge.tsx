@@ -62,6 +62,8 @@ import {
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import {
   claimOperationOwnership,
+  checkpointNetworkMatches,
+  exportCheckpoint,
   getOperationOwnership,
   releaseOperationOwnership,
   saveCheckpoint,
@@ -327,8 +329,15 @@ function PendingTransferCard({
         ? latest
         : null;
   const sameAccount = wallet.address === checkpoint.account;
+  const sameNetwork = checkpointNetworkMatches(checkpoint);
   const check = async () => {
     if (checking || busy) return;
+    if (!sameNetwork) {
+      setError(
+        "This checkpoint belongs to a different Stellar network. Reconnect to Testnet before checking it.",
+      );
+      return;
+    }
     setChecking(true);
     setError(null);
     try {
@@ -441,6 +450,21 @@ function PendingTransferCard({
           </button>
         </div>
         {copied && <span role="status">Transaction hash copied.</span>}
+        <button
+          type="button"
+          className={styles.secondary}
+          onClick={() => {
+            const blob = new Blob([exportCheckpoint(checkpoint)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `hyperion-checkpoint-${checkpoint.txHash.slice(0, 12)}.json`;
+            link.click();
+            URL.revokeObjectURL(url);
+          }}
+        >
+          Export recovery metadata
+        </button>
         <a
           className={styles.transactionLink}
           href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -459,6 +483,12 @@ function PendingTransferCard({
         <p>
           Reconnect {checkpoint.account.slice(0, 7)}...{checkpoint.account.slice(-7)} to continue
           this transfer.
+        </p>
+      )}
+      {!sameNetwork && (
+        <p role="alert" className={styles.error}>
+          This recovery record belongs to another Stellar network. Lookup and continuation are
+          blocked.
         </p>
       )}
       {error && (
@@ -483,11 +513,11 @@ function PendingTransferCard({
           onClick={() => {
             void check();
           }}
-          disabled={busy || checking}
+          disabled={busy || checking || !sameNetwork}
         >
           {checking
             ? "Checking transaction..."
-            : checkpoint.stage === "conversion" && sameAccount
+            : checkpoint.stage === "conversion" && sameAccount && sameNetwork
               ? "Check and continue"
               : "Check status"}
         </button>

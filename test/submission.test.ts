@@ -14,7 +14,14 @@ import { toHex } from "@hyperion/protocol";
 import { submitSettleClaim, submitOperation, simulateOperation } from "../src/contracts/stellar";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
-import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
+import {
+  checkpointMatches,
+  checkpointNetworkMatches,
+  compareCheckpoints,
+  exportCheckpoint,
+  importCheckpoint,
+  parseCheckpoint,
+} from "../src/contracts/checkpoint";
 import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
 import {
   planMaxUsdcAmount,
@@ -689,6 +696,36 @@ describe("Checkpoint staleness guards", () => {
   });
   it("rejects a stale confirmation when the stage changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, stage: "conversion" })).toBe(false);
+  });
+
+  it("exports only bounded public recovery metadata and validates reimports", () => {
+    const validCheckpoint = { ...checkpoint, account: TESTNET.reader };
+    const exported = exportCheckpoint(validCheckpoint);
+    expect(exported).not.toContain("signature");
+    expect(importCheckpoint(exported)).toMatchObject(validCheckpoint);
+    expect(importCheckpoint(exported.replace('"exportVersion":1', '"exportVersion":2'))).toBeNull();
+  });
+
+  it("keeps divergent transaction hashes unresolved", () => {
+    expect(compareCheckpoints(checkpoint, { ...checkpoint, txHash: "1".repeat(64) })).toBe(
+      "conflict",
+    );
+    expect(
+      compareCheckpoints(checkpoint, {
+        ...checkpoint,
+        stage: "conversion",
+        txHash: "1".repeat(64),
+      }),
+    ).toBe("compatible");
+  });
+
+  it("blocks recovery metadata from another Stellar network", () => {
+    const other = parseCheckpoint(
+      JSON.stringify({ ...checkpoint, account: TESTNET.reader, networkPassphrase: "other" }),
+    );
+    expect(other).not.toBeNull();
+    if (!other) throw new Error("Expected a valid checkpoint fixture.");
+    expect(checkpointNetworkMatches(other)).toBe(false);
   });
 });
 
