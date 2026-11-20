@@ -1,3 +1,4 @@
+import { cctpPayoutBreakdown } from "../src/lib/relay-budget";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Account,
@@ -8,10 +9,13 @@ import {
   TransactionBuilder,
   nativeToScVal,
   rpc,
-  type xdr,
+  scValToNative,
+  xdr,
 } from "@stellar/stellar-sdk";
 import { sorobanErrorCode, toHex } from "@hyperion/protocol";
 import {
+  assertReviewedFeeCurrent,
+  bridgeOperation,
   classifySubmissionFailure,
   describeBindingLimit,
   SubmissionFailure,
@@ -236,6 +240,105 @@ describe("Signed Stellar submission failure boundaries", () => {
       representableBridgeAmount: 9969990n,
       retainedDust: 5n,
     });
+  });
+  it("deducts the complete approved Circle forwarding budget in destination units", () => {
+    expect(cctpPayoutBreakdown(996999n, 500000n)).toEqual({
+      destinationBudget: 50000n,
+      minimumReceived: 946999n,
+    });
+    expect(cctpPayoutBreakdown(2n, 10n)).toEqual({ destinationBudget: 1n, minimumReceived: 1n });
+    for (const [amount, budget] of [
+      [1n, 10n],
+      [0n, 10n],
+      [2n, 11n],
+      [2n, -10n],
+      [2n, 30n],
+    ] as const)
+      expect(() => cctpPayoutBreakdown(amount, budget)).toThrow();
+  });
+  it("encodes the exact displayed CCTP minimum and approved forwarding budget in the router request", () => {
+    const value: LiveQuote = {
+      route: 0,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000000n,
+      grossAmount: 9999995n,
+      fee: 30005n,
+      netAmount: 9969990n,
+      representableAmount: 996999n,
+      destinationAmount: 946999n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 500000n,
+    };
+    const operation = bridgeOperation(key.publicKey(), value, "0x" + "1".repeat(40));
+    const transaction = new TransactionBuilder(new Account(key.publicKey(), "0"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(180)
+      .build();
+    const envelope = xdr.TransactionEnvelope.fromXdr(transaction.toXdr(), "base64");
+    if (envelope.type !== "envelopeTypeTx") throw new Error("Expected a v1 transaction");
+    const operationBody = envelope.v1.tx.operations[0];
+    if (!operationBody) throw new Error("Expected a router operation");
+    const body = operationBody.body;
+    if (body.type !== "invokeHostFunction") throw new Error("Expected a contract operation");
+    const hostFunction = body.invokeHostFunctionOp.hostFunction;
+    if (hostFunction.type !== "hostFunctionTypeInvokeContract")
+      throw new Error("Expected a contract invocation");
+    const args = hostFunction.invokeContract.args;
+    const request = args[1];
+    const budget = args[2];
+    if (!request || !budget) throw new Error("Expected router request and relay budget");
+    expect(scValToNative(request)).toMatchObject({
+      amount: 10000000n,
+      destination_decimals: 6,
+      min_destination_amount: 946999n,
+    });
+    expect(scValToNative(budget)).toBe(500000n);
+    expect(cctpPayoutBreakdown(value.representableAmount, value.relayGas).minimumReceived).toBe(
+      946999n,
+    );
+  });
+  it("holds the reviewed budget and minimum through improved fees and rejects material changes", () => {
+    const reviewed: LiveQuote = {
+      route: 0,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000000n,
+      grossAmount: 9999995n,
+      fee: 30005n,
+      netAmount: 9969990n,
+      representableAmount: 996999n,
+      destinationAmount: 946999n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 500000n,
+      estimatedRelayGas: 450000n,
+    };
+    const improved = {
+      ...reviewed,
+      relayGas: 400000n,
+      estimatedRelayGas: 350000n,
+      destinationAmount: 956999n,
+    };
+    expect(() => {
+      assertReviewedFeeCurrent(reviewed, improved);
+    }).not.toThrow();
+    expect(reviewed.relayGas).toBe(500000n);
+    expect(reviewed.destinationAmount).toBe(946999n);
+    for (const change of [
+      { estimatedRelayGas: 500001n },
+      { destinationAmount: 946998n },
+      { adapter: TESTNET.token },
+      { destination: "base-sepolia" as const },
+      { requestedAmount: 10000001n },
+    ])
+      expect(() => {
+        assertReviewedFeeCurrent(reviewed, { ...reviewed, ...change });
+      }).toThrow("fresh quote");
   });
   it("retains no dust on Axelar ITS, whose seven-decimal destination matches Stellar exactly", () => {
     const value: LiveQuote = {
