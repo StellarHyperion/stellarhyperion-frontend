@@ -56,9 +56,10 @@ export interface FormattedTransfer {
     readonly lastError: string | null;
   } | null;
   readonly claim: {
+    /** Indexer-reported claim data; recovery verifies claim and custody directly on chain. */
     readonly id: string;
     readonly settled: boolean;
-    /** Claims without provenance remain visible but cannot be offered for settlement. */
+    /** Claims without provenance remain visible but are not linked to supported on-chain recovery. */
     readonly deployment?: {
       readonly chain: string;
       readonly router: string;

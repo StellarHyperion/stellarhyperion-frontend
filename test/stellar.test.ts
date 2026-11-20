@@ -13,6 +13,7 @@ import {
   diagnoseSequence,
   claimMatchesDeployment,
   parseSendAmount,
+  parseOnChainInteger,
   readTransaction,
   reconcileSignatureReturn,
   validateReviewMatch,
@@ -134,6 +135,14 @@ describe("Real Stellar transaction encoding", () => {
     expect(parseSendAmount("900719925.4740993")).toBe(9007199254740993n);
     for (const value of ["", "0", "-1", "1.12345678", "1e3", "NaN", "1,000"])
       expect(() => parseSendAmount(value)).toThrow();
+  });
+  it("parses on-chain integer amounts exactly and rejects imprecise representations", () => {
+    expect(parseOnChainInteger(900719925474099312345n)).toBe(900719925474099312345n);
+    expect(parseOnChainInteger("900719925474099312345")).toBe(900719925474099312345n);
+    expect(() => parseOnChainInteger(Number.MAX_SAFE_INTEGER + 1)).toThrow(
+      "cannot be represented exactly",
+    );
+    expect(() => parseOnChainInteger("1.5")).toThrow("cannot be represented exactly");
   });
   it("requires a real nonzero EVM destination", () => {
     expect(validateRecipient("0x70997970C51812dc3A010C7d01b50e0d17dc79C8")).toMatch(/^0x/);

@@ -46,7 +46,7 @@ Relay budgets include 10% headroom over the live estimate. The Axelar XLM budget
 
 Hyperion charges 30 basis points (0.3%) on the bridged USDC amount. The source transaction sends that protocol fee to the router's configured Stellar treasury. Bridge forwarding, relay and network fees are separate and shown before signing.
 
-Claim recovery reads `get_claim` and signs `settle_claim` on the Stellar router. It pays the recorded recipient. A claim exists only when a destination router has parked funds for recovery; completed transfers have no claim number. Activity displays genuine claim numbers and settlement status, while transfer details explain when no claim exists. A delayed outbound transfer does not automatically become a Stellar claim.
+The claim panel reads `get_claim` from the verified Stellar Testnet router and is read-only. It shows the recorded recipient and entitlement, the router's on-chain token balance when the token exposes a compatible balance interface, and the exact token contract. Router token custody is shared balance, not a claim-specific reserve or proof of aggregate solvency. The panel does not infer aggregate claim liability or withdrawable amounts from an entitlement or balance; missing liability data is not treated as zero. Indexer-reported claim data in Activity is not a substitute for checking current on-chain state. A claim exists only when a destination router has parked funds for recovery; a delayed outbound transfer does not automatically become a Stellar claim.
 
 ## Deploy
 

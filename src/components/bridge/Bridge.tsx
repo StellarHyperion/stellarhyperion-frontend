@@ -29,7 +29,6 @@ import {
   readLane,
   readCheckpointTransaction,
   submitBridgeOut,
-  submitSettleClaim,
   validateRecipient,
   type LaneState,
   type LiveQuote,
@@ -1122,45 +1121,16 @@ export function Bridge() {
 }
 
 export function ClaimRecovery() {
-  const wallet = useStellarWallet();
   const [id, setId] = useState("");
   const [claim, setClaim] = useState<PendingClaim | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<TransactionResult | null>(null);
-  const claimApproval: WalletApprovalProvenance | null = wallet.address
-    ? {
-        account: wallet.address,
-        network: TESTNET.networkPassphrase,
-        operation: "claim-settlement",
-      }
-    : null;
   const lookup = async () => {
     setBusy(true);
     setError(null);
     setClaim(null);
-    setResult(null);
     try {
       setClaim(await getClaim(BigInt(id)));
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const settle = async () => {
-    if (!claim || !wallet.address || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const transaction = await submitSettleClaim(
-        wallet.address,
-        claim.id,
-        (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "claim" }),
-        claimApproval ?? undefined,
-      );
-      setResult(transaction);
-      if (transaction.status === "confirmed") setClaim(await getClaim(claim.id));
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -1176,15 +1146,16 @@ export function ClaimRecovery() {
       <details>
         <summary>
           <div>
-            <h2 id="claims-heading">Recover a Stellar claim</h2>
+            <h2 id="claims-heading">Inspect a Stellar claim</h2>
             <span>For funds parked on the Stellar router</span>
           </div>
           <Plus size={18} aria-hidden="true" />
         </summary>
         <div className={styles.recoveryBody}>
           <p>
-            Look up a claim on the deployed Stellar router. Settlement always pays its recorded
-            recipient.
+            Read the claim and token custody on the verified Stellar Testnet router. A claim is
+            parked entitlement for its recorded recipient, not a guarantee that its full amount is
+            currently withdrawable.
           </p>
           <label htmlFor="claim-id">Claim number</label>
           <input
@@ -1202,51 +1173,51 @@ export function ClaimRecovery() {
           </button>
           {error && (
             <p role="alert" className={styles.error}>
-              {error} Claim settlement remains unavailable until the verified router deployment
-              matches.
+              {error}
             </p>
           )}
           {claim && (
             <>
+              <p>
+                Claim {claim.id.toString()}:{" "}
+                {claim.settled ? "settled on chain" : "parked entitlement"}
+              </p>
               <p className={styles.address}>Recipient: {claim.recipient}</p>
               <p>
-                Amount:{" "}
+                Recorded entitlement:{" "}
                 {claim.token === TESTNET.token
-                  ? `${formatUnits(claim.amount, 7)} USDC`
+                  ? `${formatUnits(claim.amount, 7)} USDC (${claim.amount} base units)`
                   : `${claim.amount} base units of ${claim.token}`}
               </p>
-              <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
+              <p className={styles.address}>Exact Stellar token contract: {claim.token}</p>
+              <p>Withdrawable amount: not determined by the claim record.</p>
+              <p>
+                Router token custody:{" "}
+                {claim.custody.status === "verified" && claim.custody.routerBalance !== null
+                  ? claim.token === TESTNET.token
+                    ? `${formatUnits(claim.custody.routerBalance, 7)} USDC`
+                    : `${claim.custody.routerBalance} base units`
+                  : "unknown"}
+              </p>
+              {claim.custody.reason && <p>{claim.custody.reason}</p>}
+              <p>
+                Aggregate outstanding claim liability: unavailable in this read-only view. Missing
+                liability data is not treated as zero.
+              </p>
+              <p>
+                Custody balance is the token balance of the router, not this claim&apos;s reserved
+                amount. It cannot establish aggregate solvency or the amount this recipient can
+                withdraw.
+              </p>
+              <p>
+                Payout preview: {claim.eligibility.status}. {claim.eligibility.reason}
+              </p>
               <p className={styles.address}>
                 Verified router: {claim.deployment.router} (revision {claim.deployment.commit},
                 deployed at ledger {claim.deployment.deployedLedger})
               </p>
               <p className={styles.address}>Router WASM: {claim.deployment.wasmHash}</p>
-              {!claim.settled && claimApproval && (
-                <>
-                  <ApprovalDetails approval={claimApproval} />
-                  <button
-                    type="button"
-                    disabled={busy || result?.status === "pending"}
-                    onClick={() => void settle()}
-                  >
-                    Sign claim settlement
-                  </button>
-                </>
-              )}
-              {!wallet.address && !claim.settled && (
-                <p>Connect your Stellar wallet to pay the settlement network fee.</p>
-              )}
             </>
-          )}
-          {result && (
-            <Link href={`/transfers/${result.txHash}`}>
-              {result.status === "confirmed"
-                ? "Settlement confirmed"
-                : result.status === "failed"
-                  ? "Settlement failed"
-                  : "Settlement pending"}
-              : view transaction
-            </Link>
           )}
         </div>
       </details>

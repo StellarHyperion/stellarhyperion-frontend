@@ -18,6 +18,10 @@ try {
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
   assert.equal(await page.getByLabel("Amount to send").count(), 1);
   assert.equal(await page.getByLabel("Recipient on Ethereum Sepolia").count(), 1);
+  await page.locator("#claim-recovery summary").click();
+  await page.getByText("A claim is parked entitlement", { exact: false }).waitFor();
+  assert.equal(await page.getByRole("button", { name: /sign claim settlement/i }).count(), 0);
+  assert.match(await page.locator("#claim-recovery").innerText(), /not treated as zero/i);
   const themeToggle = page.getByRole("button", { name: "Toggle dark theme" });
   if ((await themeToggle.getAttribute("aria-pressed")) !== "true") await themeToggle.click();
   await page.reload({ waitUntil: "networkidle" });
