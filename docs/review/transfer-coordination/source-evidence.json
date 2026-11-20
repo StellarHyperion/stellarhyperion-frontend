@@ -2,18 +2,18 @@
   "engine": "chromium",
   "version": "158.0.8127.18",
   "sources": {
-    "src/contracts/checkpoint.ts": "c20d2f6968f090023053d8eb7396ccaa2dd5338bdbd56adb25d0146e7edcdc8c",
-    "src/components/bridge/Bridge.tsx": "de2e968d1029e2d4de850e7145b6e1d5c0b3feb6be1b2c16095b03107b6b2107",
+    "src/contracts/checkpoint.ts": "ff2255d4b2b00c82e2810ff568376c1fc1c4d96205655bb36dec548f69c781bb",
+    "src/components/bridge/Bridge.tsx": "6bd9abf7cdf9d512bbddb6ffcd082d97ee9be3a39be34cbd6937427f3e448cbf",
     "src/lib/format.ts": "d93c44b5633b8682579c558ad3a56312fdbd93a138c8947b0fff62fe4e718e1b",
-    "src/contracts/stellar.ts": "87d41c4eb964813868f4ae844fcbfa9a7d3df3e62da928d4b6d7c674acfe18a1",
+    "src/contracts/stellar.ts": "98e1cc4b6055bf389a8bd21990d64ff5e0260d22e46a929fd362259ff6666a00",
     "src/wallets/stellar/signature.ts": "5e698dea0d64e708845ed3b511fc8d68adbadd73102b2cb1f0e7d1df8b168b11",
     "src/components/transfers/TransferList.tsx": "982a44a9b51cc7f74071ba3df64b4f4a33fcec2769e0d28f79734a3648deb39d"
   },
-  "checkpoint": "93750ac163b8912b7a3dc7a86b1648a8657550b9bf43d762b2553068e05523b7",
+  "checkpoint": "04e319dc0f3a29e43cf86b3d5faae67a01dc0783692bcb2a2d0e117977aedb10",
   "events": [
     "owner:tab-a",
     "signature:tab-a",
-    "checkpoint:93750ac163b8912b7a3dc7a86b1648a8657550b9bf43d762b2553068e05523b7",
+    "checkpoint:04e319dc0f3a29e43cf86b3d5faae67a01dc0783692bcb2a2d0e117977aedb10",
     "broadcast",
     "rejected:tab-b:Another tab owns this transfer (checkpoint tab-a). Finish or recover it before trying again."
   ],
