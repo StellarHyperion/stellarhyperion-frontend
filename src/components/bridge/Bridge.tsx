@@ -898,6 +898,8 @@ function PendingTransferCard({
       (checkpoint.stage === "bridge" && visibleCurrent?.status === "confirmed") ? (
         <button
           id="pending-recovery-action"
+          aria-describedby="pending-recovery-message"
+          aria-busy={checking}
           ref={actionRef}
           type="button"
           className={styles.secondary}
@@ -909,6 +911,8 @@ function PendingTransferCard({
       ) : (
         <button
           id="pending-recovery-action"
+          aria-describedby="pending-recovery-message"
+          aria-busy={checking}
           ref={actionRef}
           type="button"
           className={styles.secondary}
@@ -1033,6 +1037,8 @@ export function Bridge() {
   const [reviewApproval, setReviewApproval] = useState<WalletApprovalProvenance | null>(null);
   const [quoteDiff, setQuoteDiff] = useState<QuoteDiff | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const refreshGate = useRef<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [quoteVersion, setQuoteVersion] = useState(0);
   const [feeCooldown, setFeeCooldown] = useState<{ key: string; until: number } | null>(null);
   const [feeClock, setFeeClock] = useState(() => Date.now());
@@ -1108,12 +1114,18 @@ export function Bridge() {
   const laneKey = `${destination}:${route}:${refresh}`;
   const laneRefreshing = useVisibilityPoll(
     async (signal) => {
+      if (refreshGate.current !== null) refreshGate.current = laneKey;
       try {
         const value = await readLane(destination, route);
         if (!signal.aborted) setLaneState({ key: laneKey, value, error: null });
       } catch (cause) {
         if (!signal.aborted)
           setLaneState({ key: laneKey, value: null, error: errorMessage(cause) });
+      } finally {
+        if (!signal.aborted && refreshGate.current === laneKey) {
+          refreshGate.current = null;
+          setRefreshing(false);
+        }
       }
     },
     30_000,
@@ -1670,6 +1682,70 @@ export function Bridge() {
       ? trustlineReserveImpact(reserve, reviewed.quote.conversion, reviewed.addTrustline)
       : null;
   const reviewedReserveInsufficient = !!reviewedImpact && reviewedImpact.projectedSpendable < 0n;
+  let recipientProblem = false;
+  if (recipient.trim()) {
+    try {
+      validateRecipient(recipient);
+    } catch {
+      recipientProblem = true;
+    }
+  }
+  const amountProblem = amount.trim() !== "" && !amountValidation.valid;
+  const sourceReadBlocked =
+    valid &&
+    !!wallet.address &&
+    (sourceBalance === undefined ||
+      !trustlineOk ||
+      xlmStatus !== "ok" ||
+      trustlineReserveUnknown ||
+      trustlineReserveInsufficient);
+  const routeReadBlocked =
+    !!laneError || (valid && lane !== null && !lane.available) || !!quoteError || !!simulationError;
+  const validationSummary = [
+    amountProblem ? { id: "send-amount", label: "amount" } : null,
+    recipientProblem ? { id: "recipient", label: "destination wallet" } : null,
+    insufficient || exceedsFlow ? { id: "send-amount", label: "amount and available limit" } : null,
+    sourceReadBlocked ? { id: "bridge-action-help", label: "balance and reserve checks" } : null,
+    routeReadBlocked ? { id: "bridge-action-help", label: "route and fee checks" } : null,
+    error || wallet.error
+      ? {
+          id: checkpoint ? "pending-recovery-message" : "bridge-action-help",
+          label: "recovery guidance",
+        }
+      : null,
+  ].filter((item): item is { id: string; label: string } => item !== null);
+  const actionHelp = checkpoint
+    ? "Check the saved source transaction before approving another transfer."
+    : refreshing || fetching
+      ? "Wait while the current route and fee estimate are loaded."
+      : simulating
+        ? "Wait while the current transaction simulation is checked."
+        : busy
+          ? "An approval or source transaction check is already in progress."
+          : amountProblem || recipientProblem || !valid
+            ? "Enter a valid amount and destination wallet before reviewing."
+            : !wallet.address
+              ? "Connect your Stellar wallet to check its balance and review this transfer."
+              : laneError || (lane && !lane.available)
+                ? (lane?.reason ?? "Network verification is unavailable. Refresh to try again.")
+                : quoteError
+                  ? "The route or fee read failed. Refresh to retry before reviewing."
+                  : simulationError
+                    ? "The transaction check failed. Refresh to retry before reviewing."
+                    : insufficient || exceedsFlow
+                      ? "Reduce the amount to fit your spendable balance and the available route limit."
+                      : sourceBalance === undefined
+                        ? "Your current source balance has not been confirmed. Refresh to retry."
+                        : !trustlineOk
+                          ? "This source asset is not authorized for spending. Choose an available asset."
+                          : xlmStatus !== "ok" ||
+                              trustlineReserveUnknown ||
+                              trustlineReserveInsufficient
+                            ? "The account reserve and network fee checks must pass before reviewing."
+                            : !quote || (!quote.conversion && !simulation)
+                              ? "Wait for the current route and transaction checks to finish."
+                              : "Quote and balance checks complete. Review the exact amounts to continue. No transaction has been submitted.";
+
   return (
     <>
       {checkpoint && (
@@ -1680,7 +1756,11 @@ export function Bridge() {
           onReset={reset}
         />
       )}
-      <section className={styles.panel} aria-labelledby="bridge-heading" aria-busy={fetching}>
+      <section
+        className={styles.panel}
+        aria-labelledby="bridge-heading"
+        aria-busy={fetching || simulating || refreshing}
+      >
         <div className={styles.heading}>
           <div>
             <h2 id="bridge-heading">Bridge assets</h2>
@@ -1690,8 +1770,13 @@ export function Bridge() {
             className={styles.refresh}
             aria-label="Refresh quote and networks"
             title="Refresh quote and networks"
-            disabled={locked}
+            aria-describedby="bridge-action-help"
+            aria-busy={refreshing}
+            disabled={locked || refreshing || fetching || simulating}
             onClick={() => {
+              if (locked || refreshGate.current || fetching || simulating) return;
+              refreshGate.current = `${destination}:${route}:${refresh + 1}`;
+              setRefreshing(true);
               setRefresh((value) => value + 1);
               invalidateQuote();
             }}
@@ -1711,8 +1796,12 @@ export function Bridge() {
             <input
               id="send-amount"
               aria-label="Amount to send"
-              aria-describedby="send-amount-help"
-              aria-invalid={amount.trim() !== "" && !amountValidation.valid}
+              aria-describedby={
+                validationSummary.length
+                  ? "send-amount-help bridge-validation-summary"
+                  : "send-amount-help"
+              }
+              aria-invalid={amountProblem || !!insufficient || exceedsFlow}
               inputMode="decimal"
               autoComplete="off"
               value={amount}
@@ -1729,6 +1818,7 @@ export function Bridge() {
                 type="button"
                 className={styles.maxSpend}
                 aria-label="Use spendable balance"
+                aria-describedby="bridge-action-help"
                 disabled={
                   locked ||
                   conservativeMax === null ||
@@ -1943,6 +2033,8 @@ export function Bridge() {
           <input
             id="recipient"
             aria-label={`Recipient on ${chain.name}`}
+            aria-invalid={recipientProblem}
+            aria-describedby={validationSummary.length ? "bridge-validation-summary" : undefined}
             autoComplete="off"
             spellCheck={false}
             placeholder="0x..."
@@ -2015,6 +2107,32 @@ export function Bridge() {
                     : "Checking bridge availability..."))}
             </p>
           )
+        )}
+        {validationSummary.length > 0 && (
+          <nav
+            id="bridge-validation-summary"
+            aria-label="Transfer review checks"
+            className={styles.validationSummary}
+          >
+            <strong>Review before continuing</strong>
+            <ul>
+              {validationSummary.map((item) => (
+                <li key={`${item.id}-${item.label}`}>
+                  <a
+                    href={`#${item.id}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      const target = document.getElementById(item.id);
+                      target?.focus();
+                      target?.scrollIntoView({ block: "center" });
+                    }}
+                  >
+                    Review {item.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
         )}
         {!error && !wallet.error && quoteError && quoteDiagnostic ? (
           <div role="alert" className={styles.limitDiagnostic}>
@@ -2160,6 +2278,8 @@ export function Bridge() {
           !checkpoint && (
             <button
               ref={reviewAction}
+              aria-describedby="bridge-action-help"
+              aria-busy={fetching || simulating}
               type="button"
               className={styles.primary}
               disabled={
@@ -2214,6 +2334,9 @@ export function Bridge() {
             </button>
           )
         )}
+        <p id="bridge-action-help" tabIndex={-1} role="status" className={styles.reviewNote}>
+          {actionHelp}
+        </p>
         <p className={styles.feeNote}>
           <ShieldCheck size={13} aria-hidden="true" />
           You stay in control. Your wallet signs every transaction.
