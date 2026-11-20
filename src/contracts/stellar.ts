@@ -1433,12 +1433,20 @@ export interface ReviewSnapshot {
 }
 
 export interface ReviewedIntentSnapshot {
+  readonly network: string;
+  readonly router: string;
+  readonly token: string;
   readonly account: string;
   readonly asset: Readonly<{ id: string; code: string; issuer: string | null }>;
   readonly destination: DestinationKey;
   readonly route: BridgeRoute;
   readonly recipient: string;
   readonly amount: bigint;
+  readonly sourceDebit: bigint;
+  readonly protocolFee: bigint;
+  readonly netAmount: bigint;
+  readonly representableAmount: bigint;
+  readonly adapter: string;
   readonly minimum: bigint;
   readonly providerBudget: bigint;
   readonly estimatedProviderBudget: bigint;
@@ -1448,23 +1456,62 @@ export interface ReviewedIntentSnapshot {
 }
 
 export function createReviewedIntentSnapshot(
-  intent: ReviewedIntentSnapshot,
+  intent: Omit<ReviewedIntentSnapshot, "network" | "router" | "token">,
 ): ReviewedIntentSnapshot {
+  const exactAmounts = [
+    intent.amount,
+    intent.sourceDebit,
+    intent.netAmount,
+    intent.representableAmount,
+    intent.minimum,
+    intent.sourceAmount,
+  ];
+  const budgets = [intent.protocolFee, intent.providerBudget, intent.estimatedProviderBudget];
   if (
-    !intent.account ||
-    !intent.asset.id ||
-    !intent.asset.code ||
-    intent.amount <= 0n ||
-    intent.minimum <= 0n ||
-    intent.providerBudget <= 0n ||
-    intent.estimatedProviderBudget <= 0n ||
-    intent.sourceAmount <= 0n ||
-    (intent.sourceMaximum !== null && intent.sourceMaximum <= 0n)
+    !StrKey.isValidEd25519PublicKey(intent.account) ||
+    !StrKey.isValidContract(intent.adapter) ||
+    !supportedLanes(intent.destination).some((lane) => lane.route === intent.route) ||
+    !["bridge", "conversion"].includes(intent.stage) ||
+    exactAmounts.some(
+      (amount) => typeof amount !== "bigint" || amount <= 0n || amount > I128_MAX,
+    ) ||
+    budgets.some((amount) => typeof amount !== "bigint" || amount < 0n || amount > I128_MAX) ||
+    (intent.sourceMaximum !== null &&
+      (typeof intent.sourceMaximum !== "bigint" ||
+        intent.sourceMaximum <= 0n ||
+        intent.sourceMaximum > I128_MAX)) ||
+    (intent.asset.issuer === null
+      ? intent.asset.id !== "native" || intent.asset.code !== "XLM"
+      : !StrKey.isValidEd25519PublicKey(intent.asset.issuer) ||
+        !/^[a-zA-Z0-9]{1,12}$/.test(intent.asset.code) ||
+        intent.asset.id !== `${intent.asset.code}:${intent.asset.issuer}`)
   )
     throw new Error("The reviewed transfer intent is invalid.");
   return Object.freeze({
-    ...intent,
-    asset: Object.freeze({ ...intent.asset }),
+    network: TESTNET.networkPassphrase,
+    router: TESTNET.router,
+    token: TESTNET.token,
+    account: intent.account,
+    asset: Object.freeze({
+      id: intent.asset.id,
+      code: intent.asset.code,
+      issuer: intent.asset.issuer,
+    }),
+    destination: intent.destination,
+    route: intent.route,
+    recipient: validateRecipient(intent.recipient),
+    amount: intent.amount,
+    sourceDebit: intent.sourceDebit,
+    protocolFee: intent.protocolFee,
+    netAmount: intent.netAmount,
+    representableAmount: intent.representableAmount,
+    adapter: intent.adapter,
+    minimum: intent.minimum,
+    providerBudget: intent.providerBudget,
+    estimatedProviderBudget: intent.estimatedProviderBudget,
+    sourceAmount: intent.sourceAmount,
+    sourceMaximum: intent.sourceMaximum,
+    stage: intent.stage,
   });
 }
 
@@ -1473,6 +1520,9 @@ export function reviewedIntentMatches(
   current: ReviewedIntentSnapshot,
 ): boolean {
   return (
+    original.network === current.network &&
+    original.router === current.router &&
+    original.token === current.token &&
     original.account === current.account &&
     original.asset.id === current.asset.id &&
     original.asset.code === current.asset.code &&
@@ -1481,6 +1531,11 @@ export function reviewedIntentMatches(
     original.route === current.route &&
     original.recipient === current.recipient &&
     original.amount === current.amount &&
+    original.sourceDebit === current.sourceDebit &&
+    original.protocolFee === current.protocolFee &&
+    original.netAmount === current.netAmount &&
+    original.representableAmount === current.representableAmount &&
+    original.adapter === current.adapter &&
     original.minimum === current.minimum &&
     original.providerBudget === current.providerBudget &&
     original.estimatedProviderBudget === current.estimatedProviderBudget &&
@@ -1498,17 +1553,31 @@ export function reviewedBridgeMatches(
     destination: DestinationKey;
     route: BridgeRoute;
     amount: bigint;
+    sourceDebit: bigint;
+    protocolFee: bigint;
+    netAmount: bigint;
+    representableAmount: bigint;
+    adapter: string;
     minimum: bigint;
     providerBudget: bigint;
     estimatedProviderBudget: bigint;
   },
 ): boolean {
   return (
+    intent.network === TESTNET.networkPassphrase &&
+    intent.router === TESTNET.router &&
+    intent.token === TESTNET.token &&
+    intent.stage === "bridge" &&
     intent.account === current.account &&
     intent.recipient === current.recipient &&
     intent.destination === current.destination &&
     intent.route === current.route &&
     intent.amount === current.amount &&
+    intent.sourceDebit === current.sourceDebit &&
+    intent.protocolFee === current.protocolFee &&
+    intent.netAmount === current.netAmount &&
+    intent.representableAmount === current.representableAmount &&
+    intent.adapter === current.adapter &&
     intent.minimum === current.minimum &&
     intent.providerBudget === current.providerBudget &&
     intent.estimatedProviderBudget === current.estimatedProviderBudget
@@ -1839,7 +1908,9 @@ async function signAndSubmit(
   const hash = toHex(prepared.hash()).slice(2);
   await submissionStage("checkpoint", async () => {
     if (reconcile) {
-      if (reconcile.isSuperseded?.()) {
+      const superseded = reconcile.isSuperseded?.() === true;
+      if (reconcile.onSigned) await reconcile.onSigned(hash, signedTransaction);
+      if (superseded) {
         throw new Error(
           "The review was superseded before signing completed. Nothing was submitted.",
         );
@@ -1858,7 +1929,6 @@ async function signAndSubmit(
       if (reconcile.validate) {
         await reconcile.validate(hash, signedTransaction);
       }
-      if (reconcile.onSigned) await reconcile.onSigned(hash, signedTransaction);
     }
     progress?.("submitting", hash);
   });
@@ -1930,6 +2000,11 @@ export async function submitBridgeOut(
       destination: quoted.destination,
       route: quoted.route,
       amount: quoted.requestedAmount,
+      sourceDebit: quoted.grossAmount,
+      protocolFee: quoted.fee,
+      netAmount: quoted.netAmount,
+      representableAmount: quoted.representableAmount,
+      adapter: quoted.adapter,
       minimum: quoted.destinationAmount,
       providerBudget: quoted.relayGas,
       estimatedProviderBudget: quoted.estimatedRelayGas ?? quoted.relayGas,

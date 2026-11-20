@@ -25,6 +25,7 @@ import {
   quoteFreshness,
   quoteBreakdown,
   type LiveQuote,
+  submitBridgeOut,
   submitSettleClaim,
   submitOperation,
   simulateOperation,
@@ -146,6 +147,11 @@ describe("Immutable reviewed transfer intent", () => {
     route: 0,
     recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
     amount: 9007199254740993n,
+    sourceDebit: 9007199254740993n,
+    protocolFee: 30000n,
+    netAmount: 9007199254710993n,
+    representableAmount: 9007199254710993n,
+    adapter: TESTNET.router,
     minimum: 9007199254740001n,
     providerBudget: 123450n,
     estimatedProviderBudget: 112230n,
@@ -184,6 +190,11 @@ describe("Immutable reviewed transfer intent", () => {
       destination: intent.destination,
       route: intent.route,
       amount: intent.amount,
+      sourceDebit: intent.sourceDebit,
+      protocolFee: intent.protocolFee,
+      netAmount: intent.netAmount,
+      representableAmount: intent.representableAmount,
+      adapter: intent.adapter,
       minimum: intent.minimum,
       providerBudget: intent.providerBudget,
       estimatedProviderBudget: intent.estimatedProviderBudget,
@@ -193,6 +204,67 @@ describe("Immutable reviewed transfer intent", () => {
     expect(
       reviewedBridgeMatches(intent, { ...bridge, providerBudget: bridge.providerBudget + 1n }),
     ).toBe(false);
+  });
+
+  it("copies only public reviewed fields and detects deployment changes", () => {
+    const input = {
+      ...intent,
+      signedTxXdr: "fixture-envelope",
+      walletSecret: "fixture-extra",
+      asset: { ...intent.asset, signingMetadata: "fixture-extra" },
+    };
+    const snapshot = createReviewedIntentSnapshot(input);
+    expect(snapshot).not.toHaveProperty("signedTxXdr");
+    expect(snapshot).not.toHaveProperty("walletSecret");
+    expect(snapshot.asset).not.toHaveProperty("signingMetadata");
+    for (const change of [
+      { network: "other-network" },
+      { router: TESTNET.token },
+      { token: TESTNET.router },
+    ])
+      expect(reviewedIntentMatches(snapshot, { ...snapshot, ...change })).toBe(false);
+  });
+
+  it("refuses mismatched payout fields in actual bridge submission before any wallet or RPC call", async () => {
+    const wallet = vi.fn(sign);
+    const rpcRead = vi.spyOn(rpc.Server.prototype, "getNetwork");
+    const quote: LiveQuote = {
+      route: 0,
+      adapter: intent.adapter,
+      destination: intent.destination,
+      requestedAmount: intent.amount,
+      grossAmount: intent.sourceDebit,
+      fee: intent.protocolFee,
+      netAmount: intent.netAmount,
+      representableAmount: intent.representableAmount,
+      destinationAmount: intent.minimum,
+      relayGas: intent.providerBudget,
+      estimatedRelayGas: intent.estimatedProviderBudget,
+      flowAvailable: intent.amount * 2n,
+      ledger: 1,
+    };
+    for (const change of [
+      { fee: quote.fee + 1n },
+      { grossAmount: quote.grossAmount - 1n },
+      { destinationAmount: quote.destinationAmount - 1n },
+      { relayGas: quote.relayGas + 1n },
+      { adapter: TESTNET.token },
+      { requestedAmount: quote.requestedAmount + 1n },
+    ]) {
+      await expect(
+        submitBridgeOut(
+          intent.account,
+          { ...quote, ...change },
+          intent.recipient,
+          wallet,
+          undefined,
+          undefined,
+          { expectedAccount: intent.account, reviewedIntent: intent },
+        ),
+      ).rejects.toThrow("reviewed transfer intent changed");
+    }
+    expect(wallet).not.toHaveBeenCalled();
+    expect(rpcRead).not.toHaveBeenCalled();
   });
 
   it("only exposes testnet lanes with destination-specific delivered evidence", () => {
@@ -586,16 +658,26 @@ describe("Signed Stellar submission failure boundaries", () => {
   it("never automatically submits a signature for a superseded review", async () => {
     const { send } = setup();
     let superseded = false;
+    let signedHash: string | undefined;
+    let savedHash: string | undefined;
     const wallet = (value: string) => {
       superseded = true;
+      signedHash = toHex(TransactionBuilder.fromXdr(value, TESTNET.networkPassphrase).hash()).slice(
+        2,
+      );
       return sign(value);
     };
     await expect(
       submitSettleClaim(key.publicKey(), 1n, wallet, undefined, {
         expectedAccount: key.publicKey(),
         isSuperseded: () => superseded,
+        onSigned: (hash) => {
+          savedHash = hash;
+        },
       }),
     ).rejects.toThrow("superseded");
+    expect(savedHash).toEqual(signedHash);
+    expect(savedHash).toMatch(/^[0-9a-f]{64}$/);
     expect(send).not.toHaveBeenCalled();
   });
   it("preserves exact signed hash and safe recovery state when account switches during signing", async () => {

@@ -131,6 +131,11 @@ function makeReviewedIntent(
     route,
     recipient: validateRecipient(recipient),
     amount: bridge.requestedAmount,
+    sourceDebit: bridge.grossAmount,
+    protocolFee: bridge.fee,
+    netAmount: bridge.netAmount,
+    representableAmount: bridge.representableAmount,
+    adapter: bridge.adapter,
     minimum: bridge.destinationAmount,
     providerBudget: bridge.relayGas,
     estimatedProviderBudget: bridge.estimatedRelayGas ?? bridge.relayGas,
@@ -678,6 +683,9 @@ function PendingTransferCard({
           reviewedIntent,
           getCurrentAccount: () => currentAccount.current,
           isSuperseded: () => !active(),
+          onSigned: (hash) => {
+            saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
+          },
         },
         cardSimulation,
         controller.signal,
@@ -1401,6 +1409,9 @@ export function Bridge() {
       reviewedIntent: reviewed.intent,
       getCurrentAccount: () => liveReview.current.account ?? null,
       isSuperseded,
+      onSigned: (hash) => {
+        saveCheckpoint(pending("conversion", hash));
+      },
       onAccountSwitch: (hash) => {
         saveCheckpoint(pending("conversion", hash));
       },
@@ -1410,6 +1421,9 @@ export function Bridge() {
       reviewedIntent: reviewed.intent,
       getCurrentAccount: () => liveReview.current.account ?? null,
       isSuperseded,
+      onSigned: (hash) => {
+        saveCheckpoint(pending("bridge", hash));
+      },
       onAccountSwitch: (hash) => {
         saveCheckpoint(pending("bridge", hash));
       },

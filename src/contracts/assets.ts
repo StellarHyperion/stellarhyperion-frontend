@@ -866,6 +866,22 @@ export async function submitConversion(
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
+  const intent = reconcile?.reviewedIntent;
+  if (
+    intent &&
+    (intent.network !== TESTNET.networkPassphrase ||
+      intent.router !== TESTNET.router ||
+      intent.token !== TESTNET.token ||
+      intent.account !== sender ||
+      intent.stage !== "conversion" ||
+      intent.asset.id !== conversion.source.id ||
+      intent.asset.code !== conversion.source.code ||
+      intent.asset.issuer !== conversion.source.issuer ||
+      intent.sourceAmount !== conversion.sourceMax ||
+      intent.sourceMaximum !== conversion.sourceMax ||
+      intent.amount !== conversion.usdcAmount)
+  )
+    throw new Error("The reviewed conversion intent changed. Review it again before signing.");
   const assets = await accountAssets(sender);
   const sourceAsset = assets.find((asset) => asset.id === conversion.source.id);
   if (!sourceAsset)
