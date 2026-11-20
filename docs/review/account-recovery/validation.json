@@ -1,47 +1,47 @@
 {
-  "head": "50bdf18fdf8486fb5cb079c71b28d1dec3e4dc76",
+  "head": "ec95fc106a5ee21521c69567a8e29500b93c9a02",
   "commands": [
     {
       "step": "fmt:check",
       "command": ["npm", "run", "fmt:check"],
       "exit_code": 0,
-      "seconds": 11.86
+      "seconds": 12.55
     },
     {
       "step": "house",
       "command": ["npm", "run", "house"],
       "exit_code": 0,
-      "seconds": 0.69
+      "seconds": 0.59
     },
     {
       "step": "contrast",
       "command": ["npm", "run", "contrast"],
       "exit_code": 0,
-      "seconds": 0.61
+      "seconds": 0.5
     },
     {
       "step": "test",
       "command": ["npm", "run", "test", "--", "--maxWorkers=4"],
       "exit_code": 0,
-      "seconds": 16.49
+      "seconds": 30.28
     },
     {
       "step": "lint",
       "command": ["npm", "run", "lint"],
       "exit_code": 0,
-      "seconds": 71.74
+      "seconds": 95.93
     },
     {
       "step": "typecheck",
       "command": ["npm", "run", "typecheck"],
       "exit_code": 0,
-      "seconds": 13.11
+      "seconds": 16.39
     },
     {
       "step": "build",
       "command": ["npm", "run", "build"],
       "exit_code": 0,
-      "seconds": 54.39
+      "seconds": 75.26
     }
   ],
   "complete": true

@@ -13,7 +13,7 @@
     "src/components/bridge/Bridge.module.css": "fe531edf745028f8b26b186c38b9ba80f0497180efc404ea34f341c1115c0991",
     "src/contracts/stellar.ts": "4b9582665dd226b4c6155075a68f5290c31c666aa035d8a9b5b2cb78da0ed890",
     "src/contracts/assets.ts": "e51dc4c5f0f049342151b5065730718014100a3468d5ad1b0848821b2b7dca14",
-    "src/contracts/checkpoint.ts": "222892d1833111dc350f0cbd6ba4881eee90f6c17a79ee589ba7bc30c1c15501",
+    "src/contracts/checkpoint.ts": "91688e71cf862c8c8bffb312680818beaf90100833c2abcf7cb210549d93d0a0",
     "src/contracts/claim-checkpoint.ts": "cbc944256d213681be49bbf5de05f4fbfc29223dbfc45d81cef073a6f641e80f",
     "src/components/bridge/CheckpointRecoveryInspector.tsx": "f3c63f32698918e73735f35f5d0efe7b932d2aa65fc37e765ca84cf27b8bfe61",
     "src/lib/checkpoint-reconciliation.ts": "811ee824692949b7c8891c0e170b9d1c95066a07f6574f527a20663c48efca30",

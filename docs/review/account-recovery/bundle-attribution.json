@@ -5,7 +5,7 @@
   "routes": [
     {
       "route": "/",
-      "firstLoadBytes": 1743371,
+      "firstLoadBytes": 1743577,
       "categories": [
         {
           "name": "wallet adapters",
@@ -130,8 +130,8 @@
         {
           "name": "transaction code",
           "maxBytes": 1200000,
-          "bytes": 1113487,
-          "initialBytes": 1045351,
+          "bytes": 1113693,
+          "initialBytes": 1045557,
           "chunks": [
             {
               "filename": "static/chunks/0py48navaz4-e.js",
@@ -162,8 +162,8 @@
               ]
             },
             {
-              "filename": "static/chunks/1ss02rfp7vglw.js",
-              "bytes": 263883,
+              "filename": "static/chunks/1oly83vtrwwse.js",
+              "bytes": 264089,
               "initial": true,
               "imports": [
                 {
@@ -344,7 +344,7 @@
     },
     {
       "route": "/_not-found",
-      "firstLoadBytes": 1656249,
+      "firstLoadBytes": 1656455,
       "categories": [
         {
           "name": "wallet adapters",
@@ -469,8 +469,8 @@
         {
           "name": "transaction code",
           "maxBytes": 1200000,
-          "bytes": 1113487,
-          "initialBytes": 1045351,
+          "bytes": 1113693,
+          "initialBytes": 1045557,
           "chunks": [
             {
               "filename": "static/chunks/0py48navaz4-e.js",
@@ -505,8 +505,8 @@
               ]
             },
             {
-              "filename": "static/chunks/1ss02rfp7vglw.js",
-              "bytes": 263883,
+              "filename": "static/chunks/1oly83vtrwwse.js",
+              "bytes": 264089,
               "initial": true,
               "imports": [
                 {
@@ -731,7 +731,7 @@
     },
     {
       "route": "/transfers",
-      "firstLoadBytes": 1692534,
+      "firstLoadBytes": 1692740,
       "categories": [
         {
           "name": "wallet adapters",
@@ -856,8 +856,8 @@
         {
           "name": "transaction code",
           "maxBytes": 1200000,
-          "bytes": 1113487,
-          "initialBytes": 1045351,
+          "bytes": 1113693,
+          "initialBytes": 1045557,
           "chunks": [
             {
               "filename": "static/chunks/0py48navaz4-e.js",
@@ -888,8 +888,8 @@
               ]
             },
             {
-              "filename": "static/chunks/1ss02rfp7vglw.js",
-              "bytes": 263883,
+              "filename": "static/chunks/1oly83vtrwwse.js",
+              "bytes": 264089,
               "initial": true,
               "imports": [
                 {
@@ -1078,7 +1078,7 @@
     },
     {
       "route": "/transfers/[txHash]",
-      "firstLoadBytes": 1680618,
+      "firstLoadBytes": 1680824,
       "categories": [
         {
           "name": "wallet adapters",
@@ -1203,8 +1203,8 @@
         {
           "name": "transaction code",
           "maxBytes": 1200000,
-          "bytes": 1113487,
-          "initialBytes": 1045351,
+          "bytes": 1113693,
+          "initialBytes": 1045557,
           "chunks": [
             {
               "filename": "static/chunks/0py48navaz4-e.js",
@@ -1235,8 +1235,8 @@
               ]
             },
             {
-              "filename": "static/chunks/1ss02rfp7vglw.js",
-              "bytes": 263883,
+              "filename": "static/chunks/1oly83vtrwwse.js",
+              "bytes": 264089,
               "initial": true,
               "imports": [
                 {
@@ -1429,7 +1429,7 @@
     },
     {
       "name": "transaction code",
-      "bytes": 1113487,
+      "bytes": 1113693,
       "maxBytes": 1200000,
       "chunks": 7
     }
