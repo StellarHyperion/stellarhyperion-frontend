@@ -769,6 +769,40 @@ function PendingTransferCard({
               setCardSimError(null);
             }
           }}
+          footer={
+            <>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={checking}
+                onClick={() => {
+                  setReview(null);
+                  setCardSimulation(null);
+                  setCardSimError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={
+                  checking || !sameAccount || cardSimulating || !!cardSimError || !cardSimulation
+                }
+                onClick={() => {
+                  void continueBridge();
+                }}
+              >
+                {checking
+                  ? "Confirming in your wallet..."
+                  : cardSimulating
+                    ? "Estimating simulation..."
+                    : cardSimError
+                      ? "Approval blocked"
+                      : "Bridge converted USDC"}
+              </button>
+            </>
+          }
         >
           <p className={styles.reviewNote}>
             Conversion confirmed. This step bridges the USDC already in your wallet.
@@ -793,24 +827,6 @@ function PendingTransferCard({
               Simulation failed: {cardSimError}. Approval blocked.
             </p>
           )}
-          <button
-            type="button"
-            className={styles.primary}
-            disabled={
-              checking || !sameAccount || cardSimulating || !!cardSimError || !cardSimulation
-            }
-            onClick={() => {
-              void continueBridge();
-            }}
-          >
-            {checking
-              ? "Confirming in your wallet..."
-              : cardSimulating
-                ? "Estimating simulation..."
-                : cardSimError
-                  ? "Approval blocked"
-                  : "Bridge converted USDC"}
-          </button>
           {error && <p role="alert">{error}</p>}
         </ReviewDialog>
       )}
@@ -1903,6 +1919,41 @@ export function Bridge() {
             setReviewing(false);
             setReviewed(null);
           }}
+          footer={
+            <>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={busy}
+                onClick={() => {
+                  setReviewing(false);
+                  setReviewed(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={
+                  busy ||
+                  reviewedReserveInsufficient ||
+                  (!!reviewed.quote.conversion && !reserve) ||
+                  (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
+                }
+                onClick={() => {
+                  void submit();
+                }}
+              >
+                {simulating
+                  ? "Estimating simulation..."
+                  : simulationError
+                    ? "Approval blocked"
+                    : "Confirm in wallet"}{" "}
+                <ArrowUpRight size={17} aria-hidden="true" />
+              </button>
+            </>
+          }
         >
           <div className={styles.reviewTotal}>
             <span>You send {reviewed.quote.conversion ? "up to" : ""}</span>
@@ -1988,26 +2039,6 @@ export function Bridge() {
               Simulation failed: {simulationError}. Approval blocked.
             </p>
           )}
-          <button
-            type="button"
-            className={styles.primary}
-            disabled={
-              busy ||
-              reviewedReserveInsufficient ||
-              (!!reviewed.quote.conversion && !reserve) ||
-              (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
-            }
-            onClick={() => {
-              void submit();
-            }}
-          >
-            {simulating
-              ? "Estimating simulation..."
-              : simulationError
-                ? "Approval blocked"
-                : "Confirm in wallet"}{" "}
-            <ArrowUpRight size={17} aria-hidden="true" />
-          </button>
         </ReviewDialog>
       )}
     </>
