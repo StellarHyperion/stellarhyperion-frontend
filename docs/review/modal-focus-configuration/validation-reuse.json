@@ -1,5 +1,5 @@
 {
-  "final_source_head": "11d6a39bff1fc7c80b9c464c468b8bf0b23c5c0d",
+  "final_source_head": "59a1bc60043d83734a1d13001812bb99d7764d4f",
   "full_validation_source": "640eda98fbb88789220914ec7771b2490d38f3a8",
   "all_seven_commands": "PASS (358 deterministic tests/two live skips)",
   "current_source_browser": "PASS actual complete Providers/Bridge/Dialog/pickers/provider/SDK; generated unsigned envelope, mocked read-only transports, rejected Freighter callback, no accepted signature or broadcast",
@@ -7,5 +7,9 @@
   "preserved_current_original_head": "288a67273bbcf6665ec6e495f3730e283094a045",
   "unchanged_production_source_and_lock": true,
   "fresh_integration_checks": "276 tests/four live skips; formatting, house, strict smoke lint PASS",
-  "security_correction": "Default secret rules/full-history scan retained with exact public token/value/test-path classification; four real scanner regressions and 96 security regressions PASS."
+  "security_correction": "Default secret rules/full-history scan retained with exact public token/value/test-path classification; four real scanner regressions and 96 security regressions PASS.",
+  "proof_security_validation": {
+    "source_head": "e9c7957bf34d638ce7d4f71598c9737825794d92",
+    "result": "All seven commands PASS:373tests/four live skips; descriptor-based private inode reads and runtime saved-shape guard preserved."
+  }
 }
