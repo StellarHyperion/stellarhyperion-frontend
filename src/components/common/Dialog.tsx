@@ -42,6 +42,7 @@ export function Dialog({
       ref={ref}
       className={styles.dialog}
       aria-label={title}
+      aria-modal="true"
       onCancel={(event) => {
         event.preventDefault();
         event.stopPropagation();

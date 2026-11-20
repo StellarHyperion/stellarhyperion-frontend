@@ -7,6 +7,7 @@ import {
   walletCapabilities,
   walletAvailabilityLabel,
 } from "../../wallets/stellar";
+import { CopyableAddress } from "../bridge/AssetPicker";
 import styles from "./StellarWalletButton.module.css";
 
 export function StellarWalletButton() {
@@ -135,7 +136,7 @@ export function StellarWalletButton() {
         <div id={menuId} className={styles.menu} role="region" aria-label="Wallet details">
           <div className={styles.addressRow}>
             <span className={styles.addressLabel}>stellar account</span>
-            <span className={styles.fullAddress}>{address}</span>
+            {address && <CopyableAddress value={address} label="stellar account" />}
           </div>
 
           {networkMismatch && (
