@@ -194,6 +194,67 @@ function withTimeout<T>(
   );
 }
 
+export interface WalletConnectionGuidance {
+  category:
+    | "popup_blocked"
+    | "access_denied"
+    | "network_mismatch"
+    | "extension_unavailable"
+    | "connection_timeout"
+    | "connection_failed";
+  message: string;
+  action: string;
+  install: boolean;
+}
+
+export function walletErrorGuidance(error: unknown): WalletConnectionGuidance {
+  const detail = friendlyMessage(error).slice(0, 512).toLowerCase();
+  if (
+    EXTENSION_LOST_PATTERN.test(detail) ||
+    /extension.*(removed|reload|unavailable)|install and open/.test(detail)
+  )
+    return {
+      category: "extension_unavailable",
+      message: "This wallet extension is unavailable.",
+      action: "Install or reopen the wallet from its official website, then retry the connection.",
+      install: true,
+    };
+  if (/popup|pop-up|window.*(blocked|closed)/.test(detail))
+    return {
+      category: "popup_blocked",
+      message: "The wallet popup was blocked or closed.",
+      action: "Allow popups for this site in your browser, then retry the connection.",
+      install: false,
+    };
+  if (/denied|reject|cancel/.test(detail))
+    return {
+      category: "access_denied",
+      message: "Wallet access was declined.",
+      action: "Retry when you are ready to approve access, or choose another wallet.",
+      install: false,
+    };
+  if (/network|testnet/.test(detail))
+    return {
+      category: "network_mismatch",
+      message: "The wallet is not connected to Stellar Testnet.",
+      action: "Switch your wallet to Stellar Testnet, then retry the connection.",
+      install: false,
+    };
+  if (/did not respond|did not return.*in time|timed? ?out/.test(detail))
+    return {
+      category: "connection_timeout",
+      message: "The wallet did not respond in time.",
+      action: "Open the wallet, close any old connection prompt, then retry when ready.",
+      install: false,
+    };
+  return {
+    category: "connection_failed",
+    message: "The wallet could not be connected.",
+    action: "Open the wallet and check its site permissions, then retry or choose another wallet.",
+    install: false,
+  };
+}
+
 async function albedoClient() {
   const intentModule = await import("@albedo-link/intent");
   const client = intentModule.default;
@@ -348,6 +409,57 @@ export async function walletNetwork(
   } catch {
     return null;
   }
+}
+
+/** Query an extension account without opening a wallet access prompt. Popup wallets have no silent query. */
+export async function walletCurrentAddress(
+  id: StellarWalletId,
+  signal?: AbortSignal,
+): Promise<string | null | undefined> {
+  if (id === "albedo" || id === "xbull") return undefined;
+  signal?.throwIfAborted();
+  if (id === "freighter") {
+    const api = await import("@stellar/freighter-api");
+    signal?.throwIfAborted();
+    const connected = await withTimeout(
+      api.isConnected(),
+      WALLET_AVAILABILITY_TIMEOUT_MS,
+      "Could not check Freighter availability.",
+      false,
+      signal,
+    );
+    if (!connected.isConnected) return null;
+    signal?.throwIfAborted();
+    const result = await withTimeout(
+      api.getAddress(),
+      WALLET_CONNECT_TIMEOUT_MS,
+      "Could not check the Freighter account.",
+      false,
+      signal,
+    );
+    if (result.error) throwWalletError(result.error);
+    return result.address ? account(result.address) : null;
+  }
+  const api = await import("@lobstrco/signer-extension-api");
+  signal?.throwIfAborted();
+  const connected = await withTimeout(
+    api.isConnected(),
+    WALLET_AVAILABILITY_TIMEOUT_MS,
+    "Could not check LOBSTR availability.",
+    false,
+    signal,
+  );
+  if (!connected) return null;
+  signal?.throwIfAborted();
+  const address = await withTimeout(
+    api.getPublicKey(),
+    WALLET_CONNECT_TIMEOUT_MS,
+    "Could not check the LOBSTR account.",
+    false,
+    signal,
+  );
+  return address ? account(address) : null;
+}
 }
 
 export async function walletSign(

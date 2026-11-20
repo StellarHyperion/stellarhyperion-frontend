@@ -1,0 +1,22 @@
+{
+  "sources": {
+    "src/app/providers.tsx": "e1d95a4ff5169be0ca0626f8f68f08c9f2d77658fc0be9848cc1e50ccb2b3da1",
+    "src/wallets/provider.tsx": "3f6ec1bf4498277d7709513d3cecf3f8fefb0bdd7c9ba0ea9bdba11a1f528bf2",
+    "src/components/common/Dialog.tsx": "ec7ca654ac1b1aaa7ff049589c834353e042eddf94dde967fa9db66d73b0d327",
+    "src/components/bridge/Bridge.tsx": "c822223d17cce01cad1b44ae50c81cc763883d5a2113b40480d11308e552d705",
+    "src/components/bridge/AssetPicker.tsx": "b2b08b4e8511e6fe0525a4aa01977c292ebf0a36780e97d71b100348295f6605",
+    "src/wallets/stellar/context.tsx": "9cb9e66e401c615dd52ea05bcbd3186cb7813f05d184080cde88f88c85c5e17c",
+    "src/wallets/stellar/sdk.ts": "86fb0a0e13204b338c90bd64356314e5763c6fe6f94583c65162a6a49314e8a7",
+    "src/config/testnet.ts": "3eb3529e42294eb6ef9c9fbb42443f43a474ac0f2f8bee7b6092c79ac62dc080",
+    "src/contracts/stellar.ts": "7ecac7d7afbc9b04406ac820165f9bd0a418970b9dba311d532956e2051c3923",
+    "src/lib/relay-budget.ts": "0b2d1515a5602d39b83a9281c375d10c3ac25570712c499862b5adfebe6246b1"
+  },
+  "fixture": "Actual complete Bridge/Dialog/picker/provider/SDK fee request lifecycle and actual fee refresh guard. Mock lane/quote/simulation boundaries; execution boundary checks real guard then invokes actual wallet callback, transport rejects approval. Generated local unsigned envelope, mocked Horizon. No broadcast.",
+  "captures": {
+    "desktop.png": "210aac2ad95409aa1ef6a3e3b69106ff98bf21575f50f7d44d71759ffdcac54f",
+    "desktop-fees.png": "11a955124c90799278247f4acccc141b8baf42991a5ee30ca1ad1297288eea2b",
+    "mobile-summary.png": "aad3478b53d8815e9bdff5724f94fa9e58f5e3b7e04a45e523069c38bc6011ff",
+    "mobile-fees.png": "6e7949e5a0ff46a9a28ad28929644a9182b9c66217bbe57fd4c2a0be600a53be",
+    "mobile.png": "422cdac2aed17fccf94a2fad842d380bc05f0f9c6c360ad216b0c56865fcdb84"
+  }
+}

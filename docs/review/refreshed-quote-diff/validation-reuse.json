@@ -1,0 +1,6 @@
+{
+  "full_validation_source": "b3e28b55569311767da398cda757f1c8cbeefa26",
+  "integrated_predecessor": "9c37c6646b80d1630fa2348e51375580513f8288",
+  "browser": "Complete rebuilt production ITS and CCTP Bridge/Providers fixture after account-change integration, Chromium158.0.8127.18; all six captures inspected and mobile overflow passed.",
+  "additional_change": "Evidence documentation only after validation."
+}
