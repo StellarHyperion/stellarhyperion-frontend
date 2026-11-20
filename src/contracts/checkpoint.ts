@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
+import { getClaimSettlementCheckpoint } from "./claim-checkpoint";
 import { TESTNET, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
 import { stellarAsset, type SourceAsset } from "./assets";
 
@@ -284,6 +285,18 @@ export function useTransferCheckpoint(): TransferCheckpoint | null {
   return useMemo(() => parseCheckpoint(raw), [raw]);
 }
 
+export {
+  parseClaimSettlementCheckpoint,
+  getClaimSettlementCheckpoint,
+  saveClaimSettlementCheckpoint,
+  useClaimSettlementCheckpoint,
+  acquireClaimSettlementLease,
+  claimSettlementIdentities,
+  claimSettlementCheckpointIdentity,
+  type ClaimSettlementCheckpoint,
+  type ClaimSettlementIdentity,
+} from "./claim-checkpoint";
+
 export interface OperationOwnership {
   id: string;
   account: string;
@@ -298,6 +311,70 @@ const ownershipKey = "hyperion.testnet.operation-ownership";
 const ownershipEvent = "hyperion:operation-ownership";
 
 let memoryOwnership: string | null = null;
+const OWNERSHIP_TTL_MS = 15 * 60 * 1000;
+
+export interface OperationLease extends OperationOwnership {
+  release(): void;
+}
+
+/** Hold the browser's cross-tab lock until signing and broadcast have finished. */
+export async function acquireOperationOwnership(
+  ownership: Parameters<typeof claimOperationOwnership>[0],
+): Promise<OperationLease> {
+  if (typeof window === "undefined") {
+    const owner = claimOperationOwnership(ownership);
+    return {
+      ...owner,
+      release: () => {
+        releaseOperationOwnership(owner.id);
+      },
+    };
+  }
+  const locks = (navigator as { locks?: LockManager }).locks;
+  if (!locks) {
+    throw new Error(
+      "This browser cannot coordinate transfer tabs. Use a supported browser before signing.",
+    );
+  }
+  return new Promise<OperationLease>((resolve, reject) => {
+    void locks
+      .request("hyperion.testnet.transfer-signing", { ifAvailable: true }, async (lock) => {
+        if (!lock) {
+          const current = getOperationOwnership();
+          throw new Error(
+            `Another tab owns this transfer (checkpoint ${current?.id ?? "unavailable"}). Finish or recover it before trying again.`,
+          );
+        }
+        if (getClaimSettlementCheckpoint())
+          throw new Error(
+            "A signed claim settlement is unresolved. Check it before another transfer.",
+          );
+        const checkpoint = getTransferCheckpoint();
+        if (checkpoint) {
+          throw new Error(
+            `A signed transfer is unresolved (checkpoint ${checkpoint.txHash}). Check its status before signing another transfer.`,
+          );
+        }
+        const owner = claimOperationOwnership(ownership);
+        let release!: () => void;
+        const held = new Promise<void>((done) => {
+          release = done;
+        });
+        let released = false;
+        resolve({
+          ...owner,
+          release: () => {
+            if (released) return;
+            released = true;
+            releaseOperationOwnership(owner.id);
+            release();
+          },
+        });
+        await held;
+      })
+      .catch(reject);
+  });
+}
 
 export function parseOwnership(raw: string | null): OperationOwnership | null {
   if (!raw) return null;
@@ -369,6 +446,16 @@ export function claimOperationOwnership(
     timestamp: ownership.timestamp ?? Date.now(),
   };
   const serialized = JSON.stringify(record);
+  const storedOwnership =
+    typeof localStorage !== "undefined" && typeof localStorage.getItem === "function"
+      ? localStorage.getItem(ownershipKey)
+      : memoryOwnership;
+  const current = parseOwnership(storedOwnership);
+  if (current && current.id !== record.id && Date.now() - current.timestamp < OWNERSHIP_TTL_MS) {
+    throw new Error(
+      `Another tab owns this transfer (checkpoint ${current.id}). Finish or recover it before trying again.`,
+    );
+  }
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.setItem(ownershipKey, serialized);

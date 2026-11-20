@@ -562,6 +562,9 @@
   padding-top: 12px;
   border-top: 1px solid var(--edge-color);
 }
+.summary > div:last-child dt {
+  flex-shrink: 0;
+}
 .summary > div:last-child dd {
   color: var(--text-primary);
   font-weight: 500;
@@ -681,6 +684,9 @@
   background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
   border-color: var(--edge-color);
 }
+.recovery > details {
+  min-width: 0;
+}
 .recovery summary {
   display: flex;
   align-items: center;
@@ -708,10 +714,26 @@
 }
 .recoveryBody {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 12px;
   padding: 0 20px 20px;
   font-size: 0.8125rem;
   line-height: 1.6;
+}
+.recoveryBody > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.claimCheckpoint {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  padding-block: var(--space-3);
+  border-block: 1px solid var(--edge-color);
+}
+.claimCheckpoint p {
+  margin: 0;
 }
 .recoveryBody label {
   font-size: 0.75rem;
@@ -724,6 +746,7 @@
   background: var(--surface-page);
   color: var(--text-primary);
   font: inherit;
+  font-size: 1rem;
   width: 100%;
 }
 .secondary,
