@@ -1,9 +1,13 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
 import { TESTNET, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
+import { stellarAsset, type SourceAsset } from "./assets";
+
+export type CheckpointSource = Pick<SourceAsset, "id" | "code" | "issuer">;
 
 export interface TransferCheckpoint {
   router: string;
+  token?: string;
   account: string;
   recipient: string;
   destination: DestinationKey;
@@ -11,6 +15,8 @@ export interface TransferCheckpoint {
   bridgeAmount: string;
   stage: "conversion" | "bridge";
   txHash: string;
+  /** The exact source asset (code + issuer) this recovery data was converted from. */
+  source?: CheckpointSource;
 }
 const key = "hyperion.testnet.pending-transfer";
 const event = "hyperion:pending-transfer";
@@ -84,11 +90,33 @@ function subscribe(listener: () => void) {
     window.removeEventListener(event, listener);
   };
 }
+/**
+ * Validates and normalizes the source asset a checkpoint claims to have converted from.
+ * Reuses `stellarAsset`'s identity checks so a checkpoint can never carry a corrupted or
+ * spoofed code/issuer pairing: an invalid identity throws, which the caller treats as a
+ * corrupted recovery record.
+ */
+function checkpointSource(value: unknown): CheckpointSource {
+  if (!value || typeof value !== "object") throw new Error("Missing source asset.");
+  const candidate = value as { id?: unknown; code?: unknown; issuer?: unknown };
+  if (typeof candidate.id !== "string" || typeof candidate.code !== "string")
+    throw new Error("Invalid source asset.");
+  if (candidate.issuer !== null && typeof candidate.issuer !== "string")
+    throw new Error("Invalid source asset issuer.");
+  const source: CheckpointSource = {
+    id: candidate.id,
+    code: candidate.code,
+    issuer: candidate.issuer,
+  };
+  stellarAsset(source);
+  return source;
+}
 export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as {
       router: string;
+      token?: string;
       account: string;
       recipient: string;
       destination: string;
@@ -96,9 +124,16 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       bridgeAmount: string;
       stage: string;
       txHash: string;
+      source?: unknown;
     };
     if (
+      typeof value.router !== "string" ||
+      typeof value.account !== "string" ||
+      typeof value.recipient !== "string" ||
+      typeof value.bridgeAmount !== "string" ||
+      typeof value.txHash !== "string" ||
       value.router !== TESTNET.router ||
+      (value.token !== undefined && value.token !== TESTNET.token) ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
       !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||
       /^0x0{40}$/.test(value.recipient) ||
@@ -109,12 +144,19 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       (value.stage !== "conversion" && value.stage !== "bridge")
     )
       return null;
+    const source = value.source === undefined ? undefined : checkpointSource(value.source);
     destinationFor(value.destination);
     return {
-      ...value,
+      router: value.router,
+      token: TESTNET.token,
+      account: value.account,
+      recipient: value.recipient,
+      bridgeAmount: value.bridgeAmount,
+      txHash: value.txHash,
       destination: destinationFor(value.destination).key,
       route: value.route,
       stage: value.stage,
+      ...(source ? { source } : {}),
     };
   } catch {
     return null;
@@ -126,31 +168,83 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
 // confirmation must never be reapplied to a new transfer.
 export function checkpointMatches(
   checkpoint: TransferCheckpoint,
-  context: Pick<TransferCheckpoint, "account" | "destination" | "route" | "bridgeAmount" | "stage">,
+  context: Pick<
+    TransferCheckpoint,
+    "account" | "recipient" | "destination" | "route" | "bridgeAmount" | "stage" | "source"
+  >,
 ): boolean {
   return (
     checkpoint.account === context.account &&
+    checkpoint.recipient === context.recipient &&
+    checkpointSourceIdentity(checkpoint.source) === checkpointSourceIdentity(context.source) &&
     checkpoint.destination === context.destination &&
     checkpoint.route === context.route &&
     checkpoint.bridgeAmount === context.bridgeAmount &&
     checkpoint.stage === context.stage
   );
 }
-export function saveCheckpoint(value: TransferCheckpoint | null) {
+
+/**
+ * Decides whether existing recovery data still applies to a given source asset selection.
+ * A checkpoint only ever belongs to the exact asset (code + issuer) it was converted from;
+ * once the user selects a different asset, the previous intent's recovery data must not be
+ * carried over, so this returns `null` instead of the stale checkpoint.
+ */
+export function checkpointForAsset(
+  checkpoint: TransferCheckpoint | null,
+  asset: CheckpointSource,
+): TransferCheckpoint | null {
+  if (!checkpoint?.source) return null;
+  if (
+    checkpoint.source.id !== asset.id ||
+    checkpoint.source.code !== asset.code ||
+    checkpoint.source.issuer !== asset.issuer
+  )
+    return null;
+  return checkpoint;
+}
+
+export function getTransferCheckpoint(): TransferCheckpoint | null {
+  return parseCheckpoint(snapshot());
+}
+function checkpointSourceIdentity(source: CheckpointSource | undefined): string {
+  return JSON.stringify([source?.id ?? null, source?.code ?? null, source?.issuer ?? null]);
+}
+export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
+  return JSON.stringify([
+    checkpoint.router,
+    checkpoint.account,
+    checkpoint.recipient,
+    checkpoint.destination,
+    checkpoint.route,
+    checkpoint.bridgeAmount,
+    checkpoint.stage,
+    checkpoint.txHash,
+    checkpoint.source?.id ?? null,
+    checkpoint.source?.code ?? null,
+    checkpoint.source?.issuer ?? null,
+  ]);
+}
+export function saveCheckpoint(value: TransferCheckpoint | null, expected?: TransferCheckpoint) {
   const existing = parseCheckpoint(snapshot());
+  if (expected && (!existing || checkpointIdentity(existing) !== checkpointIdentity(expected)))
+    throw new Error("The pending transaction changed in another tab. Check its current outcome.");
   if (
     value &&
     existing &&
-    value.txHash !== existing.txHash &&
-    !(
-      existing.stage === "conversion" &&
-      value.stage === "bridge" &&
-      existing.account === value.account &&
-      existing.recipient === value.recipient &&
-      existing.destination === value.destination &&
-      existing.route === value.route &&
-      existing.bridgeAmount === value.bridgeAmount
-    )
+    ((value.txHash === existing.txHash &&
+      checkpointIdentity(value) !== checkpointIdentity(existing)) ||
+      (value.txHash !== existing.txHash &&
+        !(
+          existing.stage === "conversion" &&
+          value.stage === "bridge" &&
+          existing.account === value.account &&
+          existing.recipient === value.recipient &&
+          existing.destination === value.destination &&
+          existing.route === value.route &&
+          existing.bridgeAmount === value.bridgeAmount &&
+          checkpointSourceIdentity(existing.source) === checkpointSourceIdentity(value.source)
+        )))
   )
     throw new Error(
       "A previous transaction remains pending. Check its outcome before submitting another.",
@@ -204,6 +298,66 @@ const ownershipKey = "hyperion.testnet.operation-ownership";
 const ownershipEvent = "hyperion:operation-ownership";
 
 let memoryOwnership: string | null = null;
+const OWNERSHIP_TTL_MS = 15 * 60 * 1000;
+
+export interface OperationLease extends OperationOwnership {
+  release(): void;
+}
+
+/** Hold the browser's cross-tab lock until signing and broadcast have finished. */
+export async function acquireOperationOwnership(
+  ownership: Parameters<typeof claimOperationOwnership>[0],
+): Promise<OperationLease> {
+  if (typeof window === "undefined") {
+    const owner = claimOperationOwnership(ownership);
+    return {
+      ...owner,
+      release: () => {
+        releaseOperationOwnership(owner.id);
+      },
+    };
+  }
+  const locks = (navigator as { locks?: LockManager }).locks;
+  if (!locks) {
+    throw new Error(
+      "This browser cannot coordinate transfer tabs. Use a supported browser before signing.",
+    );
+  }
+  return new Promise<OperationLease>((resolve, reject) => {
+    void locks
+      .request("hyperion.testnet.transfer-signing", { ifAvailable: true }, async (lock) => {
+        if (!lock) {
+          const current = getOperationOwnership();
+          throw new Error(
+            `Another tab owns this transfer (checkpoint ${current?.id ?? "unavailable"}). Finish or recover it before trying again.`,
+          );
+        }
+        const checkpoint = getTransferCheckpoint();
+        if (checkpoint) {
+          throw new Error(
+            `A signed transfer is unresolved (checkpoint ${checkpoint.txHash}). Check its status before signing another transfer.`,
+          );
+        }
+        const owner = claimOperationOwnership(ownership);
+        let release!: () => void;
+        const held = new Promise<void>((done) => {
+          release = done;
+        });
+        let released = false;
+        resolve({
+          ...owner,
+          release: () => {
+            if (released) return;
+            released = true;
+            releaseOperationOwnership(owner.id);
+            release();
+          },
+        });
+        await held;
+      })
+      .catch(reject);
+  });
+}
 
 export function parseOwnership(raw: string | null): OperationOwnership | null {
   if (!raw) return null;
@@ -275,6 +429,16 @@ export function claimOperationOwnership(
     timestamp: ownership.timestamp ?? Date.now(),
   };
   const serialized = JSON.stringify(record);
+  const storedOwnership =
+    typeof localStorage !== "undefined" && typeof localStorage.getItem === "function"
+      ? localStorage.getItem(ownershipKey)
+      : memoryOwnership;
+  const current = parseOwnership(storedOwnership);
+  if (current && current.id !== record.id && Date.now() - current.timestamp < OWNERSHIP_TTL_MS) {
+    throw new Error(
+      `Another tab owns this transfer (checkpoint ${current.id}). Finish or recover it before trying again.`,
+    );
+  }
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.setItem(ownershipKey, serialized);

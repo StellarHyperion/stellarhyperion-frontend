@@ -63,6 +63,7 @@
 }
 .fieldHeading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -83,6 +84,7 @@
 }
 .amountRow {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   min-width: 0;
@@ -110,6 +112,8 @@
 .maxSpend {
   border: 1px solid var(--edge-color-strong);
   border-radius: 999px;
+  min-block-size: var(--tap-target);
+  min-inline-size: var(--tap-target);
   padding: 4px 10px;
   background: var(--surface-raised);
   color: var(--text-secondary);
@@ -173,6 +177,52 @@
   color: var(--text-secondary);
   line-height: 1.5;
 }
+.identityDetails {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.identityDetails summary {
+  min-block-size: 44px;
+  padding-block: 12px;
+  width: fit-content;
+  cursor: pointer;
+}
+.identityDetails > p {
+  margin: 0;
+}
+.identityDetails dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+.identityDetails dl div {
+  display: grid;
+  gap: 3px;
+}
+.identityDetails dt {
+  font-family: var(--face-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.identityDetails dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.identityDetails dd [class*="copyAddress"] {
+  display: flex;
+}
+.identityDetails dd [role="alert"] {
+  color: var(--state-failed);
+}
+.identityNotice {
+  display: block;
+  margin-block-start: var(--space-2);
+}
 .connector {
   display: grid;
   place-items: center;
@@ -193,6 +243,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-block-size: var(--tap-target);
   border: 0;
   padding: 0;
   background: transparent;
@@ -328,6 +379,32 @@
 .conversionIntent p {
   color: var(--text-secondary);
   font-size: var(--type-mono-sm-size);
+}
+
+.pathComparison {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.pathComparison summary {
+  min-block-size: 44px;
+  padding-block: 12px;
+  width: fit-content;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.pathComparison p,
+.pathComparison ul {
+  margin: 0;
+}
+
+.pathComparison ul {
+  display: grid;
+  gap: var(--space-1);
+  padding-inline-start: 1.25rem;
 }
 
 .conversionPath {
@@ -495,6 +572,18 @@
   color: var(--state-failed);
   overflow-wrap: anywhere;
 }
+.limitDiagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--state-failed);
+  overflow-wrap: anywhere;
+}
+.limitDiagnostic strong {
+  color: var(--text-primary);
+}
 .progress {
   display: flex;
   align-items: center;
@@ -598,6 +687,7 @@
 .recoveryBody button {
   border: 1px solid var(--edge-color-strong);
   border-radius: 12px;
+  min-block-size: var(--tap-target);
   padding: 12px 14px;
   font: inherit;
   font-size: 0.8125rem;
@@ -658,6 +748,7 @@
 }
 .transactionIdentityValue {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -682,6 +773,8 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
+  min-block-size: var(--tap-target);
+  min-inline-size: var(--tap-target);
   border: 1px solid var(--edge-color-strong);
   border-radius: 10px;
   padding: 6px 10px;
@@ -788,5 +881,41 @@
   }
   .summary > div {
     gap: 10px;
+  }
+}
+/*
+ * 30rem and below covers a small phone and a 640 pixel window at 200 percent zoom. The amount
+ * gets its own line so a long figure never sits on top of Max or the token selector, and the
+ * identity rows stack instead of squeezing the copy control.
+ */
+@media (width<=30rem) {
+  .amountRow input,
+  .receiveAmount {
+    flex: 1 1 100%;
+  }
+  .receiveAmount {
+    font-size: 1.75rem;
+  }
+  .fieldHeading {
+    align-items: flex-start;
+  }
+  .fieldHeading > span:last-child {
+    flex-wrap: wrap;
+  }
+  .summary > div {
+    flex-wrap: wrap;
+  }
+  .summary dd {
+    text-align: start;
+  }
+  .conversionStep .address {
+    max-width: 100%;
+  }
+  .primary {
+    padding-inline: 12px;
+    text-align: center;
+  }
+  .reviewTotal strong {
+    font-size: 1.5rem;
   }
 }

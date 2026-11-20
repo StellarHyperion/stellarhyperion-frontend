@@ -92,7 +92,34 @@ export function getExplorerUrl(chainKey: string, type: "tx" | "address", id: str
 
 export function formatTokenAmount(value: string, decimals?: number | null): string {
   if (!/^\d+$/.test(value)) return "unavailable";
-  return decimals === null || decimals === undefined
+  return decimals === null ||
+    decimals === undefined ||
+    !Number.isSafeInteger(decimals) ||
+    decimals < 0 ||
+    decimals > 255
     ? `${value} base units`
     : formatUnits(BigInt(value), decimals);
+}
+
+export function formatTokenIdentity(
+  token: string | null | undefined,
+  symbol: string | null | undefined,
+  decimals: number | null | undefined,
+  representation?: string | null,
+): string {
+  const trimmedSymbol = typeof symbol === "string" ? symbol.trim() : undefined;
+  const trimmedAddress = typeof token === "string" ? token.trim() : undefined;
+  const name = trimmedSymbol && trimmedSymbol.length > 0 ? trimmedSymbol : "Unknown token";
+  const address =
+    trimmedAddress && trimmedAddress.length > 0 ? trimmedAddress : "address unavailable";
+  const precision =
+    decimals === null ||
+    decimals === undefined ||
+    !Number.isSafeInteger(decimals) ||
+    decimals < 0 ||
+    decimals > 255
+      ? "base units"
+      : `${decimals} decimals`;
+  const variant = typeof representation === "string" ? representation.trim() : undefined;
+  return `${name} · ${precision} · ${address}${variant ? ` · ${variant}` : ""}`;
 }

@@ -88,16 +88,29 @@ export const TESTNET = {
     "https://soroban-testnet.stellar.org",
   ),
   networkPassphrase: "Test SDF Network ; September 2015",
-  horizonUrl: "https://horizon-testnet.stellar.org",
+  horizonUrl: configured(
+    process.env.NEXT_PUBLIC_STELLAR_HORIZON_URL,
+    "https://horizon-testnet.stellar.org",
+  ),
 } as const;
 export const STELLAR_DEPLOYMENT = {
   chain: "stellar-testnet",
   router: stellar.router,
+  usdcToken: stellar.tokens.USDC.sacId,
+  usdcCode: stellar.tokens.USDC.code,
+  usdcIssuer: stellar.tokens.USDC.issuer,
   networkPassphrase: stellar.networkPassphrase,
   wasmHash: stellar.wasmHashes.router,
   commit: stellar.commit,
   deployedLedger: stellar.deployedAt.ledger,
 } as const;
+export function deploymentIdentityMismatch(router: string, token: string): string | null {
+  if (router !== STELLAR_DEPLOYMENT.router)
+    return "The configured Stellar router does not match the verified testnet deployment.";
+  if (token !== STELLAR_DEPLOYMENT.usdcToken)
+    return "The configured Stellar USDC token contract does not match the verified testnet deployment.";
+  return null;
+}
 
 export function getPublicAssetMetadata(
   code: string,
@@ -244,4 +257,21 @@ export function destinationFor(key: string) {
   const destination = DESTINATIONS.find((chain) => chain.key === key);
   if (!destination) throw new Error("Choose a supported destination testnet.");
   return destination;
+}
+export interface SupportedLane {
+  route: BridgeRoute;
+  provider: string;
+}
+const LANE_PROVIDERS: Record<BridgeRoute, string> = {
+  0: "Circle CCTP",
+  1: "Axelar ITS",
+};
+/**
+ * Every rail this testnet deployment actually carries to a destination, independent of live
+ * liquidity or pause state. Read straight off `destination.routes`, the same activation-derived
+ * list `readLane` checks before ever asking the chain, so this can never drift from it or invent
+ * a lane that isn't actually wired for this deployment.
+ */
+export function supportedLanes(key: DestinationKey): readonly SupportedLane[] {
+  return destinationFor(key).routes.map((route) => ({ route, provider: LANE_PROVIDERS[route] }));
 }

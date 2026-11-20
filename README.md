@@ -21,6 +21,8 @@ The interface reads the active router, adapter configuration, destination contra
 
 Conversion and bridging are separate signed transactions. The conversion uses a strict-receive path payment with an exact source spending cap and 0.5% price tolerance. It can create the canonical USDC trustline in the same transaction. If the bridge cannot proceed, the converted USDC remains in the user's wallet. The app saves the actual signed hash before broadcast; after an interruption, it checks the recorded transaction before offering a fresh bridge review. Unknown outcomes never trigger an automatic resend.
 
+Recovery first checks bounded Stellar RPC evidence, then falls back to Horizon when the RPC history is absent or unavailable. Every accepted result must establish the Testnet network, signed hash, account and matching operations. Conversion success also requires a matching canonical USDC payment result. Continuing requires the same wallet, a current authorized spendable USDC balance, a fresh quote and simulation, and explicit approval. Historical failure is distinct from missing, malformed or conflicting evidence, which leaves the checkpoint unknown and intact. Source confirmation does not establish destination delivery.
+
 ## Run
 
 Node 22.13 or newer is required.
@@ -36,6 +38,8 @@ Connect Freighter, Albedo, xBull or LOBSTR for Stellar Testnet through the nativ
 
 The checked-in deployment supplies the default router and canonical USDC asset. Public overrides are documented in `.env.example`. The app is testnet only.
 
+`NEXT_PUBLIC_STELLAR_READ_RPC_URLS` may list up to two additional, independently operated Stellar Testnet RPC origins, comma-separated. RPC transaction status is accepted only when every configured source identifies as Stellar Testnet and agrees on the signed hash, outcome, encoded result and return value. Reads share a five-second deadline and support cancellation. Disagreement or an unavailable source alongside final evidence leaves the saved transaction unknown; historical fallback cannot override conflicting RPC evidence. When RPC history is absent, the independently network-checked Horizon recovery path remains available. Reset compares the complete saved checkpoint so a change in another tab cannot discard a different intent.
+
 `NEXT_PUBLIC_HYPERION_API_URL` supplies transfer activity and destination verification. The backend must run its indexer and rail pollers regularly. The public testnet uses a five-minute GitHub Actions schedule, subject to runner queueing; destination Activity can take several minutes to update. Unreachable history is shown explicitly. A confirmed Stellar transaction proves source execution; destination delivery requires matching confirmed bridge and token-payment events.
 
 Next serves `/api/relay-fee` for Axelar's live ITS estimate and `/api/cctp-fee` for Circle's finalized forwarding estimate. Static export cannot serve these endpoints. There are no fixed relay prices, generated transaction hashes, sample claims or fabricated history.
@@ -45,6 +49,8 @@ Relay budgets include 10% headroom over the live estimate. The Axelar XLM budget
 Hyperion charges 30 basis points (0.3%) on the bridged USDC amount. The source transaction sends that protocol fee to the router's configured Stellar treasury. Bridge forwarding, relay and network fees are separate and shown before signing.
 
 Claim recovery reads `get_claim` and signs `settle_claim` on the Stellar router. It pays the recorded recipient. A claim exists only when a destination router has parked funds for recovery; completed transfers have no claim number. Activity displays genuine claim numbers and settlement status, while transfer details explain when no claim exists. A delayed outbound transfer does not automatically become a Stellar claim.
+
+Transfer history keeps destination token identity, precision and the actual paid amount separate from the source net amount and quote minimum. If an indexer record omits token metadata, the UI shows base units and the raw token address rather than guessing a symbol or decimal precision. Claim approval performs a final on-chain refresh immediately before building the wallet request; settled or changed claims remain visible but cannot be signed. A live operation lock prevents a second browser tab from replacing an unresolved signing intent. Run `npm run test:browser:faults` to build the actual production modules in an isolated browser fixture. Two real tabs compete during delayed approval, one generated signed transaction reaches the controlled RPC boundary, and its public hash survives tab closure. The harness also renders exact CCTP/ITS and unknown-precision destination records; no network transaction is sent. Set `HYPERION_RECOVERY_EVIDENCE_DIR` to save inspected captures and source hashes.
 
 ## Deploy
 

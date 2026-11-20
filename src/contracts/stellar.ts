@@ -2,6 +2,8 @@ import { createPublicClient, http, parseAbi } from "viem";
 import {
   Account,
   Address,
+  Asset,
+  StrKey,
   BASE_FEE,
   Contract,
   TransactionBuilder,
@@ -26,9 +28,13 @@ import {
   CIRCLE_STELLAR,
   destinationFor,
   destinationDecimals,
+  supportedLanes,
+  deploymentIdentityMismatch,
   type BridgeRoute,
   type DestinationKey,
+  type SupportedLane,
 } from "../config/testnet";
+import type { TransferCheckpoint } from "./checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 import { validateProviderFee } from "../lib/fee-schema";
@@ -87,6 +93,12 @@ export interface TransactionResult {
   txHash: string;
   nonce?: string;
   failure?: SubmissionFailure;
+  reason?: string;
+}
+export interface CheckpointRecoveryResult {
+  status: "confirmed" | "failed" | "unknown";
+  source: "rpc" | "horizon" | "unknown";
+  message: string;
 }
 export interface LiveQuote {
   route: number;
@@ -316,6 +328,143 @@ async function claimPayoutEligibility(id: bigint, token: string): Promise<ClaimP
   }
 }
 
+/** The coarse family a binding limit falls into, used to pick an actionable next step. */
+export type LimitKind =
+  "flow" | "liquidity" | "routeMax" | "paused" | "disabled" | "input" | "other";
+
+/**
+ * Which specific limit blocked a requested transfer, its current value when the router reports
+ * one exactly, and what to actually do about it. Built from the same quote the router returns
+ * before anybody signs, never from a guess at what a contract might be configured with.
+ */
+export interface FlowLimitDiagnostic {
+  /** The Hyperion error name the router attached to this quote, when this build recognizes it. */
+  code: string | null;
+  kind: LimitKind;
+  /** The specific limit that is binding, named for display (e.g. "Axelar ITS flow window to Sepolia"). */
+  limitLabel: string;
+  /** A sentence naming the limit and, where known exactly, its current value. */
+  summary: string;
+  /** The exact amount still available under this limit right now, when the router reports one. */
+  available: bigint | null;
+  /** The amount that was requested and blocked. */
+  requested: bigint;
+  /** A concrete next step: an amount to try, a lane to switch to, or a reason to wait. */
+  nextStep: string;
+  /** Whether the same request could succeed later without any change. */
+  retryable: boolean;
+  /** Other lanes this testnet deployment actually carries to the same destination. */
+  alternateLanes: readonly SupportedLane[];
+}
+
+/** Raised when a live quote reports the transfer is blocked by a specific, binding limit. */
+export class TransferLimitError extends Error {
+  readonly diagnostic: FlowLimitDiagnostic;
+  constructor(diagnostic: FlowLimitDiagnostic) {
+    super(`${diagnostic.summary} ${diagnostic.nextStep}`.trim());
+    this.name = "TransferLimitError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+/**
+ * Turn a blocked `quote_routes` result into a diagnostic naming the binding limit, its exact
+ * value where the contract reports one, and an actionable next step. Pure and offline: it never
+ * queries the chain, so it can be exercised directly against any reason code a router could
+ * return.
+ */
+export function describeBindingLimit(
+  reasonCode: unknown,
+  requested: bigint,
+  flowAvailable: bigint | null,
+  destinationKey: DestinationKey,
+  route: BridgeRoute,
+): FlowLimitDiagnostic {
+  const destination = destinationFor(destinationKey);
+  const laneLabel = route === 0 ? "Circle CCTP" : "Axelar ITS";
+  const alternateLanes = supportedLanes(destinationKey).filter((lane) => lane.route !== route);
+  const laneSuggestion = alternateLanes.length
+    ? ` ${destination.name} also supports ${alternateLanes.map((lane) => lane.provider).join(" and ")} on this deployment; you can switch routes and try that lane instead.`
+    : "";
+  const candidate = typeof reasonCode === "bigint" ? reasonCode.toString() : reasonCode;
+  const parsedCode =
+    typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string" && /^\d{1,10}$/.test(candidate)
+        ? Number(candidate)
+        : NaN;
+  const name =
+    Number.isSafeInteger(parsedCode) && parsedCode >= 0 && parsedCode <= 0xffffffff
+      ? sorobanErrorName(parsedCode)
+      : null;
+  const help = name ? describeError(name) : null;
+  if (name === "FlowLimitExceeded") {
+    if (flowAvailable === null || flowAvailable < 0n || flowAvailable > I128_MAX)
+      return {
+        code: name,
+        kind: "flow",
+        limitLabel: `${laneLabel} flow window to ${destination.name}`,
+        summary: `The ${laneLabel} flow limit blocked ${formatUnits(requested, 7)} USDC. Current capacity is unavailable.`,
+        available: null,
+        requested,
+        nextStep: `Refresh the quote to check current capacity.${laneSuggestion}`,
+        retryable: true,
+        alternateLanes,
+      };
+    return {
+      code: name,
+      kind: "flow",
+      limitLabel: `${laneLabel} flow window to ${destination.name}`,
+      summary: `The ${laneLabel} lane to ${destination.name} has ${formatUnits(flowAvailable, 7)} USDC left in its current flow window, short of the ${formatUnits(requested, 7)} USDC requested.`,
+      available: flowAvailable,
+      requested,
+      nextStep:
+        flowAvailable > 0n
+          ? `Reduce the amount to ${formatUnits(flowAvailable, 7)} USDC or less, or wait for the window to roll forward and try again.${laneSuggestion}`
+          : `This window is fully used right now. Wait for it to roll forward and try again.${laneSuggestion}`,
+      retryable: true,
+      alternateLanes,
+    };
+  }
+  const kind: LimitKind =
+    name === "InsufficientLiquidity"
+      ? "liquidity"
+      : name === "ExceedsRouteLimit"
+        ? "routeMax"
+        : name === "Paused" || name === "RouteDisabled"
+          ? "paused"
+          : name === "TokenNotRegistered" || name === "TokenNotMapped"
+            ? "disabled"
+            : name === "InvalidAmount" || name === "AmountNotRepresentable"
+              ? "input"
+              : "other";
+  const nextStep =
+    kind === "liquidity"
+      ? `Try a smaller amount, or wait for liquidity on this lane to recover.${laneSuggestion}`
+      : kind === "routeMax"
+        ? `This exceeds the maximum single transfer this route allows. Split it into smaller transfers.${laneSuggestion}`
+        : kind === "paused"
+          ? `The operator must resume this lane before it can be used. Refresh its status before trying again.${laneSuggestion}`
+          : kind === "disabled"
+            ? `This asset or route is not enabled in the current configuration. Wait for a verified configuration change before trying this lane.${laneSuggestion}`
+            : kind === "input"
+              ? "Adjust the requested amount and try again."
+              : help?.retryable
+                ? `Try again shortly.${laneSuggestion}`
+                : `Review the amount or destination and try again.${laneSuggestion}`;
+  return {
+    code: name,
+    kind,
+    limitLabel: name ?? "Unrecognized limit",
+    summary: help ? `${name}: ${help.summary}` : "The router declined this amount.",
+    available: null,
+    requested,
+    nextStep,
+    retryable: help?.retryable ?? false,
+    alternateLanes,
+  };
+}
+
 function server() {
   return new rpc.Server(TESTNET.rpcUrl, { timeout: 15_000 });
 }
@@ -503,6 +652,15 @@ export async function readLane(
   route: BridgeRoute = 1,
 ): Promise<LaneState> {
   const destination = destinationFor(destinationKey);
+  const deploymentMismatch = deploymentIdentityMismatch(TESTNET.router, TESTNET.token);
+  if (deploymentMismatch)
+    return {
+      available: false,
+      reason: deploymentMismatch,
+      feeBps: null,
+      ledger: 0,
+      adapter: null,
+    };
   if (!destination.routes.includes(route))
     return {
       available: false,
@@ -713,9 +871,26 @@ export async function quoteTransfer(
   const quote = response.value.map(object).find((q) => q.route === route);
   if (!quote) throw new Error("The router did not quote this bridge.");
   if (quote.available !== true) {
-    const name = sorobanErrorName(Number(quote.reason));
-    throw new Error(
-      name ? `${name}: ${describeError(name).summary}` : "The router declined this amount.",
+    throw new TransferLimitError(
+      describeBindingLimit(
+        quote.reason,
+        amount,
+        typeof quote.flow_available === "bigint" &&
+          quote.flow_available >= 0n &&
+          quote.flow_available <= I128_MAX
+          ? quote.flow_available
+          : typeof quote.flow_available === "number" &&
+              Number.isSafeInteger(quote.flow_available) &&
+              quote.flow_available >= 0
+            ? BigInt(quote.flow_available)
+            : typeof quote.flow_available === "string" &&
+                /^\d{1,39}$/.test(quote.flow_available) &&
+                BigInt(quote.flow_available) <= I128_MAX
+              ? BigInt(quote.flow_available)
+              : null,
+        destinationKey,
+        route,
+      ),
     );
   }
   const feeResponse = await readWithRetry(async () => {
@@ -810,20 +985,429 @@ export function bridgeOperation(sender: string, quote: LiveQuote, recipientInput
   );
 }
 
-export async function readTransaction(hash: string): Promise<TransactionResult | null> {
-  if (!/^[0-9a-fA-F]{64}$/.test(hash)) return null;
-  const result = await server().getTransaction(hash);
-  if (result.status === rpc.Api.GetTransactionStatus.FAILED)
-    return { status: "failed", txHash: hash };
-  if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-    const value: unknown = result.returnValue ? scValToNative(result.returnValue) : undefined;
-    return {
-      status: "confirmed",
+const MAX_TRANSACTION_READ_SOURCES = 3;
+function transactionReadSources(): string[] {
+  const configuration = process.env.NEXT_PUBLIC_STELLAR_READ_RPC_URLS ?? "";
+  if (configuration.length > 4096)
+    throw new Error("Stellar transaction read source configuration is too large.");
+  const configured = configuration
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+  const sources: string[] = [];
+  const origins = new Set<string>();
+  for (const endpoint of [TESTNET.rpcUrl, ...configured]) {
+    const url = new URL(endpoint);
+    if (
+      endpoint.length > 2048 ||
+      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      url.username ||
+      url.password ||
+      url.hash
+    )
+      throw new Error("Stellar transaction read sources must be public HTTP(S) endpoints.");
+    if (origins.has(url.origin)) continue;
+    origins.add(url.origin);
+    sources.push(url.toString());
+    if (sources.length === MAX_TRANSACTION_READ_SOURCES) break;
+  }
+  return sources;
+}
+class ConflictingTransactionEvidence extends Error {}
+interface RpcReadEvidence {
+  response: rpc.Api.GetTransactionResponse;
+  transaction: TransactionResult;
+  fingerprint: string | null;
+}
+async function readTransactionFrom(
+  url: string,
+  hash: string,
+  signal: AbortSignal,
+): Promise<RpcReadEvidence> {
+  const client = new rpc.Server(url, { timeout: 5000, allowHttp: url.startsWith("http:") });
+  const network = await abortable(client.getNetwork(), signal);
+  if (network.passphrase !== TESTNET.networkPassphrase)
+    throw new ConflictingTransactionEvidence("The RPC endpoint is not Stellar Testnet.");
+  const response = await abortable(client.getTransaction(hash), signal);
+  if (response.status === rpc.Api.GetTransactionStatus.NOT_FOUND)
+    return { response, transaction: { status: "pending", txHash: hash }, fingerprint: null };
+  const envelopeXdr = response.envelopeXdr.toXdr("base64");
+  const resultXdr = response.resultXdr.toXdr("base64");
+  if (envelopeXdr.length > 200000 || resultXdr.length > 200000)
+    throw new ConflictingTransactionEvidence("RPC transaction evidence exceeds the size limit.");
+  const envelope = TransactionBuilder.fromXdr(envelopeXdr, TESTNET.networkPassphrase);
+  const succeeded = response.status === rpc.Api.GetTransactionStatus.SUCCESS;
+  if (
+    response.txHash.toLowerCase() !== hash ||
+    response.feeBump ||
+    "innerTransaction" in envelope ||
+    toHex(envelope.hash()).slice(2).toLowerCase() !== hash ||
+    (response.resultXdr.result.type === "txSuccess") !== succeeded ||
+    response.resultXdr.result.type === "txFeeBumpInnerSuccess" ||
+    response.resultXdr.result.type === "txFeeBumpInnerFailed"
+  )
+    throw new ConflictingTransactionEvidence("RPC returned conflicting transaction evidence.");
+  const returnValue =
+    response.status === rpc.Api.GetTransactionStatus.SUCCESS ? response.returnValue : undefined;
+  const value: unknown = returnValue ? scValToNative(returnValue) : undefined;
+  return {
+    response,
+    transaction: {
+      status: succeeded ? "confirmed" : "failed",
       txHash: hash,
       ...(typeof value === "bigint" ? { nonce: String(value) } : {}),
-    };
+    },
+    fingerprint: resultXdr + ":" + (returnValue?.toXdr("base64") ?? ""),
+  };
+}
+async function collectTransactionEvidence(hash: string, signal?: AbortSignal) {
+  if (signal?.aborted) throw new DOMException("Transaction lookup cancelled.", "AbortError");
+  const readSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(5000)])
+    : AbortSignal.timeout(5000);
+  const sources = transactionReadSources();
+  const reads = await Promise.allSettled(
+    sources.map((url) => readTransactionFrom(url, hash, readSignal)),
+  );
+  if (signal?.aborted) throw new DOMException("Transaction lookup cancelled.", "AbortError");
+  const results = reads.flatMap((read) => (read.status === "fulfilled" ? [read.value] : []));
+  const invalid = reads.some(
+    (read) => read.status === "rejected" && read.reason instanceof ConflictingTransactionEvidence,
+  );
+  const complete = results.length === sources.length;
+  const statuses = new Set(results.map((result) => result.transaction.status));
+  const fingerprints = new Set(results.map((result) => result.fingerprint));
+  const agreed = !invalid && complete && statuses.size === 1 && fingerprints.size === 1;
+  return { results, invalid, complete, agreed };
+}
+export async function readTransaction(
+  hash: string,
+  signal?: AbortSignal,
+): Promise<TransactionResult | null> {
+  if (!/^[0-9a-fA-F]{64}$/.test(hash)) return null;
+  hash = hash.toLowerCase();
+  const evidence = await collectTransactionEvidence(hash, signal);
+  const result = evidence.results[0];
+  if (evidence.agreed && result) return result.transaction;
+  return {
+    status: "pending",
+    txHash: hash,
+    reason:
+      evidence.invalid || evidence.complete
+        ? "Stellar transaction sources disagree; its outcome remains unknown."
+        : "A Stellar transaction source is unavailable; its outcome remains unknown.",
+  };
+}
+
+function unknownRecovery(message: string): CheckpointRecoveryResult {
+  return { status: "unknown", source: "unknown", message };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+type ParsedOperation = Transaction["operations"][number];
+
+function matchesConversion(checkpoint: TransferCheckpoint, operations: ParsedOperation[]) {
+  const payments = operations.filter((operation) => operation.type === "pathPaymentStrictReceive");
+  if (
+    payments.length !== 1 ||
+    operations.length > 2 ||
+    operations.some((operation) => operation.source && operation.source !== checkpoint.account)
+  )
+    return false;
+  if (
+    operations.some(
+      (operation) =>
+        operation.type !== "pathPaymentStrictReceive" &&
+        (operation.type !== "changeTrust" ||
+          !(operation.line instanceof Asset) ||
+          operation.line.getCode() !== TESTNET.usdcCode ||
+          operation.line.getIssuer() !== TESTNET.usdcIssuer),
+    )
+  )
+    return false;
+  const payment = payments[0];
+  return (
+    payment?.type === "pathPaymentStrictReceive" &&
+    (!payment.source || payment.source === checkpoint.account) &&
+    payment.destination === checkpoint.account &&
+    (!checkpoint.source ||
+      (payment.sendAsset.getCode() === checkpoint.source.code &&
+        (payment.sendAsset.getIssuer() ?? null) === checkpoint.source.issuer)) &&
+    payment.destAsset.getCode() === TESTNET.usdcCode &&
+    payment.destAsset.getIssuer() === TESTNET.usdcIssuer &&
+    parseUnits(payment.destAmount, 7) === BigInt(checkpoint.bridgeAmount)
+  );
+}
+
+function numericValue(value: unknown, expected: bigint): boolean {
+  return (
+    value === expected ||
+    (typeof value === "number" && Number.isSafeInteger(value) && BigInt(value) === expected)
+  );
+}
+
+function matchesBridge(checkpoint: TransferCheckpoint, operation: ParsedOperation | undefined) {
+  if (
+    operation?.type !== "invokeHostFunction" ||
+    (operation.source !== undefined && operation.source !== checkpoint.account) ||
+    operation.func.type !== "hostFunctionTypeInvokeContract"
+  )
+    return false;
+  const invocation = operation.func.invokeContract;
+  if (invocation.functionName.toString() !== "bridge_out_with_gas") return false;
+  if (
+    invocation.contractAddress.type !== "scAddressTypeContract" ||
+    StrKey.encodeContract(invocation.contractAddress.contractId.toBytes()) !== TESTNET.router
+  )
+    return false;
+  const args = invocation.args;
+  if (args.length !== 3 || !args[0] || !args[1] || !args[2]) return false;
+  const sender: unknown = scValToNative(args[0]);
+  const request: unknown = scValToNative(args[1]);
+  const relayGas: unknown = scValToNative(args[2]);
+  if (!isRecord(request) || !isRecord(request.destination)) return false;
+  const destination = destinationFor(checkpoint.destination);
+  const expectedRecipient = fromHex(`0x${checkpoint.recipient.slice(2).padStart(64, "0")}`);
+  const actualRecipient = request.destination.address;
+  return (
+    sender === checkpoint.account &&
+    request.token === TESTNET.token &&
+    numericValue(request.amount, BigInt(checkpoint.bridgeAmount)) &&
+    numericValue(request.route, BigInt(checkpoint.route)) &&
+    request.destination.chain === destination.key &&
+    actualRecipient instanceof Uint8Array &&
+    toHex(actualRecipient) === toHex(expectedRecipient) &&
+    numericValue(request.destination_decimals, BigInt(destinationDecimals(checkpoint.route))) &&
+    typeof request.min_destination_amount === "bigint" &&
+    request.min_destination_amount > 0n &&
+    typeof relayGas === "bigint" &&
+    relayGas > 0n
+  );
+}
+
+function inspectCheckpointEnvelope(
+  checkpoint: TransferCheckpoint,
+  envelopeXdr: string,
+  resultXdr: string,
+  successful: boolean | null,
+): "confirmed" | "failed" | null {
+  try {
+    if (
+      checkpoint.router !== TESTNET.router ||
+      envelopeXdr.length > 200_000 ||
+      resultXdr.length > 200_000
+    )
+      return null;
+    const transaction = TransactionBuilder.fromXdr(envelopeXdr, TESTNET.networkPassphrase);
+    if (
+      "innerTransaction" in transaction ||
+      transaction.source !== checkpoint.account ||
+      toHex(transaction.hash()).slice(2).toLowerCase() !== checkpoint.txHash
+    )
+      return null;
+    const matches =
+      checkpoint.stage === "conversion"
+        ? matchesConversion(checkpoint, transaction.operations)
+        : transaction.operations.length === 1 &&
+          matchesBridge(checkpoint, transaction.operations[0]);
+    if (!matches) return null;
+    const transactionResult = xdr.TransactionResult.fromXdr(resultXdr, "base64");
+    const resultSucceeded = transactionResult.result.type === "txSuccess";
+    if (successful !== null && successful !== resultSucceeded) return null;
+    if (
+      transactionResult.result.type === "txFeeBumpInnerSuccess" ||
+      transactionResult.result.type === "txFeeBumpInnerFailed"
+    )
+      return null;
+    if (transactionResult.result.type === "txSuccess") {
+      const results = transactionResult.result.results;
+      if (results.length !== transaction.operations.length) return null;
+      for (const [index, operation] of transaction.operations.entries()) {
+        const result = results[index];
+        if (result?.type !== "opInner" || result.tr.type !== operation.type) return null;
+        if (result.tr.type === "pathPaymentStrictReceive") {
+          const payment = result.tr.pathPaymentStrictReceiveResult;
+          if (payment.type !== "pathPaymentStrictReceiveSuccess") return null;
+          const last = payment.success.last;
+          const asset = Asset.fromOperation(last.asset);
+          if (
+            StrKey.encodeEd25519PublicKey(last.destination.ed25519.toBytes()) !==
+              checkpoint.account ||
+            asset.getCode() !== TESTNET.usdcCode ||
+            asset.getIssuer() !== TESTNET.usdcIssuer ||
+            last.amount !== BigInt(checkpoint.bridgeAmount)
+          )
+            return null;
+        } else if (result.tr.type === "changeTrust") {
+          if (result.tr.changeTrustResult.type !== "changeTrustSuccess") return null;
+        } else if (
+          result.tr.type !== "invokeHostFunction" ||
+          result.tr.invokeHostFunctionResult.type !== "invokeHostFunctionSuccess"
+        )
+          return null;
+      }
+    }
+    return resultSucceeded ? "confirmed" : "failed";
+  } catch {
+    return null;
   }
-  return { status: "pending", txHash: hash };
+}
+
+function recoveryResult(
+  status: "confirmed" | "failed",
+  source: "rpc" | "horizon",
+): CheckpointRecoveryResult {
+  return {
+    status,
+    source,
+    message:
+      source === "horizon"
+        ? `The transaction ${status === "confirmed" ? "was confirmed" : "failed"} in Stellar Testnet history.`
+        : `The transaction ${status === "confirmed" ? "was confirmed" : "failed"} on Stellar Testnet.`,
+  };
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted)
+    return Promise.reject(new DOMException("Recovery lookup cancelled.", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Recovery lookup cancelled.", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (cause: unknown) => {
+        cleanup();
+        reject(cause instanceof Error ? cause : new Error("Recovery read failed."));
+      },
+    );
+  });
+}
+
+async function boundedHistoryJson(response: Response, signal: AbortSignal): Promise<unknown> {
+  const limit = 512_000;
+  if (Number(response.headers.get("content-length")) > limit || !response.body)
+    throw new Error("Historical evidence is too large or unavailable.");
+  const reader = response.body.getReader();
+  let bytes = 0;
+  let text = "";
+  const decoder = new TextDecoder();
+  try {
+    for (;;) {
+      const chunk = await abortable(reader.read(), signal);
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > limit) throw new Error("Historical evidence exceeds the size limit.");
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    return JSON.parse(text + decoder.decode()) as unknown;
+  } finally {
+    void reader.cancel().catch(() => {
+      // The finished or aborted stream has already been released.
+    });
+  }
+}
+
+export async function resolveCheckpointTransaction(
+  checkpoint: TransferCheckpoint,
+  signal?: AbortSignal,
+): Promise<CheckpointRecoveryResult> {
+  if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
+  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || checkpoint.router !== TESTNET.router)
+    return unknownRecovery("The saved checkpoint does not match the configured Stellar Testnet.");
+  const lookupSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+    : AbortSignal.timeout(15000);
+  try {
+    const evidence = await collectTransactionEvidence(checkpoint.txHash, lookupSignal);
+    const final = evidence.results.filter((result) => result.transaction.status !== "pending");
+    if (evidence.invalid || (final.length > 0 && !evidence.agreed))
+      return unknownRecovery(
+        "Stellar RPC sources disagree or returned unverified evidence. The saved checkpoint is unchanged.",
+      );
+    if (evidence.agreed && final.length > 0) {
+      for (const result of final) {
+        if (result.response.status === rpc.Api.GetTransactionStatus.NOT_FOUND)
+          return unknownRecovery("Stellar RPC history is incomplete.");
+        const verified = inspectCheckpointEnvelope(
+          checkpoint,
+          result.response.envelopeXdr.toXdr("base64"),
+          result.response.resultXdr.toXdr("base64"),
+          result.transaction.status === "confirmed",
+        );
+        if (!verified)
+          return unknownRecovery("RPC returned conflicting or invalid checkpoint evidence.");
+      }
+      const result = final[0];
+      if (result && result.transaction.status !== "pending")
+        return recoveryResult(result.transaction.status, "rpc");
+    }
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    return unknownRecovery(
+      "Stellar RPC read configuration could not be verified. The saved checkpoint is unchanged.",
+    );
+  }
+
+  try {
+    const networkResponse = await fetch(TESTNET.horizonUrl, {
+      signal: lookupSignal,
+      cache: "no-store",
+    });
+    const network: unknown = networkResponse.ok
+      ? await boundedHistoryJson(networkResponse, lookupSignal)
+      : null;
+    if (!isRecord(network) || network.network_passphrase !== TESTNET.networkPassphrase)
+      return unknownRecovery("Historical evidence does not establish the Stellar Testnet network.");
+    const response = await fetch(
+      `${TESTNET.horizonUrl}/transactions/${encodeURIComponent(checkpoint.txHash)}`,
+      {
+        signal: lookupSignal,
+        cache: "no-store",
+      },
+    );
+    if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
+    if (response.status === 404)
+      return unknownRecovery("No matching transaction is available in Stellar Testnet history.");
+    if (!response.ok)
+      return unknownRecovery("Stellar Testnet transaction history is temporarily unavailable.");
+    const body: unknown = await boundedHistoryJson(response, lookupSignal);
+    if (
+      !isRecord(body) ||
+      body.hash !== checkpoint.txHash ||
+      body.source_account !== checkpoint.account ||
+      typeof body.successful !== "boolean" ||
+      typeof body.envelope_xdr !== "string" ||
+      typeof body.result_xdr !== "string"
+    )
+      return unknownRecovery("Historical transaction evidence is incomplete or does not match.");
+    const verified = inspectCheckpointEnvelope(
+      checkpoint,
+      body.envelope_xdr,
+      body.result_xdr,
+      body.successful,
+    );
+    if (!verified)
+      return unknownRecovery("Historical transaction evidence conflicts with this checkpoint.");
+    return recoveryResult(verified, "horizon");
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    return unknownRecovery(
+      "Stellar Testnet history could not be checked. The saved checkpoint is unchanged.",
+    );
+  }
 }
 
 export interface ReviewSnapshot {
@@ -1212,7 +1796,7 @@ async function signAndSubmit(
     if (signal?.aborted) return { status: "pending", txHash: hash };
     let result: TransactionResult | null;
     try {
-      result = await readTransaction(hash);
+      result = await readTransaction(hash, signal);
     } catch (error) {
       return {
         status: "pending",
@@ -1327,9 +1911,24 @@ export async function submitSettleClaim(
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
+  reviewed?: PendingClaim,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
+  if (
+    reviewed &&
+    (claim.recipient !== reviewed.recipient ||
+      claim.token !== reviewed.token ||
+      claim.amount !== reviewed.amount ||
+      claim.deployment.router !== reviewed.deployment.router ||
+      claim.deployment.chain !== reviewed.deployment.chain ||
+      claim.deployment.wasmHash !== reviewed.deployment.wasmHash)
+  )
+    throw new Error("The claim changed. Review it again before signing.");
+  if (reviewed && claim.eligibility.status === "unknown")
+    throw new Error(
+      "Claim payout eligibility is unavailable. Look up the claim again before signing.",
+    );
   if (claim.eligibility.status === "ineligible")
     throw new Error(`Claim payout is ineligible: ${claim.eligibility.reason}`);
   const deployment = await verifyRouterDeployment();
