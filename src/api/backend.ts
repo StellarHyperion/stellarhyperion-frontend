@@ -1,3 +1,5 @@
+import { parseTransferProof, type TransferProof } from "../lib/transfer-proof";
+
 /**
  * Backend REST API client for Hyperion transfer tracking and claims.
  *
@@ -285,4 +287,14 @@ export function fetchTransferByTx(
   if (!/^[0-9a-f]{64}$/i.test(hash))
     return Promise.reject(new Error("Enter a 64-character Stellar transaction hash."));
   return request<FormattedTransfer>(`/v1/transfers/by-tx/${hash.toLowerCase()}`, true, signal);
+}
+
+export async function fetchTransferEvidence(
+  transfer: FormattedTransfer,
+  signal?: AbortSignal,
+): Promise<TransferProof> {
+  if (!/^[1-9][0-9]{0,18}$/.test(transfer.id) || BigInt(transfer.id) > 9223372036854775807n)
+    throw new Error("Detailed proof lookup is unavailable for this transfer identifier.");
+  const value = await request<unknown>(`/v1/transfers/${transfer.id}/evidence`, false, signal);
+  return parseTransferProof(value, transfer);
 }

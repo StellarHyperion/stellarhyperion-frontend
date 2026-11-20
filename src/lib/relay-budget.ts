@@ -13,9 +13,95 @@ export function feeObservation(now = Date.now()): { observedAt: string; validUnt
   };
 }
 
-export function isFreshFeeObservation(validUntil: string, now = Date.now()): boolean {
-  const expiry = Date.parse(validUntil);
-  return Number.isFinite(expiry) && expiry >= now && expiry - now <= FEE_OBSERVATION_MAX_AGE_MS;
+export const MAX_FEE_CLOCK_SKEW_MS = 5_000;
+export interface FeeObservation {
+  readonly provider: "Axelar ITS" | "Circle CCTP";
+  readonly token: "XLM" | "USDC";
+  readonly decimals: 7;
+  readonly lane: {
+    readonly source: "stellar-testnet";
+    readonly destination: string;
+    readonly route: 0 | 1;
+  };
+  readonly observedAt: string;
+  readonly validUntil: string;
+  readonly receivedAt: string;
+  /** Conservative local deadline: reserve the entire supported five-second clock skew. */
+  readonly clientValidUntil: string;
+}
+
+function observationTime(value: unknown): number {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value))
+    return NaN;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString() === value ? time : NaN;
+}
+
+export function validateFeeObservation(
+  value: unknown,
+  expected: { token: "XLM" | "USDC"; destination: string; route: 0 | 1 },
+  now = Date.now(),
+): FeeObservation {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Live fee observation metadata is unavailable. Refresh the quote.");
+  const entry = value as Record<string, unknown>;
+  const lane = entry.lane as Record<string, unknown> | null | undefined;
+  const provider = expected.route === 0 ? "Circle CCTP" : "Axelar ITS";
+  if (
+    !lane ||
+    typeof lane !== "object" ||
+    Array.isArray(lane) ||
+    entry.provider !== provider ||
+    entry.token !== expected.token ||
+    entry.decimals !== 7 ||
+    lane.source !== "stellar-testnet" ||
+    lane.destination !== expected.destination ||
+    lane.route !== expected.route ||
+    (expected.route === 0 ? expected.token !== "USDC" : expected.token !== "XLM")
+  )
+    throw new Error("Live fee observation does not match the reviewed provider, currency or lane.");
+  const observed = observationTime(entry.observedAt);
+  const expiry = observationTime(entry.validUntil);
+  if (
+    !Number.isFinite(now) ||
+    !Number.isFinite(observed) ||
+    !Number.isFinite(expiry) ||
+    expiry <= observed ||
+    expiry - observed > FEE_OBSERVATION_MAX_AGE_MS ||
+    observed > now + MAX_FEE_CLOCK_SKEW_MS ||
+    now - observed > MAX_FEE_CLOCK_SKEW_MS ||
+    expiry - MAX_FEE_CLOCK_SKEW_MS <= now
+  )
+    throw new Error(
+      "The live fee estimate expired or its clock differs by more than five seconds. Refresh the quote.",
+    );
+  return Object.freeze({
+    provider,
+    token: expected.token,
+    decimals: 7,
+    lane: Object.freeze({
+      source: "stellar-testnet",
+      destination: expected.destination,
+      route: expected.route,
+    }),
+    observedAt: new Date(observed).toISOString(),
+    validUntil: new Date(expiry).toISOString(),
+    receivedAt: new Date(now).toISOString(),
+    clientValidUntil: new Date(
+      Math.min(expiry - MAX_FEE_CLOCK_SKEW_MS, now + FEE_OBSERVATION_MAX_AGE_MS),
+    ).toISOString(),
+  });
+}
+
+export function isFreshFeeObservation(observation: FeeObservation, now = Date.now()): boolean {
+  const received = observationTime(observation.receivedAt);
+  const deadline = observationTime(observation.clientValidUntil);
+  return (
+    Number.isFinite(now) &&
+    received <= now &&
+    deadline > now &&
+    deadline - received <= FEE_OBSERVATION_MAX_AGE_MS
+  );
 }
 
 export const MAX_RETRY_AFTER_SECONDS = 60;

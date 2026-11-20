@@ -107,6 +107,7 @@ export async function GET(request: Request) {
         finality: 2000,
         provider: "Circle CCTP",
         ...feeObservation(),
+        lane: { source: "stellar-testnet", destination: destination.key, route: 0 },
       },
       {
         token: "USDC",

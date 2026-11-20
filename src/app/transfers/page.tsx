@@ -295,7 +295,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
           disabled={(offset === 0 && cursorHistory.length === 0) || pending}
           onClick={() => {
             if (cursorHistory.length > 0) {
-              setCursor(cursorHistory[cursorHistory.length - 1]);
+              setCursor(cursorHistory[cursorHistory.length - 1] ?? null);
               setCursorHistory((history) => history.slice(0, -1));
             } else {
               setOffset((value) => Math.max(0, value - 20));
@@ -307,7 +307,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
         <span>Page {offset / 20 + cursorHistory.length + 1}</span>
         <button
           type="button"
-          disabled={(response?.hasMore ?? ((response?.transfers.length ?? 0) >= 20)) === false || pending}
+          disabled={!(response?.hasMore ?? (response?.transfers.length ?? 0) >= 20) || pending}
           onClick={() => {
             if (response?.nextCursor) {
               setCursorHistory((history) => [...history, cursor]);

@@ -288,7 +288,9 @@ function QuoteDetails({
           <dd>
             {quote.provider ?? (quote.route === 0 ? "Circle CCTP" : "Axelar ITS")} observed at{" "}
             {new Date(quote.observedAt).toLocaleTimeString()}; expires at{" "}
-            {new Date(quote.validUntil).toLocaleTimeString()}
+            {new Date(quote.validUntil).toLocaleTimeString()}. Fees in{" "}
+            {quote.route === 0 ? "USDC" : "XLM"}. A five-second clock allowance shortens this review
+            window.
           </dd>
         </div>
       )}

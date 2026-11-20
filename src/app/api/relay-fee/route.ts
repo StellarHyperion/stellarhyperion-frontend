@@ -82,6 +82,7 @@ export async function GET(request: Request) {
         destination: "ethereum-sepolia",
         provider: "Axelar ITS",
         ...feeObservation(),
+        lane: { source: "stellar-testnet", destination: "ethereum-sepolia", route: 1 },
       },
       { token: "XLM", destination: "ethereum-sepolia" },
     );

@@ -1,6 +1,7 @@
 import { type ReactElement } from "react";
 import type { FormattedTransfer } from "../../api";
 import { getEvidenceTimeline, type EvidenceStage } from "../../lib/evidence";
+import { EvidenceProofDrawer } from "./EvidenceProofDrawer";
 import styles from "./EvidenceTimeline.module.css";
 
 interface EvidenceTimelineProps {
@@ -26,7 +27,7 @@ export function EvidenceTimeline({ transfer }: EvidenceTimelineProps): ReactElem
                 <span className={styles.label}>{stage.label}</span>
                 <span className={styles.status}>{stage.status}</span>
               </div>
-              <span className={styles.detail}>
+              <div className={styles.detail}>
                 {stage.detail}
                 {stage.href && (
                   <>
@@ -41,21 +42,13 @@ export function EvidenceTimeline({ transfer }: EvidenceTimelineProps): ReactElem
                     </a>
                   </>
                 )}
-                {stage.observedAt && (
-                  <details>
-                    <summary>Evidence details</summary>
-                    <p>Observed {new Date(stage.observedAt).toLocaleString()}.</p>
-                    <p>
-                      References are public identifiers only; provider credentials are never
-                      displayed.
-                    </p>
-                  </details>
-                )}
-              </span>
+                {stage.observedAt && <p>Observed {new Date(stage.observedAt).toLocaleString()}.</p>}
+              </div>
             </div>
           </li>
         ))}
       </ol>
+      <EvidenceProofDrawer key={`${transfer.id}:${transfer.origin.txHash}`} transfer={transfer} />
     </section>
   );
 }
