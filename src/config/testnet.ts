@@ -255,14 +255,21 @@ export const DESTINATIONS = (["sepolia", "base-sepolia", "arc-testnet"] as const
 function publicHttpUrl(endpoint: string): URL {
   if (endpoint.length > 2048) throw new Error("A public provider endpoint is too long.");
   const url = new URL(endpoint);
+  const localDevelopmentEndpoint =
+    process.env.NODE_ENV === "development" &&
+    url.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
   if (
-    (url.protocol !== "https:" && url.protocol !== "http:") ||
+    (url.protocol !== "https:" && !localDevelopmentEndpoint) ||
     url.hostname.includes("*") ||
     url.username ||
     url.password ||
     url.hash
-  )
-    throw new Error("Public provider endpoints must be unauthenticated HTTP(S) URLs.");
+  ) {
+    throw new Error(
+      "Public provider endpoints must be unauthenticated HTTPS URLs (HTTP is limited to localhost in development).",
+    );
+  }
   return url;
 }
 
@@ -275,14 +282,16 @@ export function stellarTransactionReadUrls(
     .split(",")
     .map((endpoint) => endpoint.trim())
     .filter(Boolean);
-  const sources: string[] = [];
-  const origins = new Set<string>();
-  for (const endpoint of [TESTNET.rpcUrl, ...configured]) {
+  const primary = publicHttpUrl(TESTNET.rpcUrl);
+  const sources = [primary.toString()];
+  const origins = new Set([primary.origin]);
+  for (const endpoint of configured) {
     const url = publicHttpUrl(endpoint);
     if (origins.has(url.origin)) continue;
+    if (sources.length >= 3)
+      throw new Error("Stellar transaction read sources allow at most two additional origins.");
     origins.add(url.origin);
     sources.push(url.toString());
-    if (sources.length === 3) break;
   }
   return sources;
 }
