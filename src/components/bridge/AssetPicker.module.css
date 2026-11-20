@@ -4,8 +4,10 @@
   padding: 0;
   background: var(--surface-raised);
   color: var(--text-primary);
-  width: min(440px, calc(100vw - 24px));
-  max-height: 85dvh;
+  width: min(440px, calc(100vw - 16px));
+  max-block-size: min(90dvh, 60rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   margin: auto;
 }
 .dialog::backdrop {
@@ -13,19 +15,28 @@
   backdrop-filter: blur(10px);
 }
 .content {
-  padding: 24px;
+  min-width: 0;
+  padding: clamp(12px, 4vw, 24px);
   display: grid;
   gap: 16px;
+  overflow-wrap: anywhere;
 }
 .heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  padding-block: 4px;
+  background: var(--surface-raised);
 }
 .heading h2 {
+  min-width: 0;
   font-size: 1.125rem;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .heading button {
   display: grid;
@@ -37,6 +48,9 @@
   background: var(--surface-panel);
   color: var(--text-secondary);
   cursor: pointer;
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
 }
 .search {
   display: flex;
@@ -220,7 +234,7 @@
 }
 .networks {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 7rem), 1fr));
   gap: 8px;
 }
 .network {
@@ -237,6 +251,7 @@
   cursor: pointer;
   font: inherit;
   font-size: 0.75rem;
+  overflow-wrap: anywhere;
 }
 .network[aria-pressed="true"] {
   border-color: var(--leg-origin);

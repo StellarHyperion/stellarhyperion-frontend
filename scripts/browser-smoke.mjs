@@ -198,6 +198,56 @@ try {
     .getByRole("link", { name: /f{12}\.\.\.f{8}/ })
     .waitFor();
   await otherTab.close();
+  await page.evaluate((checkpoint) => {
+    localStorage.setItem("hyperion.testnet.pending-transfer", checkpoint);
+  }, checkpointBeforeNavigation);
+  for (const viewport of [
+    { width: 640, height: 900, label: "desktop at 200% zoom" },
+    { width: 320, height: 844, label: "mobile at 200% zoom" },
+  ]) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto(origin, { waitUntil: "networkidle" });
+    await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+      `Horizontal overflow at ${viewport.label}`,
+    );
+    const recovery = page.getByRole("region", { name: "Transfer recovery" });
+    assert.equal(
+      await recovery.locator("code").textContent(),
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      `Full source hash remains inspectable at ${viewport.label}`,
+    );
+    const recoveryAction = recovery.getByRole("button", { name: "Check status" });
+    await recoveryAction.scrollIntoViewIfNeeded();
+    const actionBounds = await recoveryAction.boundingBox();
+    assert.ok(
+      actionBounds &&
+        actionBounds.x >= 0 &&
+        actionBounds.x + actionBounds.width <= viewport.width,
+      `Recovery action fits the viewport at ${viewport.label}`,
+    );
+    await page.getByRole("button", { name: "Choose source token", exact: true }).click();
+    const zoomDialog = page.getByRole("dialog", { name: "Choose a token" });
+    await zoomDialog.waitFor();
+    const dialogBounds = await zoomDialog.evaluate((element) => {
+      const { left, right } = element.getBoundingClientRect();
+      return { left, right, width: window.innerWidth };
+    });
+    assert.ok(
+      dialogBounds.left >= 0 && dialogBounds.right <= dialogBounds.width,
+      `Token picker fits the viewport at ${viewport.label}`,
+    );
+    await page.keyboard.press("Escape");
+    await page.getByText("Recover a Stellar claim", { exact: true }).click();
+    await page.getByLabel("Claim number").waitFor();
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+      `Claim recovery form has no horizontal overflow at ${viewport.label}`,
+    );
+  }
   await page.evaluate(() => {
     localStorage.removeItem("hyperion.testnet.pending-transfer");
     window.dispatchEvent(new Event("hyperion:pending-transfer"));

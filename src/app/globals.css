@@ -322,6 +322,7 @@ html {
 
 body {
   margin: 0;
+  min-width: 0;
   min-height: 100svh;
   background-color: var(--surface-page);
   background-image:
@@ -346,6 +347,15 @@ body {
   line-height: var(--type-body-leading);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+:where(main, section, article, aside, form, fieldset, dialog) {
+  min-inline-size: 0;
+}
+
+:where(code, pre, kbd, samp) {
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
 }
 
 h1,
