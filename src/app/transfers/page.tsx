@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { Column } from "../../components/chrome";
 import {
   fetchIndexerMetrics,
@@ -108,11 +108,13 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   useEffect(() => {
     const readUrl = () => {
       const result = readTransferFilters(window.location.search);
-      setAsset(result.filters.asset ?? "");
-      setDeployment(result.filters.deployment ?? "");
-      setUrlError(result.error);
-      setOffset(0);
-      setReady(true);
+      startTransition(() => {
+        setAsset(result.filters.asset ?? "");
+        setDeployment(result.filters.deployment ?? "");
+        setUrlError(result.error);
+        setOffset(0);
+        setReady(true);
+      });
     };
     readUrl();
     window.addEventListener("popstate", readUrl);
