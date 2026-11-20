@@ -1,7 +1,7 @@
 {
   "sources": {
-    "src/components/bridge/Bridge.tsx": "8a7776782a00a1eb6d0ff0726155fcaded911ae455a0f4eefb29001cd7f66faa",
-    "src/components/bridge/AssetPicker.tsx": "e60d66a746347961d1388e6d17d0164506b4668449da534f611d1de36fbaf746",
+    "src/components/bridge/Bridge.tsx": "936cda5b023e80abe0499f4e4ce30ec63ec4f51cb7a6230679138d15147c5328",
+    "src/components/bridge/AssetPicker.tsx": "b2b08b4e8511e6fe0525a4aa01977c292ebf0a36780e97d71b100348295f6605",
     "src/contracts/checkpoint.ts": "a00a590cc20f8ed51e45e8164f0592a98288d73c348ef85e00408633fbb9b49c",
     "src/contracts/stellar.ts": "f9688bd01c546075ea433494c96f2a75236d4d60844e069c5c48ee2d411d05f2"
   },
