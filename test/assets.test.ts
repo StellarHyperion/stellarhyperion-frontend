@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Account, Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Account, Keypair, TransactionBuilder, rpc } from "@stellar/stellar-sdk";
 import {
   quoteConversion,
   accountAssets,
@@ -1258,6 +1258,76 @@ describe("Live Stellar liquidity acceptance proof schema", () => {
 });
 
 describe("Reviewed conversion submission", () => {
+  it("keeps the copied source identity and spend bound while account reads are pending", async () => {
+    const conversion: Conversion = {
+      source: { ...XLM },
+      sourceMax: 10000000n,
+      usdcAmount: 8000000n,
+      path: [],
+      pathComparison: pathComparison(8100000n),
+    };
+    let release: ((response: Response) => void) | undefined;
+    const first = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const account = {
+      subentry_count: 1,
+      num_sponsoring: 0,
+      num_sponsored: 0,
+      balances: [
+        { asset_type: "native", balance: "100.0000000", selling_liabilities: "0.0000000" },
+        {
+          asset_type: "credit_alphanum4",
+          asset_code: USDC.code,
+          asset_issuer: USDC.issuer,
+          balance: "100.0000000",
+          selling_liabilities: "0.0000000",
+          is_authorized: true,
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockReturnValueOnce(first)
+        .mockImplementation((url: string) =>
+          Promise.resolve(
+            Response.json(
+              url.includes("/accounts/")
+                ? account
+                : {
+                    _embedded: {
+                      records: [
+                        {
+                          base_fee_in_stroops: 100,
+                          base_reserve_in_stroops: 5000000,
+                          sequence: 100,
+                        },
+                      ],
+                    },
+                  },
+            ),
+          ),
+        ),
+    );
+    const network = vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
+      passphrase: "fixture-wrong-network",
+      protocolVersion: "27",
+    });
+    const wallet = vi.fn();
+    try {
+      const submission = submitConversion(TESTNET.reader, conversion, wallet);
+      conversion.sourceMax = 10000000000n;
+      conversion.source.id = "changed-source";
+      if (!release) throw new Error("Missing pending read fixture");
+      release(Response.json(account));
+      await expect(submission).rejects.toThrow("not Stellar Testnet");
+      expect(wallet).not.toHaveBeenCalled();
+    } finally {
+      network.mockRestore();
+    }
+  });
   it("refuses changed exact spend, output or issuer identity before reading account data or asking the wallet", async () => {
     const account = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(22)).publicKey();
     const conversion: Conversion = {
