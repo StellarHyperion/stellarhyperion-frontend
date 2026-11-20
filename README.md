@@ -47,6 +47,10 @@ safe diagnostic labels; it never prints environment values or server secrets.
 
 `NEXT_PUBLIC_HYPERION_API_URL` supplies transfer activity and destination verification. The backend must run its indexer and rail pollers regularly. The public testnet uses a five-minute GitHub Actions schedule, subject to runner queueing; destination Activity can take several minutes to update. Unreachable history is shown explicitly. A confirmed Stellar transaction proves source execution; destination delivery requires matching confirmed bridge and token-payment events.
 
+Transfer history refreshes every 10 seconds and transaction details every 5 seconds while visible; hidden tabs reduce those reads to once per minute. Each poll owns one timer and one request, aborts obsolete lookups, and obtains fresh status immediately when visibility returns. Pagination and claim recovery wait for that refresh; a failed indexer refresh keeps claim actions blocked. Public source hashes remain in the URL and pending checkpoint regardless of polling activity. No visibility event signs or resubmits a transaction.
+
+The public Axelar and Circle fee routes share a fixed process budget of 120 admitted requests per minute and at most four concurrent provider calls. The budget does not trust caller forwarding headers or allocate per-address maps. A saturated route returns `429` with `code: RATE_LIMITED`, an integer `retryAfter`, and `Retry-After`; retry after that delay. Every provider call has a 15-second timeout and an 8192-byte response limit. Request URLs are limited to 2048 characters, unknown or repeated parameters are rejected, and Circle destinations must match the configured testnet allowlist. These budgets apply to each server process; replicas each have their own budget. Failed provider estimates stay unavailable instead of becoming zero or fixed prices.
+
 Next serves `/api/relay-fee` for Axelar's live ITS estimate and `/api/cctp-fee` for Circle's finalized forwarding estimate. Static export cannot serve these endpoints. There are no fixed relay prices, generated transaction hashes, sample claims or fabricated history.
 
 Relay budgets include 10% headroom over the live estimate. The Axelar XLM budget is paid in full; the Circle receive minimum accounts for the full USDC forwarding budget. A refreshed estimate must fit inside the displayed budget before signing. Transient read failures receive one bounded retry; signed transactions are never retried automatically.
@@ -98,3 +102,13 @@ As of October 29, 2026, `npm audit` reports zero known vulnerabilities after pat
 The layout study used [Jumper](https://jumper.xyz/), [Relay](https://relay.link/bridge) and [Stargate](https://stargate.finance/) as reference points for focused asset selection and progressive route details. Hyperion adds explicit receive-token identity, quote request feedback, review and interruption recovery. Decorative orbital paths provide background motion without implying that funds are moving. One theme button switches between light and dark; all motion honors reduced-motion preferences.
 
 MIT.
+
+## Independent acceptance proof checks
+
+Live ITS and route runners save the public signed source envelope and hash before broadcast, use atomic proof-file replacement and permit one runner per proof. An interrupted lock stays in place for manual inspection. Pending source and conversion hashes cannot be overwritten by a retry.
+
+Acceptance requires matching source account, canonical token contract, route, destination, recipient and exact integer amounts; origin gross, fee and net must agree. A successful destination receipt must match the indexed hash and block and contain the exact token Transfer payment to the recipient. A balance increase or provider reference alone cannot satisfy this check.
+
+Set `HYPERION_LIVE_PROOF=1` to inspect an existing ITS proof without signing. It uses `HYPERION_TESTNET_PROOF` or the same private default proof path as the ITS runner, verifies the public signature and source confirmation, then independently reads the Sepolia receipt. It does not enable the spending suites. Existing proofs without their public signed envelope remain available for manual recovery and cannot pass acceptance automatically.
+
+Deterministic checks cover source-only evidence, wrong chains, recipient or token, missing and inexact amounts, unrelated receipts, interrupted writes, retained hashes and competing proof owners. Application source and dependencies match the fully validated binding-limit head. Its diagnostic browser evidence and the included conversion-recovery evidence are retained under `docs/review/`. Live spending remained disabled during this repair.

@@ -34,6 +34,31 @@ try {
     localStorage.setItem("hyperion.testnet.pending-transfer", "unresolved-checkpoint");
   });
   page.on("pageerror", (error) => errors.push(error.message));
+  // This smoke check only reads and never signs. Catch any accidental live submission network
+  // call (a Soroban RPC POST or an outbound Horizon transaction broadcast) so a change that makes
+  // this read-only pass start spending testnet funds fails loudly instead of going unnoticed.
+  // Matching is done against the parsed hostname (never an unanchored substring test against the
+  // full URL), so an attacker-controlled URL like https://evil.com/soroban-testnet.stellar.org or
+  // https://soroban-testnet.stellar.org.evil.com cannot be mistaken for the real testnet host.
+  const submissionCalls = [];
+  const submissionHostname = (url) => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return null;
+    }
+  };
+  page.on("request", (request) => {
+    const url = request.url();
+    const hostname = submissionHostname(url);
+    if (
+      request.method() === "POST" &&
+      (hostname === "soroban-testnet.stellar.org" ||
+        (hostname === "horizon-testnet.stellar.org" &&
+          new URL(url).pathname.includes("/transactions")))
+    )
+      submissionCalls.push(url);
+  });
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
   const identityDetails = page
@@ -308,8 +333,13 @@ try {
     });
   }
   assert.deepEqual(errors, [], "Uncaught browser errors");
+  assert.deepEqual(
+    submissionCalls,
+    [],
+    "This read-only smoke check must never submit or broadcast a signed transaction.",
+  );
   console.log(
-    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history and mobile layout.",
+    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history, mobile layout and no live submission calls.",
   );
 } finally {
   await browser.close();

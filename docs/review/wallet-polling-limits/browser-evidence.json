@@ -1,0 +1,25 @@
+{
+  "sources": {
+    "src/wallets/stellar/context.tsx": "9cb9e66e401c615dd52ea05bcbd3186cb7813f05d184080cde88f88c85c5e17c",
+    "src/wallets/stellar/sdk.ts": "86fb0a0e13204b338c90bd64356314e5763c6fe6f94583c65162a6a49314e8a7",
+    "src/wallets/stellar/WalletConnectionRecovery.tsx": "54c0ed209761796f0b610344cbf97e07b04e43c5cb3c89c98f48d97b65314ba6",
+    "src/wallets/stellar/WalletPicker.module.css": "fe3ad2b1692adf59a2791d1f986760e9443cd32aa374ebf7517a644a6bb8f060",
+    "src/components/wallet/StellarWalletButton.tsx": "a956f1ef69ae31a42214e68accd8397e277850129c20e318888b10dae99b6be0",
+    "src/components/common/Dialog.tsx": "8bf6d7875ca9b67763df36f94aaaf11bb7d56022ef48ce155bd6de82afc6a7b5",
+    "src/app/transfers/page.tsx": "188bf1c2a1a69ddc7444cf45e9eea77949411cd244db1fb1c097b315ff08ce63",
+    "src/app/transfers/[txHash]/page.tsx": "4506a16bbddec3bb182322bc383a0917943979ad28f2a04b0c745c3e3e828674",
+    "src/api/backend.ts": "bfd942559fb7a1a67b28e6483cc8bde28eaa2489b62c03acd1712215b33159a6",
+    "src/lib/visibility-poll.ts": "ecffd4396bf8f67f6c7151a70357fc4773bc575c8ebfcb61602c9ec9821949fa",
+    "src/lib/visibility-poll-budget.ts": "9a03e3bd9bef228eef4c9e7a6f75db2632ddf3ed3256d892055d076d731eb1dc",
+    "src/contracts/stellar.ts": "56e9c912a7e6bba083c8f2cf0f704efd5d6204fe2ea01cf5c02305cf669652cc",
+    "src/app/globals.css": "15024b300b2d45decdc9a3c333fa3c7935d609bc3f7dd9c62664cbbef5fffc21"
+  },
+  "fixture": "Complete actual wallet provider/button/recovery SDK and history/detail components/styles. Only Freighter transport is mocked; signing disabled. Next links rendered as anchors. RPC and indexer reads intercepted in Chromium. Synthetic document visibility changes exercise actual production hook.",
+  "browser": "Chromium 158.0.8127.18",
+  "verification": [
+    "Actual provider/recovery component: denied, missing extension, popup and network categories; status focus and Tab to retry; explicit retry count; choose another restores wallet focus; Escape returns to opener; official install URL; no automatic popup or credential disclosure.",
+    "Actual history component: one initial request, hidden reduction, immediate resume with pagination blocked, unchanged public checkpoint, old search response ignored.",
+    "Actual detail component: claim actions blocked during refresh and after indexer failure; source hash retained; old transaction result ignored after new hash; responsive desktop/mobile with no horizontal overflow."
+  ],
+  "transport": "Synthetic Freighter failures and read-only indexer/RPC mocks. Document visibility transitions synthesized in Chromium; no live signing/submission or provider spending."
+}
