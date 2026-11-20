@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -57,6 +58,13 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const firstWallet = useRef<HTMLButtonElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerOpener = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (pickerOpen) return;
+    const opener = pickerOpener.current;
+    pickerOpener.current = null;
+    if (opener?.isConnected) opener.focus();
+  }, [pickerOpen]);
   const [availability, setAvailability] = useState<
     Partial<Record<StellarWalletId, WalletAvailabilityStatus>>
   >({});
@@ -143,6 +151,8 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
 
   const connect = useCallback(async () => {
     if (pending.current) return null;
+    pickerOpener.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     connectionGeneration.current.advance();
     coordinator.current.abandon(
       new Error("Your wallet connection changed. Review the transaction again."),

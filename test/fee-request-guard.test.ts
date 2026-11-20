@@ -15,7 +15,7 @@ describe("bounded public provider admission", () => {
     const active = Array.from({ length: 4 }, () => guard.acquire());
     expect(guard.acquire()).toEqual({ retryAfter: 1 });
     const first = active[0];
-    if (!("release" in first)) throw new Error("Missing admission");
+    if (!first || !("release" in first)) throw new Error("Missing admission");
     first.release();
     first.release();
     expect(guard.acquire()).toHaveProperty("release");

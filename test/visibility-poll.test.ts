@@ -53,7 +53,7 @@ describe("visibility-aware polling ownership", () => {
     await vi.advanceTimersByTimeAsync(0);
     visible = false;
     budget.visibilityChanged();
-    expect(signals[0].aborted).toBe(true);
+    expect(signals[0]?.aborted).toBe(true);
     visible = true;
     budget.visibilityChanged();
     budget.visibilityChanged();
@@ -63,7 +63,7 @@ describe("visibility-aware polling ownership", () => {
     finish();
     await Promise.resolve();
     expect(work).toHaveBeenCalledTimes(2);
-    expect(signals[1].aborted).toBe(false);
+    expect(signals[1]?.aborted).toBe(false);
     finish();
     await Promise.resolve();
     expect(refreshed.at(-1)).toBe(false);
