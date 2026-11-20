@@ -28,9 +28,11 @@ import {
   CIRCLE_STELLAR,
   destinationFor,
   destinationDecimals,
+  supportedLanes,
   deploymentIdentityMismatch,
   type BridgeRoute,
   type DestinationKey,
+  type SupportedLane,
 } from "../config/testnet";
 import type { TransferCheckpoint } from "./checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
@@ -324,6 +326,143 @@ async function claimPayoutEligibility(id: bigint, token: string): Promise<ClaimP
       trustline: "unknown",
     };
   }
+}
+
+/** The coarse family a binding limit falls into, used to pick an actionable next step. */
+export type LimitKind =
+  "flow" | "liquidity" | "routeMax" | "paused" | "disabled" | "input" | "other";
+
+/**
+ * Which specific limit blocked a requested transfer, its current value when the router reports
+ * one exactly, and what to actually do about it. Built from the same quote the router returns
+ * before anybody signs, never from a guess at what a contract might be configured with.
+ */
+export interface FlowLimitDiagnostic {
+  /** The Hyperion error name the router attached to this quote, when this build recognizes it. */
+  code: string | null;
+  kind: LimitKind;
+  /** The specific limit that is binding, named for display (e.g. "Axelar ITS flow window to Sepolia"). */
+  limitLabel: string;
+  /** A sentence naming the limit and, where known exactly, its current value. */
+  summary: string;
+  /** The exact amount still available under this limit right now, when the router reports one. */
+  available: bigint | null;
+  /** The amount that was requested and blocked. */
+  requested: bigint;
+  /** A concrete next step: an amount to try, a lane to switch to, or a reason to wait. */
+  nextStep: string;
+  /** Whether the same request could succeed later without any change. */
+  retryable: boolean;
+  /** Other lanes this testnet deployment actually carries to the same destination. */
+  alternateLanes: readonly SupportedLane[];
+}
+
+/** Raised when a live quote reports the transfer is blocked by a specific, binding limit. */
+export class TransferLimitError extends Error {
+  readonly diagnostic: FlowLimitDiagnostic;
+  constructor(diagnostic: FlowLimitDiagnostic) {
+    super(`${diagnostic.summary} ${diagnostic.nextStep}`.trim());
+    this.name = "TransferLimitError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+/**
+ * Turn a blocked `quote_routes` result into a diagnostic naming the binding limit, its exact
+ * value where the contract reports one, and an actionable next step. Pure and offline: it never
+ * queries the chain, so it can be exercised directly against any reason code a router could
+ * return.
+ */
+export function describeBindingLimit(
+  reasonCode: unknown,
+  requested: bigint,
+  flowAvailable: bigint | null,
+  destinationKey: DestinationKey,
+  route: BridgeRoute,
+): FlowLimitDiagnostic {
+  const destination = destinationFor(destinationKey);
+  const laneLabel = route === 0 ? "Circle CCTP" : "Axelar ITS";
+  const alternateLanes = supportedLanes(destinationKey).filter((lane) => lane.route !== route);
+  const laneSuggestion = alternateLanes.length
+    ? ` ${destination.name} also supports ${alternateLanes.map((lane) => lane.provider).join(" and ")} on this deployment; you can switch routes and try that lane instead.`
+    : "";
+  const candidate = typeof reasonCode === "bigint" ? reasonCode.toString() : reasonCode;
+  const parsedCode =
+    typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string" && /^\d{1,10}$/.test(candidate)
+        ? Number(candidate)
+        : NaN;
+  const name =
+    Number.isSafeInteger(parsedCode) && parsedCode >= 0 && parsedCode <= 0xffffffff
+      ? sorobanErrorName(parsedCode)
+      : null;
+  const help = name ? describeError(name) : null;
+  if (name === "FlowLimitExceeded") {
+    if (flowAvailable === null || flowAvailable < 0n || flowAvailable > I128_MAX)
+      return {
+        code: name,
+        kind: "flow",
+        limitLabel: `${laneLabel} flow window to ${destination.name}`,
+        summary: `The ${laneLabel} flow limit blocked ${formatUnits(requested, 7)} USDC. Current capacity is unavailable.`,
+        available: null,
+        requested,
+        nextStep: `Refresh the quote to check current capacity.${laneSuggestion}`,
+        retryable: true,
+        alternateLanes,
+      };
+    return {
+      code: name,
+      kind: "flow",
+      limitLabel: `${laneLabel} flow window to ${destination.name}`,
+      summary: `The ${laneLabel} lane to ${destination.name} has ${formatUnits(flowAvailable, 7)} USDC left in its current flow window, short of the ${formatUnits(requested, 7)} USDC requested.`,
+      available: flowAvailable,
+      requested,
+      nextStep:
+        flowAvailable > 0n
+          ? `Reduce the amount to ${formatUnits(flowAvailable, 7)} USDC or less, or wait for the window to roll forward and try again.${laneSuggestion}`
+          : `This window is fully used right now. Wait for it to roll forward and try again.${laneSuggestion}`,
+      retryable: true,
+      alternateLanes,
+    };
+  }
+  const kind: LimitKind =
+    name === "InsufficientLiquidity"
+      ? "liquidity"
+      : name === "ExceedsRouteLimit"
+        ? "routeMax"
+        : name === "Paused" || name === "RouteDisabled"
+          ? "paused"
+          : name === "TokenNotRegistered" || name === "TokenNotMapped"
+            ? "disabled"
+            : name === "InvalidAmount" || name === "AmountNotRepresentable"
+              ? "input"
+              : "other";
+  const nextStep =
+    kind === "liquidity"
+      ? `Try a smaller amount, or wait for liquidity on this lane to recover.${laneSuggestion}`
+      : kind === "routeMax"
+        ? `This exceeds the maximum single transfer this route allows. Split it into smaller transfers.${laneSuggestion}`
+        : kind === "paused"
+          ? `The operator must resume this lane before it can be used. Refresh its status before trying again.${laneSuggestion}`
+          : kind === "disabled"
+            ? `This asset or route is not enabled in the current configuration. Wait for a verified configuration change before trying this lane.${laneSuggestion}`
+            : kind === "input"
+              ? "Adjust the requested amount and try again."
+              : help?.retryable
+                ? `Try again shortly.${laneSuggestion}`
+                : `Review the amount or destination and try again.${laneSuggestion}`;
+  return {
+    code: name,
+    kind,
+    limitLabel: name ?? "Unrecognized limit",
+    summary: help ? `${name}: ${help.summary}` : "The router declined this amount.",
+    available: null,
+    requested,
+    nextStep,
+    retryable: help?.retryable ?? false,
+    alternateLanes,
+  };
 }
 
 function server() {
@@ -732,9 +871,26 @@ export async function quoteTransfer(
   const quote = response.value.map(object).find((q) => q.route === route);
   if (!quote) throw new Error("The router did not quote this bridge.");
   if (quote.available !== true) {
-    const name = sorobanErrorName(Number(quote.reason));
-    throw new Error(
-      name ? `${name}: ${describeError(name).summary}` : "The router declined this amount.",
+    throw new TransferLimitError(
+      describeBindingLimit(
+        quote.reason,
+        amount,
+        typeof quote.flow_available === "bigint" &&
+          quote.flow_available >= 0n &&
+          quote.flow_available <= I128_MAX
+          ? quote.flow_available
+          : typeof quote.flow_available === "number" &&
+              Number.isSafeInteger(quote.flow_available) &&
+              quote.flow_available >= 0
+            ? BigInt(quote.flow_available)
+            : typeof quote.flow_available === "string" &&
+                /^\d{1,39}$/.test(quote.flow_available) &&
+                BigInt(quote.flow_available) <= I128_MAX
+              ? BigInt(quote.flow_available)
+              : null,
+        destinationKey,
+        route,
+      ),
     );
   }
   const feeResponse = await readWithRetry(async () => {

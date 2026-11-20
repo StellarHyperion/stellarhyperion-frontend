@@ -258,3 +258,20 @@ export function destinationFor(key: string) {
   if (!destination) throw new Error("Choose a supported destination testnet.");
   return destination;
 }
+export interface SupportedLane {
+  route: BridgeRoute;
+  provider: string;
+}
+const LANE_PROVIDERS: Record<BridgeRoute, string> = {
+  0: "Circle CCTP",
+  1: "Axelar ITS",
+};
+/**
+ * Every rail this testnet deployment actually carries to a destination, independent of live
+ * liquidity or pause state. Read straight off `destination.routes`, the same activation-derived
+ * list `readLane` checks before ever asking the chain, so this can never drift from it or invent
+ * a lane that isn't actually wired for this deployment.
+ */
+export function supportedLanes(key: DestinationKey): readonly SupportedLane[] {
+  return destinationFor(key).routes.map((route) => ({ route, provider: LANE_PROVIDERS[route] }));
+}

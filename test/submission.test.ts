@@ -10,9 +10,10 @@ import {
   rpc,
   type xdr,
 } from "@stellar/stellar-sdk";
-import { toHex } from "@hyperion/protocol";
+import { sorobanErrorCode, toHex } from "@hyperion/protocol";
 import {
   classifySubmissionFailure,
+  describeBindingLimit,
   SubmissionFailure,
   quoteFreshness,
   quoteBreakdown,
@@ -20,12 +21,13 @@ import {
   submitSettleClaim,
   submitOperation,
   simulateOperation,
+  TransferLimitError,
 } from "../src/contracts/stellar";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
 
-import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
+import { STELLAR_DEPLOYMENT, TESTNET, supportedLanes } from "../src/config/testnet";
 import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
 import {
   planMaxUsdcAmount,
@@ -954,5 +956,93 @@ describe("Source identity and explorer access", () => {
     expect(parsed.txHash).toBe(realHash);
     // The checkpoint itself carries no status; confirmation comes only from readTransaction.
     expect(parsed.stage).toBe("bridge");
+  });
+});
+
+describe("Binding flow-limit diagnostics", () => {
+  it.each([null, -1n, 1n << 127n])(
+    "does not invent current capacity from unavailable or invalid values (%s)",
+    (available) => {
+      const code = sorobanErrorCode("FlowLimitExceeded");
+      const diagnostic = describeBindingLimit(code, 10_000_000n, available, "sepolia", 1);
+      expect(diagnostic.available).toBeNull();
+      expect(diagnostic.summary).toContain("capacity is unavailable");
+      expect(diagnostic.nextStep).not.toContain("Reduce the amount");
+      expect(diagnostic.nextStep).toContain("Refresh the quote");
+    },
+  );
+  it.each([undefined, null, -1, NaN, Infinity, "", "1.1", "-1", "999999999999999999999999"])(
+    "keeps malformed reason %s unclassified",
+    (reason) => {
+      const diagnostic = describeBindingLimit(reason, 10_000_000n, 0n, "sepolia", 1);
+      expect(diagnostic.code).toBeNull();
+      expect(diagnostic.kind).toBe("other");
+    },
+  );
+  it("names the exact flow-window headroom and an exact amount to retry", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 10_000_000n, 2_500_000n, "sepolia", 1);
+    expect(diagnostic.kind).toBe("flow");
+    expect(diagnostic.available).toBe(2_500_000n);
+    expect(diagnostic.requested).toBe(10_000_000n);
+    expect(diagnostic.retryable).toBe(true);
+    expect(diagnostic.summary).toContain("0.25");
+    expect(diagnostic.summary).toContain("Axelar ITS");
+    expect(diagnostic.nextStep).toContain("0.25");
+    // The Sepolia lane also carries Circle CCTP on this deployment, so it is a real next step.
+    expect(diagnostic.alternateLanes.map((lane) => lane.provider)).toEqual(["Circle CCTP"]);
+    expect(diagnostic.nextStep).toContain("Circle CCTP");
+  });
+  it("tells the sender to wait when the flow window has no headroom left at all", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 5_000_000n, 0n, "sepolia", 1);
+    expect(diagnostic.available).toBe(0n);
+    expect(diagnostic.nextStep).toContain("fully used");
+    expect(diagnostic.nextStep).not.toContain("Reduce the amount");
+  });
+  it("never offers a lane this testnet deployment does not independently support", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    // Only Sepolia carries Axelar ITS; the Circle CCTP lane on another destination has no
+    // alternate lane to offer, and the diagnostic must not invent one.
+    const diagnostic = describeBindingLimit(code, 5_000_000n, 1_000_000n, "base-sepolia", 0);
+    expect(diagnostic.alternateLanes).toEqual([]);
+    expect(diagnostic.nextStep).not.toContain("also supports");
+  });
+  it("reports the route's maximum transfer cap as non-retryable without inventing a value", () => {
+    const code = sorobanErrorCode("ExceedsRouteLimit");
+    if (code === null) throw new Error("ExceedsRouteLimit has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 50_000_000n, 0n, "sepolia", 0);
+    expect(diagnostic.kind).toBe("routeMax");
+    expect(diagnostic.available).toBeNull();
+    expect(diagnostic.retryable).toBe(false);
+    expect(diagnostic.nextStep).toContain("Split it into smaller transfers");
+  });
+  it("marks a liquidity shortfall as retryable and suggests a smaller amount or a wait", () => {
+    const code = sorobanErrorCode("InsufficientLiquidity");
+    if (code === null) throw new Error("InsufficientLiquidity has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 50_000_000n, 0n, "sepolia", 0);
+    expect(diagnostic.kind).toBe("liquidity");
+    expect(diagnostic.retryable).toBe(true);
+    expect(diagnostic.nextStep).toContain("liquidity");
+  });
+  it("composes the thrown error message from the same summary and next step", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 10_000_000n, 2_500_000n, "sepolia", 1);
+    const error = new TransferLimitError(diagnostic);
+    expect(error.diagnostic).toBe(diagnostic);
+    expect(error.message).toBe(`${diagnostic.summary} ${diagnostic.nextStep}`);
+  });
+  it("only ever names testnet lanes this deployment actually carries", () => {
+    expect(supportedLanes("sepolia").map((lane) => lane.provider)).toEqual([
+      "Circle CCTP",
+      "Axelar ITS",
+    ]);
+    for (const destination of ["base-sepolia", "arc-testnet"] as const) {
+      expect(supportedLanes(destination).map((lane) => lane.provider)).toEqual(["Circle CCTP"]);
+    }
   });
 });
