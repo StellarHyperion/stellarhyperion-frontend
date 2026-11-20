@@ -148,7 +148,7 @@ describe("account-scoped local source reconciliation", () => {
       { txHash: "d".repeat(64) },
       { token: "other-token" },
       { router: "other-router" },
-      { router: undefined },
+      { router: null },
     ]) {
       expect(
         localTransferMatches(reference(), {
@@ -157,6 +157,9 @@ describe("account-scoped local source reconciliation", () => {
         }),
       ).toBe(false);
     }
+    const { router: omittedRouter, ...withoutRouter } = matching().origin;
+    expect(omittedRouter).toBe(TESTNET.router);
+    expect(localTransferMatches(reference(), { ...matching(), origin: withoutRouter })).toBe(false);
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
