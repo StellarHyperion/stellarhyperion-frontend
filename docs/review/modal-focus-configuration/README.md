@@ -1,0 +1,9 @@
+# Modal focus and public configuration review
+
+The rendered fixture imports the complete production Bridge, Dialog, pickers, Providers, wallet provider and SDK. Chromium 158.0.8127.18 verified initial review-heading focus, forward and backward Tab wrapping in a nested modal, hidden/disabled control skipping, background isolation, child-only Escape, parent focus context and restoration to the original opener when every dialog closes. Wallet, source and destination pickers open and cancel with the keyboard. Rejected wallet approval returns focus to the enabled Review transfer action.
+
+Desktop (1280 by 1000) and mobile (390 by 844) captures were inspected. Review amounts, recipient and issuer wrap within the body; the body scrolls to fees while Cancel and Confirm in wallet remain reachable. No document or review-body horizontal overflow occurred. The unavailable capture mounts the actual Providers with a synthetic credential-bearing RPC URL: its child action is absent, its diagnostic names the problem, and synthetic credential values are absent. Seventeen deterministic configuration boundary cases cover mixed network/router/token identity, public endpoint credentials/query/fragment and explicitly local activity API origins.
+
+The bridge fixture supplies quote/lane/simulation results and Horizon balances. Its execution boundary invokes the actual wallet callback with a locally generated unsigned envelope; mocked Freighter rejects approval. No accepted signature, broadcast, payment or live chain confirmation occurred. Configuration evidence tests admission, rather than external endpoint availability. `source-evidence.json` records production source hashes and the checked behavior.
+
+Run the normal Node 22 pipeline with live signing suites disabled: `npm run fmt:check`, `npm run house`, `npm run contrast`, `npm run test -- --maxWorkers=1`, `npm run lint`, `npm run typecheck`, and `npm run build`.

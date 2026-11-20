@@ -1,9 +1,13 @@
 import { parseClaimPreview } from "../src/contracts/stellar";
+import { XLM } from "../src/contracts/assets";
 import {
   claimOperationOwnership,
   getOperationOwnership,
   releaseOperationOwnership,
+  parseCheckpoint,
   saveCheckpoint,
+  commitCheckpoint,
+  getTransferCheckpoint,
   type TransferCheckpoint,
 } from "../src/contracts/checkpoint";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -367,19 +371,62 @@ describe("Real Stellar transaction encoding", () => {
       });
       expect(getOperationOwnership()?.id).toBe(op1.id);
 
-      const op2 = claimOperationOwnership({
+      expect(() =>
+        claimOperationOwnership({
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "2000000",
+          stage: "bridge",
+        }),
+      ).toThrow("Another tab owns this transfer");
+      expect(getOperationOwnership()?.id).toBe(op1.id);
+
+      releaseOperationOwnership(op1.id);
+      expect(getOperationOwnership()).toBeNull();
+    });
+
+    it("rejects a second live tab from replacing the unresolved owner", () => {
+      const first = claimOperationOwnership({
         account: TESTNET.reader,
         recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
         destination: "sepolia",
         route: 1,
-        bridgeAmount: "2000000",
+        bridgeAmount: "1000000",
         stage: "bridge",
+        id: "tab-a",
       });
-      expect(getOperationOwnership()?.id).toBe(op2.id);
-      expect(getOperationOwnership()?.id).not.toBe(op1.id);
+      expect(() =>
+        claimOperationOwnership({
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "2000000",
+          stage: "bridge",
+          id: "tab-b",
+        }),
+      ).toThrow("Another tab owns this transfer");
+      expect(getOperationOwnership()?.id).toBe(first.id);
+      releaseOperationOwnership(first.id);
+    });
 
-      releaseOperationOwnership(op2.id);
-      expect(getOperationOwnership()).toBeNull();
+    it("accepts the browser harness checkpoint", () => {
+      expect(
+        parseCheckpoint(
+          JSON.stringify({
+            router: TESTNET.router,
+            account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+            recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            destination: "sepolia",
+            route: 1,
+            bridgeAmount: "10000000",
+            stage: "bridge",
+            txHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          }),
+        ),
+      ).not.toBeNull();
     });
 
     it("diagnoses matching sequence between constructed intent and ledger state", () => {
@@ -408,17 +455,18 @@ describe("Real Stellar transaction encoding", () => {
         bridgeAmount: "1000000",
         stage: "bridge",
         txHash: "1".repeat(64),
+        source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
       };
       const cp2: TransferCheckpoint = {
         ...cp1,
         txHash: "2".repeat(64),
       };
-      saveCheckpoint(null);
+      saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
       saveCheckpoint(cp1);
       expect(() => {
         saveCheckpoint(cp2);
       }).toThrow("previous transaction remains pending");
-      saveCheckpoint(null);
+      saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
     });
 
     it("confirms displayed operation matches the exact envelope sent to the wallet", () => {
@@ -477,6 +525,7 @@ describe("Real Stellar transaction encoding", () => {
         bridgeAmount: "1000000",
         stage: "bridge" as const,
         txHash: "a".repeat(64),
+        source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
       };
       vi.stubGlobal("localStorage", {
         getItem: () => null,
@@ -491,12 +540,13 @@ describe("Real Stellar transaction encoding", () => {
       expect(() => {
         saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) });
       }).toThrow("previous transaction remains pending");
-      saveCheckpoint(null);
+      vi.unstubAllGlobals();
+      saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
     });
 
     it.each(["unavailable", "discarded"] as const)(
       "retains the signed hash and blocks another transaction when checkpoint storage is %s",
-      (failure) => {
+      async (failure) => {
         const checkpoint: TransferCheckpoint = {
           router: TESTNET.router,
           account: TESTNET.reader,
@@ -506,9 +556,15 @@ describe("Real Stellar transaction encoding", () => {
           bridgeAmount: "1000000",
           stage: "bridge",
           txHash: "a".repeat(64),
+          source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
         };
-        saveCheckpoint(null);
+        saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
         vi.stubGlobal("window", {});
+        vi.stubGlobal("navigator", {
+          locks: {
+            request: (_name: string, callback: () => unknown) => Promise.resolve().then(callback),
+          },
+        });
         vi.stubGlobal(
           "localStorage",
           failure === "unavailable"
@@ -523,14 +579,15 @@ describe("Real Stellar transaction encoding", () => {
                 },
               },
         );
-        expect(() => {
-          saveCheckpoint(checkpoint);
-        }).toThrow("Browser storage is unavailable");
-        expect(() => {
-          saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) });
-        }).toThrow("previous transaction remains pending");
+        await expect(commitCheckpoint(checkpoint)).rejects.toThrow(
+          "Browser storage is unavailable",
+        );
+        expect(getTransferCheckpoint()?.txHash).toBe(checkpoint.txHash);
+        await expect(commitCheckpoint({ ...checkpoint, txHash: "b".repeat(64) })).rejects.toThrow(
+          "previous transaction remains pending",
+        );
         vi.unstubAllGlobals();
-        saveCheckpoint(null);
+        saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
       },
     );
 

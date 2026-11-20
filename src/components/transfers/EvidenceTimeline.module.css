@@ -86,3 +86,51 @@
   font-family: var(--face-mono);
   font-size: var(--type-mono-sm-size);
 }
+
+.proofDrawer {
+  color: var(--text-secondary);
+  font-size: 1rem;
+  min-width: 0;
+}
+.proofDrawer summary {
+  color: var(--text-primary);
+  cursor: pointer;
+  min-height: 44px;
+  padding-block: var(--space-2);
+}
+.proofDrawer summary:focus-visible,
+.proofRetry:focus-visible {
+  outline: 2px solid var(--leg-origin);
+  outline-offset: 3px;
+}
+.references {
+  display: grid;
+  gap: var(--space-2);
+}
+.references div {
+  min-width: 0;
+}
+.references dt {
+  color: var(--text-secondary);
+}
+.references dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--face-mono);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.proofChecks {
+  padding-inline-start: var(--space-4);
+}
+.proofChecks li {
+  margin-block: var(--space-2);
+}
+.proofRetry {
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-primary);
+  background: var(--surface-page);
+  border: 1px solid var(--edge-color-strong);
+  cursor: pointer;
+}
