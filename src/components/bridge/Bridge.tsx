@@ -1,4 +1,5 @@
 "use client";
+import { CheckpointRecoveryInspector } from "./CheckpointRecoveryInspector";
 import { rememberLocalTransfer } from "../../lib/local-transfers";
 import { cctpPayoutBreakdown, FeeUnavailableError } from "../../lib/relay-budget";
 
@@ -961,7 +962,12 @@ function PendingTransferCard({
                 "Recovery export failed. Your original checkpoint is unchanged. Retry or copy its transaction hash.",
               );
             } finally {
-              if (url) setTimeout(() => URL.revokeObjectURL(url), 1000);
+              if (url) {
+                const createdUrl = url;
+                setTimeout(() => {
+                  URL.revokeObjectURL(createdUrl);
+                }, 1000);
+              }
             }
           }}
         >
@@ -976,6 +982,7 @@ function PendingTransferCard({
           View on Stellar Expert <ArrowUpRight size={14} aria-hidden="true" />
         </a>
       </div>
+      <CheckpointRecoveryInspector key={recoveryOwner} checkpoint={checkpoint} />
       {checkpoint.stage === "bridge" && (
         <Link href={`/transfers/${checkpoint.txHash}`}>
           Track transfer <ArrowRight size={14} aria-hidden="true" />
@@ -2840,7 +2847,7 @@ export function ClaimRecovery() {
     setRecovery(null);
     setClaimPhase("preparing");
     try {
-      lease = await acquireClaimSettlementLease();
+      lease = await acquireClaimSettlementLease(account);
       assertCheckpointStorage();
       if (controller.signal.aborted || !mounted.current) return;
       const refreshed = await getClaims(reviewed.map((claim) => claim.id));

@@ -215,8 +215,7 @@ export function checkpointNetworkMatches(value: TransferCheckpoint): boolean {
     (value.networkPassphrase === undefined ||
       value.networkPassphrase === TESTNET.networkPassphrase) &&
     (value.chain === undefined || value.chain === "stellar-testnet") &&
-    (value.deploymentCommit === undefined ||
-      value.deploymentCommit === STELLAR_DEPLOYMENT.deploymentCommit)
+    (value.deploymentCommit === undefined || value.deploymentCommit === STELLAR_DEPLOYMENT.commit)
   );
 }
 
@@ -326,7 +325,7 @@ export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
     checkpoint.router,
     checkpoint.networkPassphrase ?? TESTNET.networkPassphrase,
     checkpoint.chain ?? "stellar-testnet",
-    checkpoint.deploymentCommit ?? STELLAR_DEPLOYMENT.deploymentCommit,
+    checkpoint.deploymentCommit ?? STELLAR_DEPLOYMENT.commit,
     checkpoint.token ?? TESTNET.token,
     checkpoint.account,
     checkpoint.recipient,
@@ -623,7 +622,7 @@ export async function acquireOperationOwnership(
                 !checkpointMatches(expected, {
                   ...ownership,
                   stage: "conversion",
-                  source: expected.source,
+                  ...(expected.source ? { source: expected.source } : {}),
                 })
               )
                 throw new Error(

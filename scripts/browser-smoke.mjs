@@ -213,9 +213,6 @@ try {
   await otherTab.goto(origin, { waitUntil: "domcontentloaded" });
   await otherTab.evaluate(() => {
     const checkpoint = JSON.parse(localStorage.getItem("hyperion.testnet.pending-transfer"));
-    // codeql[js/clear-text-storage-of-sensitive-data]: this re-writes the same recovery checkpoint
-    // the app already stores (see src/contracts/checkpoint.ts); its networkPassphrase field is the
-    // hardcoded public Stellar testnet passphrase ("Test SDF Network ; September 2015"), not a secret.
     localStorage.setItem(
       "hyperion.testnet.pending-transfer",
       JSON.stringify({ ...checkpoint, txHash: "f".repeat(64) }),
