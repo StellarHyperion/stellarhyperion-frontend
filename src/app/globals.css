@@ -185,6 +185,9 @@
   --focus-width: 2px;
   --focus-offset: 2px;
 
+  /* Smallest reliable tap target. Nothing actionable may render below this box. */
+  --tap-target: 2.75rem;
+
   color-scheme: dark;
 }
 
@@ -379,6 +382,36 @@ select,
 textarea {
   font: inherit;
   color: inherit;
+}
+
+/*
+ * Input methods and zoom.
+ *
+ * `touch-action: manipulation` removes the double tap zoom delay for controls without taking
+ * pinch zoom away, so a person can still magnify the page. The target sizing applies wherever a
+ * finger is the likely input, or the viewport is narrow enough that a control would otherwise
+ * shrink below the minimum: 320 CSS pixels is what a 640 pixel wide window becomes at 200 percent
+ * zoom, and what a small phone reports in portrait.
+ */
+button,
+input,
+select,
+textarea,
+summary {
+  touch-action: manipulation;
+}
+
+@media (pointer: coarse), (width <= 30rem) {
+  button,
+  select,
+  textarea,
+  summary {
+    min-block-size: var(--tap-target);
+  }
+
+  input {
+    min-block-size: var(--tap-target);
+  }
 }
 
 ::selection {

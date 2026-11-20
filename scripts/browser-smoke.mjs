@@ -227,6 +227,102 @@ try {
       `Horizontal overflow on ${route}`,
     );
   }
+  // Touch targets and small screens. The dialog body scrolls while its close control and the
+  // recovery action stay inside the viewport, long amounts and hashes never overlap the controls
+  // beside them, and 320 by 640 CSS pixels stands in for a 640 pixel window at 200 percent zoom.
+  const box = (locator) =>
+    locator.evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        width: rect.width,
+        height: rect.height,
+        top: rect.top,
+        bottom: rect.bottom,
+        left: rect.left,
+        right: rect.right,
+      };
+    });
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 320, height: 640 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(origin, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+    await page.getByLabel("Amount to send").fill("123456789.1234567");
+    const amountBox = await box(page.getByLabel("Amount to send"));
+    const tokenBox = await box(
+      page.getByRole("button", { name: "Choose source token", exact: true }),
+    );
+    assert.ok(
+      amountBox.bottom <= tokenBox.top + 0.5 || amountBox.right <= tokenBox.left + 0.5,
+      `Long amount overlaps the token selector at ${viewport.width}px`,
+    );
+    await page.getByRole("button", { name: "Choose source token", exact: true }).click();
+    const tokenDialog = page.getByRole("dialog", { name: "Choose a token" });
+    await tokenDialog.waitFor();
+    const tokenDialogBox = await box(tokenDialog);
+    assert.ok(
+      tokenDialogBox.left >= 0 && tokenDialogBox.right <= viewport.width + 0.5,
+      `Dialog overflows the narrow viewport at ${viewport.width}px`,
+    );
+    assert.ok(
+      tokenDialogBox.top >= 0 && tokenDialogBox.bottom <= viewport.height + 0.5,
+      `Dialog exceeds the viewport height at ${viewport.width}px`,
+    );
+    const closeBox = await box(tokenDialog.getByRole("button", { name: "Close selector" }));
+    assert.ok(closeBox.width >= 40 && closeBox.height >= 40, "Dialog close target below 44px");
+    assert.ok(
+      closeBox.top >= 0 && closeBox.bottom <= viewport.height + 0.5,
+      `Dialog close control outside the viewport at ${viewport.width}px`,
+    );
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+
+    // A saved recovery identity with a long hash and amount keeps its action and copy control
+    // separate from the wrapping text.
+    await page.evaluate((router) => {
+      localStorage.setItem(
+        "hyperion.testnet.pending-transfer",
+        JSON.stringify({
+          router,
+          account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          recipient: "0x" + "b".repeat(40),
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "123456789012345",
+          stage: "bridge",
+          txHash: "a".repeat(64),
+        }),
+      );
+      window.dispatchEvent(new Event("hyperion:pending-transfer"));
+    }, router);
+    const recovery = page.getByRole("region", { name: "Transfer recovery" });
+    await recovery.waitFor();
+    const hashBox = await box(recovery.locator("code").first());
+    const copyBox = await box(recovery.getByRole("button", { name: "Copy transaction hash" }));
+    assert.ok(
+      copyBox.top >= hashBox.bottom - 0.5 || copyBox.left >= hashBox.right - 0.5,
+      `Transaction hash overlaps its copy control at ${viewport.width}px`,
+    );
+    const statusAction = recovery.getByRole("button", { name: "Check status" });
+    await statusAction.scrollIntoViewIfNeeded();
+    const statusBox = await box(statusAction);
+    assert.ok(statusBox.height >= 40, "Recovery action below the touch target minimum");
+    assert.ok(
+      statusBox.top >= 0 && statusBox.bottom <= viewport.height + 0.5,
+      `Recovery action stays out of reach at ${viewport.width}px`,
+    );
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+      `Horizontal overflow with a long hash at ${viewport.width}px`,
+    );
+    await page.evaluate(() => {
+      localStorage.removeItem("hyperion.testnet.pending-transfer");
+      window.dispatchEvent(new Event("hyperion:pending-transfer"));
+    });
+  }
   assert.deepEqual(errors, [], "Uncaught browser errors");
   console.log(
     "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history and mobile layout.",

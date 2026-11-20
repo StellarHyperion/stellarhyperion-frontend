@@ -39,8 +39,10 @@ import {
   submitBridgeOut,
   submitSettleClaim,
   submitSettleClaims,
+  TransferLimitError,
   validateRecipient,
   quoteBreakdown,
+  type FlowLimitDiagnostic,
   type LaneState,
   type LiveQuote,
   type PendingClaim,
@@ -74,6 +76,7 @@ import {
 } from "../../contracts/assets";
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import {
+  checkpointForAsset,
   claimOperationOwnership,
   getOperationOwnership,
   releaseOperationOwnership,
@@ -661,6 +664,12 @@ function PendingTransferCard({
               ? "Source transaction failed on Stellar. No destination delivery was initiated."
               : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
+      {checkpoint.stage === "conversion" && checkpoint.source && (
+        <p className={styles.address}>
+          Original source asset: {checkpoint.source.code}
+          {checkpoint.source.issuer ? `, issuer ${checkpoint.source.issuer}` : " (native XLM)"}
+        </p>
+      )}
       <a
         className={styles.transactionLink}
         href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -761,6 +770,40 @@ function PendingTransferCard({
               setCardSimError(null);
             }
           }}
+          footer={
+            <>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={checking}
+                onClick={() => {
+                  setReview(null);
+                  setCardSimulation(null);
+                  setCardSimError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={
+                  checking || !sameAccount || cardSimulating || !!cardSimError || !cardSimulation
+                }
+                onClick={() => {
+                  void continueBridge();
+                }}
+              >
+                {checking
+                  ? "Confirming in your wallet..."
+                  : cardSimulating
+                    ? "Estimating simulation..."
+                    : cardSimError
+                      ? "Approval blocked"
+                      : "Bridge converted USDC"}
+              </button>
+            </>
+          }
         >
           <p className={styles.reviewNote}>
             Conversion confirmed. This step bridges the USDC already in your wallet.
@@ -785,24 +828,6 @@ function PendingTransferCard({
               Simulation failed: {cardSimError}. Approval blocked.
             </p>
           )}
-          <button
-            type="button"
-            className={styles.primary}
-            disabled={
-              checking || !sameAccount || cardSimulating || !!cardSimError || !cardSimulation
-            }
-            onClick={() => {
-              void continueBridge();
-            }}
-          >
-            {checking
-              ? "Confirming in your wallet..."
-              : cardSimulating
-                ? "Estimating simulation..."
-                : cardSimError
-                  ? "Approval blocked"
-                  : "Bridge converted USDC"}
-          </button>
           {error && <p role="alert">{error}</p>}
         </ReviewDialog>
       )}
@@ -833,6 +858,7 @@ export function Bridge() {
     key: string;
     value: TradeQuote | null;
     error: string | null;
+    diagnostic: FlowLimitDiagnostic | null;
   } | null>(null);
   const [accounts, setAccounts] = useState<{
     account: string;
@@ -863,6 +889,7 @@ export function Bridge() {
   const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
   const quote = quoted?.key === quoteKey && lane?.available ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
+  const quoteDiagnostic = quoted?.key === quoteKey ? quoted.diagnostic : null;
   const simKey = `${quoteKey}:${wallet.address}`;
   const simulation = simulatedState?.key === simKey ? simulatedState.value : null;
   const simulationError = simulatedState?.key === simKey ? simulatedState.error : null;
@@ -1057,10 +1084,16 @@ export function Bridge() {
     const timer = setTimeout(() => {
       void quoteTrade(destination, activeSource, amount, route)
         .then((value) => {
-          if (active) setQuoted({ key: quoteKey, value, error: null });
+          if (active) setQuoted({ key: quoteKey, value, error: null, diagnostic: null });
         })
         .catch((cause: unknown) => {
-          if (active) setQuoted({ key: quoteKey, value: null, error: errorMessage(cause) });
+          if (active)
+            setQuoted({
+              key: quoteKey,
+              value: null,
+              error: errorMessage(cause),
+              diagnostic: cause instanceof TransferLimitError ? cause.diagnostic : null,
+            });
         });
     }, 400);
     return () => {
@@ -1193,6 +1226,11 @@ export function Bridge() {
       bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
       stage,
       txHash: hash,
+      source: {
+        id: reviewedQuote.source.id,
+        code: reviewedQuote.source.code,
+        issuer: reviewedQuote.source.issuer,
+      },
     });
     const conversionReconcile: SubmissionReconciliation = {
       expectedAccount: sender,
@@ -1395,7 +1433,7 @@ export function Bridge() {
               type="button"
               className={styles.tokenSelector}
               aria-label="Choose source token"
-              disabled={locked}
+              disabled={busy}
               onClick={() => {
                 setPicker("source");
               }}
@@ -1661,10 +1699,18 @@ export function Bridge() {
             </p>
           )
         )}
-        {(error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
-          <p role="alert" className={styles.error}>
-            {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
-          </p>
+        {!error && !wallet.error && quoteError && quoteDiagnostic ? (
+          <div role="alert" className={styles.limitDiagnostic}>
+            <strong>{quoteDiagnostic.limitLabel}</strong>
+            <span>{quoteDiagnostic.summary}</span>
+            <span>{quoteDiagnostic.nextStep}</span>
+          </div>
+        ) : (
+          (error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
+            <p role="alert" className={styles.error}>
+              {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
+            </p>
+          )
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>
@@ -1855,10 +1901,17 @@ export function Bridge() {
         <SourceAssetPicker
           selected={source}
           balances={balances}
+          pendingRecovery={checkpoint?.source ?? null}
           onSelect={(asset) => {
+            // Editing the form never removes a signed operation or its original intent.
+            // The pending card keeps its own account, amount and explicit bridge review.
             setSource(asset);
             invalidateQuote();
-            setError(null);
+            setError(
+              checkpoint?.stage === "conversion" && !checkpointForAsset(checkpoint, asset)
+                ? "Your saved conversion belongs to the previous source asset. Check its status and review its bridge separately before starting another transfer."
+                : null,
+            );
           }}
           onClose={() => {
             setPicker(null);
@@ -1886,6 +1939,41 @@ export function Bridge() {
             setReviewing(false);
             setReviewed(null);
           }}
+          footer={
+            <>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={busy}
+                onClick={() => {
+                  setReviewing(false);
+                  setReviewed(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={
+                  busy ||
+                  reviewedReserveInsufficient ||
+                  (!!reviewed.quote.conversion && !reserve) ||
+                  (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
+                }
+                onClick={() => {
+                  void submit();
+                }}
+              >
+                {simulating
+                  ? "Estimating simulation..."
+                  : simulationError
+                    ? "Approval blocked"
+                    : "Confirm in wallet"}{" "}
+                <ArrowUpRight size={17} aria-hidden="true" />
+              </button>
+            </>
+          }
         >
           <div className={styles.reviewTotal}>
             <span>You send {reviewed.quote.conversion ? "up to" : ""}</span>
@@ -1971,26 +2059,6 @@ export function Bridge() {
               Simulation failed: {simulationError}. Approval blocked.
             </p>
           )}
-          <button
-            type="button"
-            className={styles.primary}
-            disabled={
-              busy ||
-              reviewedReserveInsufficient ||
-              (!!reviewed.quote.conversion && !reserve) ||
-              (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
-            }
-            onClick={() => {
-              void submit();
-            }}
-          >
-            {simulating
-              ? "Estimating simulation..."
-              : simulationError
-                ? "Approval blocked"
-                : "Confirm in wallet"}{" "}
-            <ArrowUpRight size={17} aria-hidden="true" />
-          </button>
         </ReviewDialog>
       )}
     </>
