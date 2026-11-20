@@ -74,6 +74,7 @@ import {
 } from "../../contracts/assets";
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import {
+  checkpointForAsset,
   claimOperationOwnership,
   getOperationOwnership,
   releaseOperationOwnership,
@@ -660,6 +661,12 @@ function PendingTransferCard({
               ? "Source transaction failed on Stellar. No destination delivery was initiated."
               : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
+      {checkpoint.stage === "conversion" && checkpoint.source && (
+        <p className={styles.address}>
+          Original source asset: {checkpoint.source.code}
+          {checkpoint.source.issuer ? `, issuer ${checkpoint.source.issuer}` : " (native XLM)"}
+        </p>
+      )}
       <a
         className={styles.transactionLink}
         href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -1208,6 +1215,11 @@ export function Bridge() {
       bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
       stage,
       txHash: hash,
+      source: {
+        id: reviewedQuote.source.id,
+        code: reviewedQuote.source.code,
+        issuer: reviewedQuote.source.issuer,
+      },
     });
     const conversionReconcile: SubmissionReconciliation = {
       expectedAccount: sender,
@@ -1410,7 +1422,7 @@ export function Bridge() {
               type="button"
               className={styles.tokenSelector}
               aria-label="Choose source token"
-              disabled={locked}
+              disabled={busy}
               onClick={() => {
                 setPicker("source");
               }}
@@ -1851,10 +1863,17 @@ export function Bridge() {
         <SourceAssetPicker
           selected={source}
           balances={balances}
+          pendingRecovery={checkpoint?.source ?? null}
           onSelect={(asset) => {
+            // Editing the form never removes a signed operation or its original intent.
+            // The pending card keeps its own account, amount and explicit bridge review.
             setSource(asset);
             invalidateQuote();
-            setError(null);
+            setError(
+              checkpoint?.stage === "conversion" && !checkpointForAsset(checkpoint, asset)
+                ? "Your saved conversion belongs to the previous source asset. Check its status and review its bridge separately before starting another transfer."
+                : null,
+            );
           }}
           onClose={() => {
             setPicker(null);

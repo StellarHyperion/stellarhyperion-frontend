@@ -29,7 +29,11 @@ import {
   trustlineLabel,
   xlmShortfall,
 } from "../src/contracts/assets";
-import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
+import {
+  checkpointForAsset,
+  parseCheckpoint,
+  type TransferCheckpoint,
+} from "../src/contracts/checkpoint";
 import {
   DESTINATIONS,
   deploymentIdentityMismatch,
@@ -760,8 +764,9 @@ describe("Interrupted transfer recovery", () => {
     bridgeAmount: "1000000",
     stage: "conversion",
     txHash: "a".repeat(64),
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
-  it("preserves a real conversion hash and the intended second leg", () => {
+  it("preserves a real conversion hash, the intended second leg and the originating asset", () => {
     expect(parseCheckpoint(JSON.stringify(checkpoint))).toEqual(checkpoint);
   });
   it.each([
@@ -773,8 +778,18 @@ describe("Interrupted transfer recovery", () => {
     { bridgeAmount: "0" },
     { txHash: "fake" },
     { recipient: `0x${"0".repeat(40)}` },
+    { source: null },
+    { source: { id: "FAKE", code: "FAKE", issuer: null } },
+    { source: { id: USDC.id, code: USDC.code, issuer: TESTNET.reader } },
   ])("refuses a corrupted recovery record %j", (change) => {
     expect(parseCheckpoint(JSON.stringify({ ...checkpoint, ...change }))).toBeNull();
+  });
+  it("never lets a newly selected asset reuse another asset's converted-USDC recovery data", () => {
+    expect(checkpointForAsset(parseCheckpoint(JSON.stringify(checkpoint)), XLM)).toEqual(
+      checkpoint,
+    );
+    expect(checkpointForAsset(parseCheckpoint(JSON.stringify(checkpoint)), USDC)).toBeNull();
+    expect(checkpointForAsset(null, USDC)).toBeNull();
   });
 });
 describe("Spendable XLM accounts for reserves and fees", () => {

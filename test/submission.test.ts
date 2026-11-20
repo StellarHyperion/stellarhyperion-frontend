@@ -866,9 +866,12 @@ describe("Checkpoint staleness guards", () => {
     bridgeAmount: "10000000",
     stage: "bridge",
     txHash: "0".repeat(64),
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
   const sameIntent = {
     account: checkpoint.account,
+    recipient: checkpoint.recipient,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
     destination: checkpoint.destination,
     route: checkpoint.route,
     bridgeAmount: checkpoint.bridgeAmount,
@@ -894,6 +897,12 @@ describe("Checkpoint staleness guards", () => {
   it("rejects a stale confirmation when the amount changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, bridgeAmount: "20000000" })).toBe(false);
   });
+  it("rejects a stale confirmation when recipient or issuer-specific source identity changes", () => {
+    expect(checkpointMatches(checkpoint, { ...sameIntent, recipient: "0x" + "b".repeat(40) })).toBe(
+      false,
+    );
+    expect(checkpointMatches(checkpoint, { ...sameIntent, source: USDC })).toBe(false);
+  });
   it("rejects a stale confirmation when the stage changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, stage: "conversion" })).toBe(false);
   });
@@ -911,6 +920,7 @@ describe("Source identity and explorer access", () => {
     bridgeAmount: "10000000",
     stage: "bridge" as const,
     txHash: realHash,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
 
   it("preserves the real signed hash exactly in a saved checkpoint", () => {

@@ -977,6 +977,9 @@ function matchesConversion(checkpoint: TransferCheckpoint, operations: ParsedOpe
     payment?.type === "pathPaymentStrictReceive" &&
     (!payment.source || payment.source === checkpoint.account) &&
     payment.destination === checkpoint.account &&
+    (!checkpoint.source ||
+      (payment.sendAsset.getCode() === checkpoint.source.code &&
+        (payment.sendAsset.getIssuer() ?? null) === checkpoint.source.issuer)) &&
     payment.destAsset.getCode() === TESTNET.usdcCode &&
     payment.destAsset.getIssuer() === TESTNET.usdcIssuer &&
     parseUnits(payment.destAmount, 7) === BigInt(checkpoint.bridgeAmount)

@@ -123,7 +123,7 @@ export function suggestSourceSpend(asset: SourceAsset): string {
   return spendableBalance(asset);
 }
 
-export function stellarAsset(asset: SourceAsset): Asset {
+export function stellarAsset(asset: Pick<SourceAsset, "id" | "code" | "issuer">): Asset {
   if (asset.id === "native" && asset.issuer === null && asset.code === "XLM") return Asset.native();
   if (
     !asset.issuer ||
