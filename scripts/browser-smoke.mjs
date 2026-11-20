@@ -67,6 +67,7 @@ try {
         }
       }
     });
+  });
   // This smoke check only reads and never signs. Catch any accidental live submission network
   // call (a Soroban RPC POST or an outbound Horizon transaction broadcast) so a change that makes
   // this read-only pass start spending testnet funds fails loudly instead of going unnoticed.

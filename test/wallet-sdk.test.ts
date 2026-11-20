@@ -13,10 +13,10 @@ import {
 } from "../src/wallets/stellar/sdk";
 import {
   assertSigningAuthorized,
+  assertWalletNetwork,
   verifyWalletSignature,
   WalletSigningError,
 } from "../src/wallets/stellar/signature";
-import { assertWalletNetwork, verifyWalletSignature } from "../src/wallets/stellar/signature";
 import {
   withTimeout,
   WalletTimeoutError,

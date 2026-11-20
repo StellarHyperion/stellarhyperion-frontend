@@ -127,8 +127,13 @@ export function StellarWalletButton() {
         <span className={isReadOnly ? styles.dotReadOnly : styles.dot} />
         <span>{shortAddress}</span>
         <span className={styles.network}>
-          {isReadOnly ? "(read-only)" : pendingSigningRequest ? "signing..." : "(testnet)"}
-          {pendingSigningRequest ? "signing..." : networkMismatch ? "(wrong network)" : "(testnet)"}
+          {isReadOnly
+            ? "(read-only)"
+            : pendingSigningRequest
+              ? "signing..."
+              : networkMismatch
+                ? "(wrong network)"
+                : "(testnet)"}
         </span>
       </button>
 

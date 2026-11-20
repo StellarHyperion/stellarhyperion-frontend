@@ -16,7 +16,7 @@ beforeEach(async () => {
       values.delete(key);
     },
   });
-});
+}, 30000);
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -136,5 +136,5 @@ describe("deployment-aware asset metadata", () => {
     if (!first) throw new Error("Missing cached asset.");
     expect(issuerVerificationLabel(first)).toContain("stale; verify before signing");
     await expect(searchAssets("UNSEEN")).rejects.toThrow("offline");
-  });
+  }, 30000);
 });

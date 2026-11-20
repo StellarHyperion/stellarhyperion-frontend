@@ -197,6 +197,8 @@ describe("Wallet signature verification", () => {
         });
       }).not.toThrow();
     });
+  });
+
   it("rejects a signature from a stale, overlapping session whose sequence has moved on", () => {
     // Session A prepares and signs a transaction while session B, overlapping it, prepares a
     // fresh transaction for the same account after its sequence number has already advanced. A

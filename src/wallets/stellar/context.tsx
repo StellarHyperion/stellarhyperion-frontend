@@ -74,7 +74,6 @@ const Context = createContext<StellarWalletContextValue | null>(null);
 export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [connectedAddress, setConnectedAddress] = useState<string | null>(null);
   const [viewedAddress, setViewedAddress] = useState<string | null>(readSavedViewedAddress);
-  const [address, setAddress] = useState<string | null>(null);
   const addressRef = useRef<string | null>(null);
   const restorationAllowed = useRef(true);
   const [rememberedWallet, setRememberedWallet] = useState<StellarWalletId | null>(null);
@@ -90,7 +89,6 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     guidance: WalletConnectionGuidance;
   } | null>(null);
   const firstWallet = useRef<HTMLButtonElement>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const pickerOpener = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (pickerOpen) return;
@@ -210,7 +208,6 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
             if (active && restorationAllowed.current && attempt.current === version) {
               setConnectedAddress(value);
               addressRef.current = value;
-              setAddress(value);
               setWalletId(saved);
               if (!readSavedViewedAddress()) {
                 setViewedAddress(value);
@@ -276,7 +273,6 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       if (attempt.current !== version) return;
       setConnectedAddress(value);
       addressRef.current = value;
-      setAddress(value);
       setWalletId(id);
       connectionGeneration.current.advance();
       const storageError = saveWalletPreference(id);
@@ -381,7 +377,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     coordinator.current.abandon(new Error(message));
     pending.current?.(null);
     pending.current = null;
-    setAddress(null);
+    setConnectedAddress(null);
     setWalletId(null);
     setConnecting(false);
     setPickerOpen(false);
@@ -390,7 +386,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!address || !walletId) return;
+    if (!connectedAddress || !walletId) return;
     let active = true;
     let checking = false;
     const verifyAccount = async () => {
@@ -404,13 +400,13 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         if (
           !active ||
           connectionGeneration.current.value() !== generation ||
-          addressRef.current !== address ||
+          addressRef.current !== connectedAddress ||
           current === undefined
         )
           return;
-        if (current !== address)
+        if (current !== connectedAddress)
           invalidateAccount(
-            address,
+            connectedAddress,
             "Your Stellar wallet account changed or disconnected. Reconnect before reviewing or signing.",
           );
       } catch {
@@ -434,7 +430,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", onVisibility);
       window.clearInterval(timer);
     };
-  }, [address, walletId, invalidateAccount]);
+  }, [connectedAddress, walletId, invalidateAccount]);
 
   const cancelSignature = useCallback(() => {
     coordinator.current.abandon(
@@ -489,27 +485,24 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
           account: connectedAddress,
         },
         (signal) =>
-          connectionGeneration.current.run((connectionSignal) =>
-            walletSign(walletId, transaction, connectedAddress, opts?.approval, {
-              isReadOnly,
-              connectedAccount: connectedAddress,
-              signal: AbortSignal.any([signal, connectionSignal]),
-            }),
-          ),
           connectionGeneration.current.run(async (connectionSignal) => {
             const combined = AbortSignal.any([signal, connectionSignal]);
-            if (addressRef.current !== address)
+            if (addressRef.current !== connectedAddress)
               throw new Error("Your wallet account changed. Connect again.");
             const current = await walletCurrentAddress(walletId, combined);
             combined.throwIfAborted();
-            if (current !== undefined && current !== address) {
+            if (current !== undefined && current !== connectedAddress) {
               invalidateAccount(
-                address,
+                connectedAddress,
                 "Your Stellar wallet account changed. Reconnect before reviewing or signing.",
               );
               throw new Error("Your wallet account changed. Connect again.");
             }
-            return walletSign(walletId, transaction, address, opts?.approval, combined);
+            return walletSign(walletId, transaction, connectedAddress, opts?.approval, {
+              isReadOnly,
+              connectedAccount: connectedAddress,
+              signal: combined,
+            });
           }),
       );
       // The wallet took long enough to respond that the user disconnected or switched
@@ -522,8 +515,15 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         );
       return result;
     },
-    [address, connectedAddress, walletId, isReadOnly, viewedAddress],
-    [address, walletId, networkMismatch, invalidateAccount],
+    [
+      address,
+      connectedAddress,
+      walletId,
+      isReadOnly,
+      viewedAddress,
+      networkMismatch,
+      invalidateAccount,
+    ],
   );
 
   const isReady =
@@ -549,7 +549,6 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       error,
       readOnlyError,
       isReady,
-      error,
       networkMismatch,
       rememberedWallet,
       preferenceError,
@@ -574,18 +573,17 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       walletId,
       isConnected,
       isConnecting,
+      pendingSigningRequest,
       isReadOnly,
       mode,
       reconciliationRequired,
       error,
       readOnlyError,
       isReady,
-      error,
       networkMismatch,
       rememberedWallet,
       preferenceError,
       clearRememberedWallet,
-      pendingSigningRequest,
       connect,
       disconnect,
       inspectAddress,

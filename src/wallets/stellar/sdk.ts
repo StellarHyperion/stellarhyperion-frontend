@@ -1,6 +1,5 @@
 import { TESTNET } from "../../config/testnet";
-import { assertWalletApproval, WalletSigningError } from "./signature";
-import { assertWalletApproval, assertWalletNetwork } from "./signature";
+import { assertWalletApproval, assertWalletNetwork, WalletSigningError } from "./signature";
 import type { WalletApprovalProvenance } from "./types";
 import {
   withTimeout as requestTimeout,
@@ -359,6 +358,8 @@ export interface WalletSignOptions {
   isReadOnly?: boolean | undefined;
   connectedAccount?: string | null | undefined;
   signal?: AbortSignal | undefined;
+}
+
 /**
  * Queries the wallet's currently selected network passphrase without requesting a signature.
  *

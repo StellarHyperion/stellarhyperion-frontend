@@ -98,6 +98,7 @@
   color: var(--state-failed);
   font-size: 0.8125rem;
   overflow-wrap: anywhere;
+}
 .error:focus-visible,
 .recoveryActions button:focus-visible,
 .recoveryActions a:focus-visible,
