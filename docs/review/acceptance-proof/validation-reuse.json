@@ -1,5 +1,5 @@
 {
-  "final_source_head": "b8b1e4fa21d5f2aadde321dd9a65cfe6f8f6a96f",
+  "final_source_head": "e9c7957bf34d638ce7d4f71598c9737825794d92",
   "production_source_matches_fully_validated_208": "e2beec7d4afc086449930965b0f3616680efd88a",
   "package_lock_sha256": "853c342bc053d3754a241ac3eeac1d787d21f6877ea1d6b3f99a11ef0f964aa0",
   "integration_focused_validation": "105 acceptance/checkpoint/recovery/RPC/Stellar/dialog-target tests passed; strict smoke lint passed.",
@@ -14,6 +14,12 @@
       "test/live-transfer.test.ts"
     ],
     "behavior": "Open proof with O_NOFOLLOW/O_NONBLOCK, validate private regular owned inode and size via fstat, read same descriptor, reject invalid saved shape before live runner use. Remove stat-then-path-read in assertions.",
-    "verification": "23 focused acceptance tests pass/one opt-in live skip, strict targeted lint and full typecheck pass. Full current-source pipeline is pending."
+    "verification": "23 focused acceptance tests pass/one opt-in live skip; strict targeted lint and full current-source seven-command pipeline pass with 373 tests/four opt-in live skips. Fresh hosted CodeQL is required before merge."
+  },
+  "current_full_validation": {
+    "source_head": "e9c7957bf34d638ce7d4f71598c9737825794d92",
+    "commands": "fmt:check, house, contrast, test, lint, typecheck, build",
+    "tests": "373 deterministic tests passed; four opt-in live skips",
+    "all_commands_passed": true
   }
 }
