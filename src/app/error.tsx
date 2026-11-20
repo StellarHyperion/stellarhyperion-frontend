@@ -7,5 +7,5 @@ export default function Error(props: {
   readonly error: Error & { digest?: string };
   readonly reset: () => void;
 }): ReactElement {
-  return <RouteError {...props} flow="claim recovery" backHref="/" />;
+  return <RouteError {...props} flow="bridge view" backHref="/" />;
 }

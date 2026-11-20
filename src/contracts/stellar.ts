@@ -515,7 +515,13 @@ async function readWithRetry<T>(read: () => Promise<T>): Promise<T> {
 }
 const capabilityCache = new CapabilityCache<Awaited<ReturnType<rpc.Server["getContractMethods"]>>>(
   60_000,
+  Date.now,
+  64,
+  (methods) => methods.length > 0 && methods.every((method) => !!method.name),
 );
+export function invalidateCapabilityDiscovery(): void {
+  capabilityCache.invalidate();
+}
 function contractMethods(contract: string) {
   // Capability discovery downloads WASM. Keep it separate from fresh state and pricing reads.
   return capabilityCache.get(
@@ -524,6 +530,7 @@ function contractMethods(contract: string) {
       router: STELLAR_DEPLOYMENT.router,
       adapter: contract,
       resource: "contract-methods",
+      revision: `${STELLAR_DEPLOYMENT.commit}:${STELLAR_DEPLOYMENT.wasmHash}`,
     },
     () => readWithRetry(() => server().getContractMethods(contract)),
   );

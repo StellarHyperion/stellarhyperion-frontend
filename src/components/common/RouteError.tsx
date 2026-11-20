@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, type ReactElement } from "react";
+import { type ReactElement } from "react";
 import { Column } from "../chrome";
+import { useStellarWallet } from "../../wallets/stellar/context";
+import { useTransferCheckpoint } from "../../contracts/checkpoint";
+import { invalidateCapabilityDiscovery } from "../../contracts/stellar";
+import styles from "./RouteError.module.css";
 
 export function RouteError({
-  error,
   reset,
   flow,
   backHref,
@@ -15,23 +18,52 @@ export function RouteError({
   readonly flow: string;
   readonly backHref: "/" | "/transfers";
 }): ReactElement {
-  useEffect(() => {
-    // Keep diagnostics bounded and useful without exposing provider responses or stack traces.
-    console.error(`Hyperion ${flow} rendering error`, error.digest ?? "undisclosed");
-  }, [error, flow]);
+  const wallet = useStellarWallet();
+  const checkpoint = useTransferCheckpoint();
   return (
     <Column>
-      <p className="mono">Stellar Testnet</p>
-      <h1 className="display">This {flow} needs a refresh</h1>
-      <p role="alert">
-        Hyperion kept your wallet and saved transfer context. Refresh this view to try again.
-      </p>
-      <div>
-        <button type="button" onClick={reset}>
-          Try again
-        </button>{" "}
-        <Link href={backHref}>{backHref === "/" ? "Return to bridge" : "Open activity"}</Link>
-      </div>
+      <section className={styles.recovery} aria-label="View recovery">
+        <h1 className="display">This {flow} needs a refresh</h1>
+        <p role="alert">This view could not render. Try again to reload its read-only data.</p>
+        <dl className={styles.context}>
+          <div>
+            <dt>Network</dt>
+            <dd>Stellar Testnet</dd>
+          </div>
+          <div>
+            <dt>Connected account</dt>
+            <dd>{wallet.address ?? "No Stellar account is connected."}</dd>
+          </div>
+          <div>
+            <dt>Saved source transaction</dt>
+            <dd>
+              {checkpoint ? (
+                <code>{checkpoint.txHash}</code>
+              ) : (
+                "No transfer recovery record is available in this browser."
+              )}
+            </dd>
+          </div>
+        </dl>
+        {checkpoint && (
+          <p>
+            The saved hash does not establish broadcast or confirmation. Return to the bridge to
+            check source status before approving another transfer.
+          </p>
+        )}
+        <div className={styles.actions}>
+          <button
+            type="button"
+            onClick={() => {
+              invalidateCapabilityDiscovery();
+              reset();
+            }}
+          >
+            Try again
+          </button>{" "}
+          <Link href={backHref}>{backHref === "/" ? "Return to bridge" : "Open activity"}</Link>
+        </div>
+      </section>
     </Column>
   );
 }

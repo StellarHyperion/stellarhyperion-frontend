@@ -34,4 +34,49 @@ describe("deployment-scoped capability cache", () => {
     cache.invalidate(key("adapter-a"));
     await expect(cache.get(key("adapter-a"), () => Promise.resolve(++reads))).resolves.toBe(3);
   });
+
+  it("cannot let an expired failed request evict its newer healthy replacement", async () => {
+    let now = 0;
+    let rejectOld: ((error: Error) => void) | undefined;
+    const cache = new CapabilityCache<number>(10, () => now);
+    const old = cache.get(
+      key("adapter-a"),
+      () =>
+        new Promise((_, reject) => {
+          rejectOld = reject;
+        }),
+    );
+    const failure = expect(old).rejects.toThrow("late failure");
+    await Promise.resolve();
+    now = 11;
+    await expect(cache.get(key("adapter-a"), () => Promise.resolve(2))).resolves.toBe(2);
+    if (!rejectOld) throw new Error("Expected the old pending read");
+    rejectOld(new Error("late failure"));
+    await failure;
+    await expect(cache.get(key("adapter-a"), () => Promise.resolve(3))).resolves.toBe(2);
+  });
+
+  it("bounds retained discovery and distinguishes a deployment revision", async () => {
+    const cache = new CapabilityCache<number>(100, () => 0, 2);
+    let reads = 0;
+    const read = () => Promise.resolve(++reads);
+    await cache.get({ ...key("adapter-a"), revision: "one" }, read);
+    await cache.get({ ...key("adapter-a"), revision: "two" }, read);
+    await cache.get(key("adapter-b"), read);
+    await expect(cache.get({ ...key("adapter-a"), revision: "one" }, read)).resolves.toBe(4);
+    await expect(cache.get(key("adapter-b"), read)).resolves.toBe(3);
+  });
+
+  it("does not retain unknown discovery or synchronous failures", async () => {
+    const cache = new CapabilityCache<number | null>(100);
+    await expect(cache.get(key("adapter-a"), () => Promise.resolve(null))).resolves.toBe(null);
+    await expect(cache.get(key("adapter-a"), () => Promise.resolve(1))).resolves.toBe(1);
+    cache.invalidate();
+    await expect(
+      cache.get(key("adapter-a"), () => {
+        throw new Error("offline");
+      }),
+    ).rejects.toThrow("offline");
+    await expect(cache.get(key("adapter-a"), () => Promise.resolve(2))).resolves.toBe(2);
+  });
 });
