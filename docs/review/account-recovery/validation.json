@@ -1,0 +1,48 @@
+{
+  "head": "50bdf18fdf8486fb5cb079c71b28d1dec3e4dc76",
+  "commands": [
+    {
+      "step": "fmt:check",
+      "command": ["npm", "run", "fmt:check"],
+      "exit_code": 0,
+      "seconds": 11.86
+    },
+    {
+      "step": "house",
+      "command": ["npm", "run", "house"],
+      "exit_code": 0,
+      "seconds": 0.69
+    },
+    {
+      "step": "contrast",
+      "command": ["npm", "run", "contrast"],
+      "exit_code": 0,
+      "seconds": 0.61
+    },
+    {
+      "step": "test",
+      "command": ["npm", "run", "test", "--", "--maxWorkers=4"],
+      "exit_code": 0,
+      "seconds": 16.49
+    },
+    {
+      "step": "lint",
+      "command": ["npm", "run", "lint"],
+      "exit_code": 0,
+      "seconds": 71.74
+    },
+    {
+      "step": "typecheck",
+      "command": ["npm", "run", "typecheck"],
+      "exit_code": 0,
+      "seconds": 13.11
+    },
+    {
+      "step": "build",
+      "command": ["npm", "run", "build"],
+      "exit_code": 0,
+      "seconds": 54.39
+    }
+  ],
+  "complete": true
+}

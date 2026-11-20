@@ -1,0 +1,1438 @@
+{
+  "schemaVersion": 1,
+  "moduleIndexHash": "3175a7ae3b812abf",
+  "measurement": "uncompressed complete emitted client chunks; source map membership; native import chains; deduplicated across routes",
+  "routes": [
+    {
+      "route": "/",
+      "firstLoadBytes": 1743371,
+      "categories": [
+        {
+          "name": "wallet adapters",
+          "maxBytes": 450000,
+          "bytes": 119262,
+          "initialBytes": 0,
+          "chunks": [
+            {
+              "filename": "static/chunks/0x10w3c20r8jy.js",
+              "bytes": 3072,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@lobstrco/signer-extension-api",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@lobstrco/signer-extension-api/build/index.mjs",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/17b7t_884pf59.js",
+              "bytes": 10391,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/freighter-api",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/freighter-api/build/index.min.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/2k62w4yij2fr8.js",
+              "bytes": 86938,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@creit.tech/xbull-wallet-connect",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@creit.tech/xbull-wallet-connect/index.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/43lnfy768am21.js",
+              "bytes": 18861,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@albedo-link/intent",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@albedo-link/intent/src/index.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "transaction code",
+          "maxBytes": 1200000,
+          "bytes": 1113487,
+          "initialBytes": 1045351,
+          "chunks": [
+            {
+              "filename": "static/chunks/0py48navaz4-e.js",
+              "bytes": 9964,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/bridge/Bridge.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/bindings/sac-spec.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/1ss02rfp7vglw.js",
+              "bytes": 263883,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@hyperion/protocol",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/bridge/Bridge.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/node_modules/@hyperion/protocol/dist/amounts.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/1v1int2m1rlaa.js",
+              "bytes": 100673,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/bridge/Bridge.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/index.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/index.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/generated/constants.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/29hk8z6a7fv65.js",
+              "bytes": 33975,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/bridge/Bridge.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/bindings/utils.js",
+                      "via": "sync"
+                    }
+                  ]
+                },
+                {
+                  "package": "@hyperion/protocol",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/bridge/Bridge.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/config/testnet.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@hyperion/protocol/dist/registry/assets.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/31uaftchl6na8.js",
+              "bytes": 306211,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/bridge/Bridge.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/base/account.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/3pl-61w7140cw.js",
+              "bytes": 340609,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/bridge/Bridge.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/44y0am3f8u-9u.js",
+              "bytes": 58172,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/index.js",
+                      "via": "async"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/stellartoml/index.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "route": "/_not-found",
+      "firstLoadBytes": 1656249,
+      "categories": [
+        {
+          "name": "wallet adapters",
+          "maxBytes": 450000,
+          "bytes": 119262,
+          "initialBytes": 0,
+          "chunks": [
+            {
+              "filename": "static/chunks/0x10w3c20r8jy.js",
+              "bytes": 3072,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@lobstrco/signer-extension-api",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@lobstrco/signer-extension-api/build/index.mjs",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/17b7t_884pf59.js",
+              "bytes": 10391,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/freighter-api",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/freighter-api/build/index.min.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/2k62w4yij2fr8.js",
+              "bytes": 86938,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@creit.tech/xbull-wallet-connect",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@creit.tech/xbull-wallet-connect/index.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/43lnfy768am21.js",
+              "bytes": 18861,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@albedo-link/intent",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@albedo-link/intent/src/index.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "transaction code",
+          "maxBytes": 1200000,
+          "bytes": 1113487,
+          "initialBytes": 1045351,
+          "chunks": [
+            {
+              "filename": "static/chunks/0py48navaz4-e.js",
+              "bytes": 9964,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/error.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/common/RouteError.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/bindings/sac-spec.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/1ss02rfp7vglw.js",
+              "bytes": 263883,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@hyperion/protocol",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/providers.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/app/providers.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/lib/messages.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@hyperion/protocol/dist/amounts.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/1v1int2m1rlaa.js",
+              "bytes": 100673,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/index.js",
+                      "via": "async"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/index.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/generated/constants.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/29hk8z6a7fv65.js",
+              "bytes": 33975,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/error.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/common/RouteError.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/bindings/utils.js",
+                      "via": "sync"
+                    }
+                  ]
+                },
+                {
+                  "package": "@hyperion/protocol",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/providers.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/app/providers.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/config/testnet.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@hyperion/protocol/dist/registry/assets.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/31uaftchl6na8.js",
+              "bytes": 306211,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/checkpoint.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/base/strkey.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/3pl-61w7140cw.js",
+              "bytes": 340609,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/error.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/common/RouteError.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/44y0am3f8u-9u.js",
+              "bytes": 58172,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/index.js",
+                      "via": "async"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/stellartoml/index.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "route": "/_global-error",
+      "firstLoadBytes": null,
+      "categories": [
+        {
+          "name": "wallet adapters",
+          "maxBytes": 450000,
+          "bytes": 0,
+          "initialBytes": 0,
+          "chunks": []
+        },
+        {
+          "name": "transaction code",
+          "maxBytes": 1200000,
+          "bytes": 0,
+          "initialBytes": 0,
+          "chunks": []
+        }
+      ]
+    },
+    {
+      "route": "/transfers",
+      "firstLoadBytes": 1692534,
+      "categories": [
+        {
+          "name": "wallet adapters",
+          "maxBytes": 450000,
+          "bytes": 119262,
+          "initialBytes": 0,
+          "chunks": [
+            {
+              "filename": "static/chunks/0x10w3c20r8jy.js",
+              "bytes": 3072,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@lobstrco/signer-extension-api",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@lobstrco/signer-extension-api/build/index.mjs",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/17b7t_884pf59.js",
+              "bytes": 10391,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/freighter-api",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/freighter-api/build/index.min.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/2k62w4yij2fr8.js",
+              "bytes": 86938,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@creit.tech/xbull-wallet-connect",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@creit.tech/xbull-wallet-connect/index.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/43lnfy768am21.js",
+              "bytes": 18861,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@albedo-link/intent",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@albedo-link/intent/src/index.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "transaction code",
+          "maxBytes": 1200000,
+          "bytes": 1113487,
+          "initialBytes": 1045351,
+          "chunks": [
+            {
+              "filename": "static/chunks/0py48navaz4-e.js",
+              "bytes": 9964,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/bindings/sac-spec.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/1ss02rfp7vglw.js",
+              "bytes": 263883,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@hyperion/protocol",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@hyperion/protocol/dist/amounts.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/1v1int2m1rlaa.js",
+              "bytes": 100673,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/index.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/index.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/generated/constants.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/29hk8z6a7fv65.js",
+              "bytes": 33975,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/bindings/utils.js",
+                      "via": "sync"
+                    }
+                  ]
+                },
+                {
+                  "package": "@hyperion/protocol",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/providers.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/app/providers.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/config/testnet.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@hyperion/protocol/dist/registry/assets.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/31uaftchl6na8.js",
+              "bytes": 306211,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/base/account.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/3pl-61w7140cw.js",
+              "bytes": 340609,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/44y0am3f8u-9u.js",
+              "bytes": 58172,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/index.js",
+                      "via": "async"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/stellartoml/index.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "route": "/transfers/[txHash]",
+      "firstLoadBytes": 1680618,
+      "categories": [
+        {
+          "name": "wallet adapters",
+          "maxBytes": 450000,
+          "bytes": 119262,
+          "initialBytes": 0,
+          "chunks": [
+            {
+              "filename": "static/chunks/0x10w3c20r8jy.js",
+              "bytes": 3072,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@lobstrco/signer-extension-api",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@lobstrco/signer-extension-api/build/index.mjs",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/17b7t_884pf59.js",
+              "bytes": 10391,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/freighter-api",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/freighter-api/build/index.min.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/2k62w4yij2fr8.js",
+              "bytes": 86938,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@creit.tech/xbull-wallet-connect",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@creit.tech/xbull-wallet-connect/index.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/43lnfy768am21.js",
+              "bytes": 18861,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@albedo-link/intent",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@albedo-link/intent/src/index.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "transaction code",
+          "maxBytes": 1200000,
+          "bytes": 1113487,
+          "initialBytes": 1045351,
+          "chunks": [
+            {
+              "filename": "static/chunks/0py48navaz4-e.js",
+              "bytes": 9964,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/[txHash]/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/bindings/sac-spec.js",
+                      "via": "async"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/1ss02rfp7vglw.js",
+              "bytes": 263883,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@hyperion/protocol",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/[txHash]/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@hyperion/protocol/dist/amounts.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/1v1int2m1rlaa.js",
+              "bytes": 100673,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/[txHash]/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/index.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/index.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/xdr/generated/constants.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/29hk8z6a7fv65.js",
+              "bytes": 33975,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/[txHash]/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/bindings/utils.js",
+                      "via": "sync"
+                    }
+                  ]
+                },
+                {
+                  "package": "@hyperion/protocol",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/[txHash]/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/config/testnet.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@hyperion/protocol/dist/registry/assets.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/31uaftchl6na8.js",
+              "bytes": 306211,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/[txHash]/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/base/account.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/3pl-61w7140cw.js",
+              "bytes": 340609,
+              "initial": true,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/app/transfers/[txHash]/page.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/contracts/stellar.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/contract/client.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "filename": "static/chunks/44y0am3f8u-9u.js",
+              "bytes": 58172,
+              "initial": false,
+              "imports": [
+                {
+                  "package": "@stellar/stellar-sdk",
+                  "chain": [
+                    {
+                      "path": "[project]/src/components/nav/Header.tsx",
+                      "via": "client-reference"
+                    },
+                    {
+                      "path": "[project]/src/components/wallet/StellarWalletButton.tsx",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/src/wallets/stellar/sdk.ts",
+                      "via": "sync"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/index.js",
+                      "via": "async"
+                    },
+                    {
+                      "path": "[project]/node_modules/@stellar/stellar-sdk/lib/esm/stellartoml/index.js",
+                      "via": "sync"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "totals": [
+    {
+      "name": "wallet adapters",
+      "bytes": 119262,
+      "maxBytes": 450000,
+      "chunks": 4
+    },
+    {
+      "name": "transaction code",
+      "bytes": 1113487,
+      "maxBytes": 1200000,
+      "chunks": 7
+    }
+  ],
+  "errors": []
+}
