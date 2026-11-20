@@ -7,10 +7,13 @@ export function Dialog({
   title,
   onClose,
   children,
+  footer,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  /** Persistent actions. They stay outside the scroll region so they remain reachable. */
+  footer?: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -56,8 +59,9 @@ export function Dialog({
             <X size={19} />
           </button>
         </div>
-        {children}
+        <div className={styles.body}>{children}</div>
       </div>
+      {footer && <div className={styles.footer}>{footer}</div>}
     </dialog>
   );
 }

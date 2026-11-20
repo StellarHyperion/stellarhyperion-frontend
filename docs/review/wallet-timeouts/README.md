@@ -7,3 +7,7 @@ An eight-second availability timeout prevented a later extension response from s
 The six connection-generation browser cases also passed against this source, including account changes, disconnect and unmount. Pending checkpoint storage remained intact and no browser runtime errors occurred. Screenshots show the account-timeout retry affordance at desktop and mobile widths and the signing uncertainty warning.
 
 Deterministic SDK tests separately verify timer cleanup, preflight cancellation and xBull connection disposal. Live signing suites remain opt-in.
+
+The final Node 22 pipeline passed 283 deterministic tests, with two live suites skipped, strict lint/types and production build. Chromium 158 also refreshed the final production picker, Escape dismissal, restored controls and retained signed-hash reload at desktop/mobile widths; the current captures were inspected.
+
+The subsequent cancellation error normalization passed 116 focused SDK/signature/submission regressions. The exact final timeout helper hash also matches the independently verified Chromium 158 and Firefox 159 wallet compatibility runs. This reuse covers the timeout helper only, as recorded in timeout-source-reuse.json; the original four provider/timer cases above remain separate evidence.

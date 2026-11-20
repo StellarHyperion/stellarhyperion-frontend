@@ -322,9 +322,17 @@ export function DestinationPicker({
     </Dialog>
   );
 }
-export function ReviewDialog({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+export function ReviewDialog({
+  children,
+  footer,
+  onClose,
+}: {
+  children: ReactNode;
+  footer?: ReactNode;
+  onClose: () => void;
+}) {
   return (
-    <Dialog title="Review your transfer" onClose={onClose}>
+    <Dialog title="Review your transfer" footer={footer} onClose={onClose}>
       {children}
     </Dialog>
   );
