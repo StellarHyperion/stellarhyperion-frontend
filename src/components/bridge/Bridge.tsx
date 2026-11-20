@@ -393,12 +393,11 @@ function QuoteDiffDetails({ diff }: { diff: QuoteDiff }) {
     <>
       <h3>
         {diff.materialWorsening
-          ? "Refreshed quote is worse: review required"
+          ? "Refreshed quote changed: review required"
           : "Refreshed quote changed"}
       </h3>
       <p className={styles.reviewNote}>
-        Exact base-unit differences decide this comparison; formatted values are shown for context
-        only and never round the decision.
+        Compare fees, the receive minimum and provider budgets with the quote you reviewed.
       </p>
       <dl className={styles.summary} aria-label="Quote field differences">
         {diff.fields.map((field) => (
@@ -426,7 +425,8 @@ function QuoteDiffDetails({ diff }: { diff: QuoteDiff }) {
               {field.delta !== null && (
                 <span className={styles.diffDelta}>
                   {field.delta > 0n ? "+" : ""}
-                  {field.delta.toString()} base units
+                  {field.delta.toString()}{" "}
+                  {field.delta === 1n || field.delta === -1n ? "base unit" : "base units"}
                 </span>
               )}
             </dd>
@@ -434,8 +434,7 @@ function QuoteDiffDetails({ diff }: { diff: QuoteDiff }) {
         ))}
       </dl>
       <p className={styles.reviewNote}>
-        Your reviewed minimum and provider budget stay fixed in the signed transaction. Nothing is
-        applied silently.
+        Your reviewed minimum and provider budget stay fixed in the signed transaction.
       </p>
     </>
   );
@@ -628,6 +627,7 @@ function PendingTransferCard({
       setReview(null);
       setReviewedIntent(null);
       setCardSimulation(null);
+      setCardDiff(null);
       setChecked({ ...result, txHash: checkpoint.txHash, owner });
       if (result.status === "unknown") {
         setError(result.message);
@@ -745,7 +745,9 @@ function PendingTransferCard({
         },
         cardSimulation,
         controller.signal,
-        (diff) => { if (active()) setCardDiff(diff); },
+        (diff) => {
+          if (active()) setCardDiff(diff);
+        },
       );
       if (active()) {
         setChecked(
@@ -938,7 +940,12 @@ function PendingTransferCard({
                 type="button"
                 className={styles.primary}
                 disabled={
-                  checking || !sameAccount || cardSimulating || !!cardSimError || !cardSimulation
+                  checking ||
+                  !sameAccount ||
+                  cardSimulating ||
+                  !!cardSimError ||
+                  !cardSimulation ||
+                  !!cardDiff?.materialWorsening
                 }
                 onClick={() => {
                   void continueBridge();
@@ -1552,7 +1559,7 @@ export function Bridge() {
         reviewed.simulation ?? undefined,
         controller.signal,
         (diff) => {
-          setQuoteDiff(diff);
+          if (generation === waitGeneration.current) setQuoteDiff(diff);
         },
       );
       if (generation !== waitGeneration.current) return;
@@ -2008,7 +2015,7 @@ export function Bridge() {
                 invalidateQuote();
               }}
             >
-              Review refreshed quote
+              Refresh quote for review
             </button>
           </section>
         )}
@@ -2318,6 +2325,11 @@ export function Bridge() {
             </p>
           )}
           <QuoteDetails quote={reviewed.quote.bridge} simulation={reviewed.simulation} />
+          {quoteDiff && (
+            <section className={styles.quoteDiff} aria-label="Refreshed quote comparison">
+              <QuoteDiffDetails diff={quoteDiff} />
+            </section>
+          )}
           {reviewed.quote.conversion && (
             <p className={styles.reviewNote}>
               Two signatures: convert to USDC, then review the bridge simulation and its fees. Price

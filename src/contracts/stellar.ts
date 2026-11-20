@@ -1997,7 +1997,7 @@ export class QuoteChangedError extends Error {
   readonly diff: QuoteDiff;
   constructor(diff: QuoteDiff) {
     super(
-      "The refreshed quote is worse than the reviewed quote. Review the exact differences before signing.",
+      "The refreshed quote differs from the reviewed quote. Review the exact differences before signing.",
     );
     this.name = "QuoteChangedError";
     this.diff = diff;
@@ -2047,8 +2047,9 @@ export async function submitBridgeOut(
   quoteBreakdown(refreshed);
   const diff = compareQuotes(reviewedQuote, refreshed);
   if (diff.changed) {
+    const requiresReview = diff.materialWorsening;
     onQuoteDiff?.(diff);
-    if (diff.materialWorsening) throw new QuoteChangedError(diff);
+    if (requiresReview) throw new QuoteChangedError(diff);
   }
   const balance = await readBalance(sender);
   if (balance < refreshed.grossAmount)

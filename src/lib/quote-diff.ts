@@ -78,6 +78,10 @@ export function compareQuotes(
   options: { displayDecimals?: number } = {},
 ): QuoteDiff {
   const cap = options.displayDecimals;
+  // quoteTransfer already deducts Circle's full forwarding budget at destination precision.
+  // This is the actual receive minimum; subtracting the budget again would misstate it.
+  const reviewedMinimum = reviewed.destinationAmount;
+  const refreshedMinimum = refreshed.destinationAmount;
   const minimumDecimals = destinationDecimals(refreshed.route);
   const minimumUnit = refreshed.route === 0 ? "USDC" : "USDC (ITS)";
   const providerUnit = refreshed.route === 0 ? "USDC" : "XLM";
@@ -147,33 +151,77 @@ export function compareQuotes(
   configuration("grossAmount", "Gross amount", reviewed.grossAmount, refreshed.grossAmount);
 
   amount("fee", "Hyperion fee", reviewed.fee, refreshed.fee, 7, "USDC", "higher");
-  amount(
-    "minimum",
-    "Minimum received",
-    reviewed.destinationAmount,
-    refreshed.destinationAmount,
-    minimumDecimals,
-    minimumUnit,
-    "lower",
-  );
-  amount(
-    "providerBudget",
-    "Provider budget",
-    reviewed.relayGas,
-    refreshed.relayGas,
-    7,
-    providerUnit,
-    "higher",
-  );
-  amount(
-    "estimatedProviderBudget",
-    "Estimated provider budget",
-    reviewed.estimatedRelayGas ?? reviewed.relayGas,
-    refreshed.estimatedRelayGas ?? refreshed.relayGas,
-    7,
-    providerUnit,
-    "higher",
-  );
+  if (reviewed.route !== refreshed.route) {
+    fields.push({
+      key: "minimum",
+      label: "Minimum received",
+      reviewed: reviewedMinimum,
+      refreshed: refreshedMinimum,
+      delta: null,
+      unit: null,
+      direction: "changed",
+      material: true,
+      reviewedDisplay: `${formatUnitsDisplay(reviewedMinimum, destinationDecimals(reviewed.route), cap)} USDC${reviewed.route === 1 ? " (ITS)" : ""}`,
+      refreshedDisplay: `${formatUnitsDisplay(refreshedMinimum, minimumDecimals, cap)} ${minimumUnit}`,
+    });
+  } else
+    amount(
+      "minimum",
+      "Minimum received",
+      reviewedMinimum,
+      refreshedMinimum,
+      minimumDecimals,
+      minimumUnit,
+      "lower",
+    );
+  if (reviewed.route !== refreshed.route) {
+    fields.push({
+      key: "providerBudget",
+      label: "Provider budget",
+      reviewed: reviewed.relayGas,
+      refreshed: refreshed.relayGas,
+      delta: null,
+      unit: null,
+      direction: "changed",
+      material: true,
+      reviewedDisplay: `${formatUnitsDisplay(reviewed.relayGas, 7, cap)} ${reviewed.route === 0 ? "USDC" : "XLM"}`,
+      refreshedDisplay: `${formatUnitsDisplay(refreshed.relayGas, 7, cap)} ${providerUnit}`,
+    });
+  } else
+    amount(
+      "providerBudget",
+      "Provider budget",
+      reviewed.relayGas,
+      refreshed.relayGas,
+      7,
+      providerUnit,
+      "higher",
+    );
+  if (reviewed.route !== refreshed.route) {
+    const previous = reviewed.estimatedRelayGas ?? reviewed.relayGas;
+    const next = refreshed.estimatedRelayGas ?? refreshed.relayGas;
+    fields.push({
+      key: "estimatedProviderBudget",
+      label: "Estimated provider budget",
+      reviewed: previous,
+      refreshed: next,
+      delta: null,
+      unit: null,
+      direction: "changed",
+      material: true,
+      reviewedDisplay: `${formatUnitsDisplay(previous, 7, cap)} ${reviewed.route === 0 ? "USDC" : "XLM"}`,
+      refreshedDisplay: `${formatUnitsDisplay(next, 7, cap)} ${providerUnit}`,
+    });
+  } else
+    amount(
+      "estimatedProviderBudget",
+      "Estimated provider budget",
+      reviewed.estimatedRelayGas ?? reviewed.relayGas,
+      refreshed.estimatedRelayGas ?? refreshed.relayGas,
+      7,
+      providerUnit,
+      "higher",
+    );
 
   // A new ledger is expected on refresh and is informational only.
   configuration("ledger", "Quote ledger", reviewed.ledger, refreshed.ledger, false);
@@ -181,7 +229,9 @@ export function compareQuotes(
   return {
     changed: fields.length > 0,
     materialWorsening: fields.some((field) => field.material),
-    improved: fields.some((field) => field.direction === "better"),
+    improved:
+      !fields.some((field) => field.material) &&
+      fields.some((field) => field.direction === "better"),
     fields,
   };
 }

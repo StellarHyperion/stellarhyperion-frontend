@@ -916,6 +916,14 @@
   font-size: 0.875rem;
   font-weight: 500;
 }
+.quoteDiff .summary > div,
+.quoteDiff .summary dd {
+  font-size: 0.875rem;
+}
+.quoteDiff .summary dt {
+  flex-shrink: 0;
+  max-width: 45%;
+}
 .diffWorse dt,
 .diffWorse dd {
   color: var(--state-failed);
@@ -927,14 +935,14 @@
 .diffKind {
   display: block;
   font-family: var(--face-mono);
-  font-size: 0.625rem;
-  letter-spacing: 0.08em;
+  font-size: 0.875rem;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
 }
 .diffDelta {
   display: block;
   font-family: var(--face-mono);
-  font-size: 0.625rem;
+  font-size: 0.875rem;
   color: var(--text-secondary);
 }
 
