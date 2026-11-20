@@ -28,15 +28,17 @@ describe("Reduced motion transaction progress", () => {
 
   it("advances one step at a time and leaves the destination waiting", () => {
     for (const step of ["conversion", "bridge"] as const) {
-      const seen = PHASES.map((phase) => transactionProgress(step, phase));
-      seen.forEach((progress, index) => {
-        const phase = PHASES[index]!;
+      const seen = PHASES.map((phase) => ({
+        phase,
+        progress: transactionProgress(step, phase),
+      }));
+      seen.forEach(({ phase, progress }, index) => {
         expect(progress.filter((item) => item.state === "active")).toHaveLength(
           phase === "confirmed" ? 0 : 1,
         );
         expect(progress[progress.length - 1]?.state).toBe("waiting");
         if (index > 0) {
-          const previous = seen[index - 1]!;
+          const previous = seen[index - 1]?.progress ?? [];
           expect(progress.filter((item) => item.state === "done").length).toBe(
             previous.filter((item) => item.state === "done").length + 1,
           );

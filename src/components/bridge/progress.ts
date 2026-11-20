@@ -94,7 +94,7 @@ export function transactionProgressSummary(
       return `${prefix}waiting for Stellar source confirmation. ${DESTINATION_DELIVERY_NOTICE}`;
     case "confirmed":
       return step === "conversion"
-        ? `${prefix}conversion confirmed on Stellar. The bridge is a separate transaction and still requires your wallet approval.`
+        ? `${prefix}conversion confirmed on Stellar. The bridge is a separate transaction and still requires your wallet approval. ${DESTINATION_DELIVERY_NOTICE}`
         : `${prefix}Stellar source confirmed. ${DESTINATION_DELIVERY_NOTICE}`;
     default:
       return `${prefix}checking the current quote.`;
