@@ -1369,8 +1369,13 @@ export function Bridge() {
     }
   }
   const fetching =
-    valid && !locked && !laneError && (!lane || (lane.available && quoted?.key !== quoteKey));
+    runtimeReady &&
+    valid &&
+    !locked &&
+    !laneError &&
+    (!lane || (lane.available && quoted?.key !== quoteKey));
   const simulating =
+    runtimeReady &&
     valid &&
     !!wallet.address &&
     !!quote &&
@@ -1502,7 +1507,7 @@ export function Bridge() {
   useEffect(() => {
     const sender = wallet.address;
     // Conversion funds the later bridge. Simulate that bridge only after conversion confirms.
-    if (!valid || !quote || quote.conversion || !sender || locked) return;
+    if (!runtimeReady || !valid || !quote || quote.conversion || !sender || locked) return;
     let active = true;
     const timer = setTimeout(() => {
       void simulateBridgeOut(sender, quote.bridge, recipient)
@@ -1517,7 +1522,7 @@ export function Bridge() {
       active = false;
       clearTimeout(timer);
     };
-  }, [valid, quote, wallet.address, locked, recipient, simKey]);
+  }, [runtimeReady, valid, quote, wallet.address, locked, recipient, simKey]);
 
   const submit = async () => {
     if (!runtimeReady) {
