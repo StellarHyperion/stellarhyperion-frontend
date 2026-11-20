@@ -562,6 +562,9 @@
   padding-top: 12px;
   border-top: 1px solid var(--edge-color);
 }
+.summary > div:last-child dt {
+  flex-shrink: 0;
+}
 .summary > div:last-child dd {
   color: var(--text-primary);
   font-weight: 500;
