@@ -11,6 +11,7 @@ import {
 import { TransferList } from "../../components/transfers";
 import { errorMessage } from "../../contracts";
 import { ActivityRequestGuard } from "../../lib/activity-request";
+import { useVisibilityPoll } from "../../lib/visibility-poll";
 import { useStellarWallet } from "../../wallets";
 import styles from "./page.module.css";
 
@@ -87,25 +88,34 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   const metrics = current?.metrics ?? null;
   const metricsError = current?.metricsError ?? null;
   const error = current?.error ?? null;
-  const pending = loading || current === null;
   const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
     const guard = requestGuard.current;
-    guard.setIdentity(address ?? null);
+    guard.setIdentity(scope);
     guard.invalidate();
-    const load = async () => {
+    return () => {
+      guard.invalidate();
+    };
+  }, [scope]);
+  const refreshing = useVisibilityPoll(
+    async (signal) => {
+      const guard = requestGuard.current;
       const token = guard.begin();
+      setLoading(true);
       try {
         const [historyResult, metricsResult] = await Promise.allSettled([
-          fetchTransfers({
-            ...(address ? { sender: address } : {}),
-            search,
-            limit: "20",
-            offset: String(offset),
-          }),
-          fetchIndexerMetrics(),
+          fetchTransfers(
+            {
+              ...(address ? { sender: address } : {}),
+              search,
+              limit: "20",
+              offset: String(offset),
+            },
+            signal,
+          ),
+          fetchIndexerMetrics(signal),
         ]);
-        if (!guard.isCurrent(token)) return;
+        if (signal.aborted || !guard.isCurrent(token)) return;
         setSnapshot({
           scope,
           response: historyResult.status === "fulfilled" ? historyResult.value : null,
@@ -115,20 +125,16 @@ function TransfersPageContent({ address }: { address?: string | null }) {
             metricsResult.status === "rejected" ? errorMessage(metricsResult.reason) : null,
         });
       } finally {
-        if (guard.isCurrent(token)) setLoading(false);
+        if (!signal.aborted && guard.isCurrent(token)) setLoading(false);
       }
-    };
-    const delay = setTimeout(() => {
-      setLoading(true);
-      void load();
-    }, 300);
-    const timer = setInterval(() => void load(), 10_000);
-    return () => {
-      guard.invalidate();
-      clearTimeout(delay);
-      clearInterval(timer);
-    };
-  }, [address, offset, search, scope]);
+    },
+    10_000,
+    60_000,
+    scope,
+    300,
+  );
+  const pending = loading || refreshing || current === null;
+
   return (
     <Column>
       <h1 className="display">Transfer history</h1>
@@ -154,6 +160,9 @@ function TransfersPageContent({ address }: { address?: string | null }) {
           setOffset(0);
         }}
       />
+      {refreshing && transfers.length > 0 && (
+        <p role="status">Refreshing indexed history before changing pages...</p>
+      )}
       {error && <p role="alert">{error}</p>}
       {pending && transfers.length === 0 ? (
         <p role="status">Loading indexed transfers...</p>
