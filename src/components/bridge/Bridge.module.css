@@ -568,12 +568,55 @@
   overflow-wrap: anywhere;
 }
 .progress {
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: 10px;
   color: var(--text-secondary);
   font-size: 0.8125rem;
   line-height: 1.6;
+}
+.progressLine {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.progressSteps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.progressSteps li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--edge-color);
+  font-size: 0.75rem;
+}
+.progressSteps li[data-state="active"],
+.progressSteps li[data-state="done"] {
+  color: var(--text-primary);
+}
+.progressDetail {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+.progressState {
+  flex-shrink: 0;
+  font-family: var(--face-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.progressSteps li[data-state="done"] .progressState {
+  color: var(--state-settled);
+}
+.progressSteps li[data-state="active"] .progressState {
+  color: var(--leg-origin);
 }
 .spinner {
   flex-shrink: 0;

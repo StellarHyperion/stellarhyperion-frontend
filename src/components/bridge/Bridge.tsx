@@ -94,6 +94,7 @@ import {
   SourceAssetPicker,
 } from "./AssetPicker";
 import styles from "./Bridge.module.css";
+import { transactionProgress, transactionProgressSummary } from "./progress";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
@@ -1455,7 +1456,10 @@ export function Bridge() {
           </div>
           <div className={styles.amountRow}>
             {fetching ? (
-              <div className={styles.skeleton} aria-hidden="true" />
+              <>
+                <span className={styles.skeleton} data-motion="decorative" aria-hidden="true" />
+                <span className="visuallyHidden">Receive amount pending route quote.</span>
+              </>
             ) : (
               <output aria-label="Minimum received" className={styles.receiveAmount}>
                 {quote ? (
@@ -1601,14 +1605,14 @@ export function Bridge() {
         </div>
         {fetching ? (
           <div className={styles.fetching} role="status">
-            <span className={styles.fetchOrbit} aria-hidden="true">
+            <span className={styles.fetchOrbit} data-motion="decorative" aria-hidden="true">
               <LoaderCircle size={22} />
             </span>
             <div>
               <strong>Finding your route</strong>
               <span>Checking liquidity, bridge fees and the receive amount</span>
             </div>
-            <span className={styles.fetchDots} aria-hidden="true">
+            <span className={styles.fetchDots} data-motion="decorative" aria-hidden="true">
               <i />
               <i />
               <i />
@@ -1710,18 +1714,34 @@ export function Bridge() {
           </p>
         )}
         {busy && (
-          <p role="status" className={styles.progress}>
-            <LoaderCircle className={styles.spinner} size={16} aria-hidden="true" />
-            {step === "conversion" ? "Converting to USDC" : "Preparing your bridge"}:{" "}
-            {phase === "signing"
-              ? "confirm in your wallet"
-              : phase === "submitting"
-                ? "submitting the signed transaction"
-                : phase === "pending"
-                  ? "waiting for Stellar confirmation"
-                  : "checking the current quote"}
-            .
-          </p>
+          <div className={styles.progress}>
+            <p role="status" className={styles.progressLine}>
+              <LoaderCircle
+                className={styles.spinner}
+                size={16}
+                aria-hidden="true"
+                data-motion="decorative"
+              />
+              {transactionProgressSummary(step, phase)}
+            </p>
+            <ol className={styles.progressSteps} aria-label="Transaction progress">
+              {transactionProgress(step, phase).map((item) => (
+                <li key={item.id} data-state={item.state}>
+                  <span>
+                    {item.label}
+                    <span className={styles.progressDetail}>{item.detail}</span>
+                  </span>
+                  <span className={styles.progressState}>
+                    {item.state === "done"
+                      ? "Complete"
+                      : item.state === "active"
+                        ? "In progress"
+                        : "Waiting"}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </div>
         )}
         {busy && phase === "pending" && (
           <button

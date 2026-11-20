@@ -560,6 +560,14 @@ a:hover {
     scroll-behavior: auto;
   }
 
+  /* Decorative motion is removed outright rather than shortened. The static status text these
+   * indicators sit beside carries the operation and outcome information on its own. */
+  [data-motion="decorative"],
+  [data-motion="decorative"] * {
+    animation: none !important;
+    transition: none !important;
+  }
+
   *,
   *::before,
   *::after {
