@@ -139,9 +139,9 @@ describe("Immutable reviewed transfer intent", () => {
   const intent = createReviewedIntentSnapshot({
     account: key.publicKey(),
     asset: {
-      id: "USD:GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-      code: "USD",
-      issuer: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      id: USDC.id,
+      code: USDC.code,
+      issuer: USDC.issuer,
     },
     destination: "sepolia",
     route: 0,
@@ -261,6 +261,19 @@ describe("Immutable reviewed transfer intent", () => {
           undefined,
           { expectedAccount: intent.account, reviewedIntent: intent },
         ),
+      ).rejects.toThrow("reviewed transfer intent changed");
+    }
+    for (const change of [
+      { asset: XLM },
+      { sourceAmount: intent.sourceAmount - 1n },
+      { sourceMaximum: intent.sourceAmount },
+      { network: "other-network" },
+    ]) {
+      await expect(
+        submitBridgeOut(intent.account, quote, intent.recipient, wallet, undefined, undefined, {
+          expectedAccount: intent.account,
+          reviewedIntent: { ...intent, ...change },
+        }),
       ).rejects.toThrow("reviewed transfer intent changed");
     }
     expect(wallet).not.toHaveBeenCalled();

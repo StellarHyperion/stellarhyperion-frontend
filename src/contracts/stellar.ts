@@ -1573,6 +1573,11 @@ export function reviewedBridgeMatches(
     intent.router === TESTNET.router &&
     intent.token === TESTNET.token &&
     intent.stage === "bridge" &&
+    intent.asset.id === `${TESTNET.usdcCode}:${TESTNET.usdcIssuer}` &&
+    intent.asset.code === TESTNET.usdcCode &&
+    intent.asset.issuer === TESTNET.usdcIssuer &&
+    intent.sourceAmount === current.amount &&
+    intent.sourceMaximum === null &&
     intent.account === current.account &&
     intent.recipient === current.recipient &&
     intent.destination === current.destination &&
