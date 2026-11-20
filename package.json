@@ -14,7 +14,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --turbopack --analyze && npm run bundle:check",
     "start": "next start",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -22,6 +22,7 @@
     "fmt": "prettier --write \"**/*.{ts,tsx,mjs,css,json,md}\"",
     "fmt:check": "prettier --check \"**/*.{ts,tsx,mjs,css,json,md}\"",
     "contrast": "node scripts/contrast.mjs",
+    "bundle:check": "node scripts/bundle-budget.mjs",
     "house": "node scripts/house-rules.mjs",
     "icons": "python3 scripts/render-icons.py",
     "test": "vitest run",

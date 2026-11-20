@@ -1,9 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as getRelayFee } from "../src/app/api/relay-fee/route";
 import { GET as getCctpFee } from "../src/app/api/cctp-fee/route";
-import { createFeeRequestGuard, feeRequestGuard } from "../src/lib/fee-request-guard";
+import {
+  createFeeRequestGuard,
+  feeRequestGuard,
+  providerFeeCooldown,
+} from "../src/lib/fee-request-guard";
+import { createFeeCooldown } from "../src/lib/relay-budget";
 
 beforeEach(() => {
+  const cooldown = createFeeCooldown();
+  vi.spyOn(providerFeeCooldown, "remaining").mockImplementation((provider) =>
+    cooldown.remaining(provider),
+  );
+  vi.spyOn(providerFeeCooldown, "block").mockImplementation((provider, header) =>
+    cooldown.block(provider, header),
+  );
   const guard = createFeeRequestGuard();
   vi.spyOn(feeRequestGuard, "acquire").mockImplementation(() => guard.acquire());
 });
@@ -26,7 +38,6 @@ describe("fee route contracts", () => {
 
   it.each([
     ["timeout", vi.fn().mockRejectedValue(new DOMException("timed out", "TimeoutError"))],
-    ["rate limit", vi.fn().mockResolvedValue(new Response("busy", { status: 429 }))],
     ["malformed", vi.fn().mockResolvedValue(new Response("not-an-integer"))],
   ])("keeps %s responses non-executable", async (_name, fetcher) => {
     vi.stubGlobal("fetch", fetcher);
@@ -68,7 +79,6 @@ describe("fee route contracts", () => {
     async (destination) => {
       for (const response of [
         new DOMException("timeout", "TimeoutError"),
-        new Response("busy", { status: 429 }),
         new Response("not-json"),
         new Response(
           JSON.stringify([{ finalityThreshold: 2000, minimumFee: 0, forwardFee: { med: 0 } }]),
@@ -90,6 +100,46 @@ describe("fee route contracts", () => {
         });
         expect(result.headers.get("Cache-Control")).toBe("no-store");
       }
+    },
+  );
+
+  it.each(["relay", "cctp"] as const)(
+    "respects upstream %s cooldown at the actual handler boundary",
+    async (provider) => {
+      let time = Date.UTC(2026, 10, 20);
+      vi.spyOn(Date, "now").mockImplementation(() => time);
+      const cooldown = createFeeCooldown(() => time);
+      vi.mocked(providerFeeCooldown.remaining).mockImplementation((key) => cooldown.remaining(key));
+      vi.mocked(providerFeeCooldown.block).mockImplementation((key, header) =>
+        cooldown.block(key, header),
+      );
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("busy", { status: 429, headers: { "Retry-After": "15" } }),
+        );
+      vi.stubGlobal("fetch", fetcher);
+      const get = provider === "relay" ? getRelayFee : getCctpFee;
+      const url =
+        provider === "relay"
+          ? "http://localhost/api/relay-fee"
+          : "http://localhost/api/cctp-fee?destination=sepolia";
+      const first = await get(new Request(url));
+      expect(first.status).toBe(429);
+      expect(first.headers.get("Retry-After")).toBe("15");
+      expect(await first.json()).toMatchObject({ code: "RATE_LIMITED", retryAfter: 15 });
+      for (let i = 0; i < 4; i++) expect((await get(new Request(url))).status).toBe(429);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      time += 15_000;
+      fetcher.mockResolvedValueOnce(
+        provider === "relay"
+          ? new Response('"1000001"')
+          : new Response(
+              JSON.stringify([{ finalityThreshold: 2000, minimumFee: 0, forwardFee: { med: 12 } }]),
+            ),
+      );
+      expect((await get(new Request(url))).status).toBe(200);
+      expect(fetcher).toHaveBeenCalledTimes(2);
     },
   );
 
