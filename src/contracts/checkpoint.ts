@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
+import { getClaimSettlementCheckpoint } from "./claim-checkpoint";
 import { TESTNET, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
 import { stellarAsset, type SourceAsset } from "./assets";
 
@@ -284,6 +285,18 @@ export function useTransferCheckpoint(): TransferCheckpoint | null {
   return useMemo(() => parseCheckpoint(raw), [raw]);
 }
 
+export {
+  parseClaimSettlementCheckpoint,
+  getClaimSettlementCheckpoint,
+  saveClaimSettlementCheckpoint,
+  useClaimSettlementCheckpoint,
+  acquireClaimSettlementLease,
+  claimSettlementIdentities,
+  claimSettlementCheckpointIdentity,
+  type ClaimSettlementCheckpoint,
+  type ClaimSettlementIdentity,
+} from "./claim-checkpoint";
+
 export interface OperationOwnership {
   id: string;
   account: string;
@@ -332,6 +345,10 @@ export async function acquireOperationOwnership(
             `Another tab owns this transfer (checkpoint ${current?.id ?? "unavailable"}). Finish or recover it before trying again.`,
           );
         }
+        if (getClaimSettlementCheckpoint())
+          throw new Error(
+            "A signed claim settlement is unresolved. Check it before another transfer.",
+          );
         const checkpoint = getTransferCheckpoint();
         if (checkpoint) {
           throw new Error(

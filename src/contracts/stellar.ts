@@ -35,6 +35,11 @@ import {
   type SupportedLane,
 } from "../config/testnet";
 import type { TransferCheckpoint } from "./checkpoint";
+import {
+  claimSettlementIdentities,
+  parseClaimSettlementCheckpoint,
+  type ClaimSettlementCheckpoint,
+} from "./claim-checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 import { validateProviderFee } from "../lib/fee-schema";
@@ -1432,6 +1437,8 @@ export interface SubmissionReconciliation {
     signedTx: Transaction | FeeBumpTransaction,
   ) => void | Promise<void>;
   validate?: (hash: string, signedTx: Transaction | FeeBumpTransaction) => void | Promise<void>;
+  /** Runs after signing but before broadcast. Throw to block a broadcast that cannot be checkpointed. */
+  onSigned?: (hash: string, signedTx: Transaction | FeeBumpTransaction) => void | Promise<void>;
 }
 
 export function validateReviewMatch(original: ReviewSnapshot, current: ReviewSnapshot): boolean {
@@ -1763,6 +1770,7 @@ async function signAndSubmit(
       if (reconcile.validate) {
         await reconcile.validate(hash, signedTransaction);
       }
+      if (reconcile.onSigned) await reconcile.onSigned(hash, signedTransaction);
     }
     progress?.("submitting", hash);
   });
@@ -1904,6 +1912,98 @@ export function settleClaimsOperation(sender: string, ids: readonly bigint[]) {
   );
 }
 
+/** Read-only reconciliation requires the saved settlement call and every original claim identity. */
+export async function resolveClaimSettlementCheckpoint(
+  checkpoint: ClaimSettlementCheckpoint,
+  signal?: AbortSignal,
+): Promise<CheckpointRecoveryResult> {
+  const unknown = (message: string) =>
+    unknownRecovery(message + " The saved settlement is unchanged.");
+  if (!parseClaimSettlementCheckpoint(JSON.stringify(checkpoint)))
+    return unknown("The saved claim identity is invalid.");
+  try {
+    const evidence = await collectTransactionEvidence(checkpoint.txHash, signal);
+    const final = evidence.results.filter((result) => result.transaction.status !== "pending");
+    if (evidence.invalid || !evidence.agreed || final.length === 0)
+      return unknown("Settlement execution has not been independently established.");
+    const identities = claimSettlementIdentities(checkpoint);
+    const firstIdentity = identities[0];
+    if (!firstIdentity) return unknown("No claim identity is available.");
+    const operation =
+      identities.length === 1
+        ? new Contract(checkpoint.router).call(
+            "settle_claim",
+            new Address(checkpoint.account).toScVal(),
+            nativeToScVal(BigInt(firstIdentity.claimId), { type: "u64" }),
+          )
+        : settleClaimsOperation(
+            checkpoint.account,
+            identities.map((claim) => BigInt(claim.claimId)),
+          );
+    for (const item of final) {
+      if (item.response.status === rpc.Api.GetTransactionStatus.NOT_FOUND)
+        return unknown("Settlement history is incomplete.");
+      const transaction = TransactionBuilder.fromXdr(
+        item.response.envelopeXdr.toXdr("base64"),
+        TESTNET.networkPassphrase,
+      );
+      if (
+        "innerTransaction" in transaction ||
+        transaction.source !== checkpoint.account ||
+        transaction.signatures.length === 0 ||
+        !validateEnvelopeOperation(operation, transaction)
+      )
+        return unknown("The source transaction does not match this settlement.");
+      if (item.transaction.status === "confirmed") {
+        const result = item.response.resultXdr.result;
+        if (result.type !== "txSuccess" || result.results.length !== 1)
+          return unknown("Settlement execution results are incomplete.");
+        const executed = result.results[0];
+        if (
+          executed?.type !== "opInner" ||
+          executed.tr.type !== "invokeHostFunction" ||
+          executed.tr.invokeHostFunctionResult.type !== "invokeHostFunctionSuccess"
+        )
+          return unknown("The settlement call did not execute successfully.");
+      }
+    }
+    const deployment = await verifyRouterDeployment();
+    if (checkpoint.deploymentHash && deployment.wasmHash !== checkpoint.deploymentHash)
+      return unknown("The router changed since settlement was reviewed.");
+    const claims = await getClaims(identities.map((claim) => BigInt(claim.claimId)));
+    const status = final[0]?.transaction.status;
+    if (!status || status === "pending") return unknown("Settlement execution is unresolved.");
+    if (
+      claims.length !== identities.length ||
+      claims.some((claim, index) => {
+        const saved = identities[index];
+        if (!saved) return true;
+        return (
+          claim.id.toString() !== saved.claimId ||
+          claim.recipient !== saved.recipient ||
+          claim.token !== saved.token ||
+          claim.amount.toString() !== saved.amount ||
+          claim.deployment.router !== checkpoint.router ||
+          claim.deployment.wasmHash !== deployment.wasmHash ||
+          (status === "confirmed" && !claim.settled)
+        );
+      })
+    )
+      return unknown("The on-chain claims do not establish the saved settlement identities.");
+    return {
+      status: status === "confirmed" ? "confirmed" : "failed",
+      source: "rpc",
+      message:
+        status === "confirmed"
+          ? "The saved settlement executed on Stellar and every matching claim is settled on chain."
+          : "The matching settlement transaction failed on Stellar. Review the refreshed claims before signing again.",
+    };
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    return unknown("The settlement transaction and on-chain claims could not be verified.");
+  }
+}
+
 export async function submitSettleClaim(
   sender: string,
   id: bigint,
@@ -1912,6 +2012,7 @@ export async function submitSettleClaim(
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
   reviewed?: PendingClaim,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
@@ -1944,7 +2045,7 @@ export async function submitSettleClaim(
       nativeToScVal(id, { type: "u64" }),
     ),
     sign,
-    undefined,
+    progress,
     approval,
     reconcile,
     undefined,
@@ -1959,6 +2060,7 @@ export async function submitSettleClaims(
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
 ): Promise<TransactionResult> {
   if (claims.length < 2) throw new Error("Batch settlement requires at least two claims.");
   if (claims.length > MAX_BATCH_CLAIMS)
@@ -1997,7 +2099,7 @@ export async function submitSettleClaims(
       claims.map((claim) => claim.id),
     ),
     sign,
-    undefined,
+    progress,
     approval,
     reconcile,
     undefined,
