@@ -38,6 +38,7 @@ export interface FormattedTransfer {
   };
   readonly destination: {
     readonly token?: string | null;
+    readonly representation?: string | null;
     readonly amount?: string | null;
     readonly symbol?: string | null;
     readonly decimals?: number | null;

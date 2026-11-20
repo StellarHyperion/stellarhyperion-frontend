@@ -9,6 +9,7 @@ import {
   type FormattedTransfer,
 } from "../src/api/backend";
 import { getEvidenceTimeline, hasVerifiedDestinationEvidence } from "../src/lib/evidence";
+import { formatTokenAmount, formatTokenIdentity } from "../src/lib/format";
 import {
   assertIndexedAcceptance,
   assertPaymentReceipt,
@@ -193,6 +194,16 @@ describe("Real indexer client", () => {
 });
 
 describe("transfer evidence", () => {
+  it("renders CCTP and ITS exact amounts and keeps unknown precision in base units", () => {
+    expect(formatTokenAmount("1234567", 6)).toBe("1.234567");
+    expect(formatTokenAmount("1234567", 7)).toBe("0.1234567");
+    for (const decimals of [undefined, null, -1, 1.5, NaN, 256]) {
+      expect(formatTokenAmount("1234567", decimals)).toBe("1234567 base units");
+    }
+    expect(formatTokenIdentity("0x1111", "USDC", 6, "native")).not.toEqual(
+      formatTokenIdentity("0x2222", "USDC", 7, "ITS"),
+    );
+  });
   const transfer = (overrides: Partial<FormattedTransfer> = {}): FormattedTransfer => ({
     id: "transfer-1",
     stage: "delivering",
@@ -228,6 +239,28 @@ describe("transfer evidence", () => {
     },
     claim: null,
     ...overrides,
+  });
+
+  it("preserves real destination metadata through the indexer response", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const record = transfer({
+      destination: {
+        chain: "sepolia",
+        recipient: "0x" + "a".repeat(40),
+        token: "0x" + "1".repeat(40),
+        symbol: "USDC",
+        representation: "native",
+        decimals: 6,
+        amount: "1234567",
+        delivered: true,
+        txHash: "0x" + "b".repeat(64),
+        block: "1",
+        deliveredAt: "2026-11-19T12:00:00.000Z",
+      },
+    });
+    const response = { transfers: [record], count: 1, limit: 20, offset: 0 };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(response))));
+    expect((await fetchTransfers()).transfers[0]?.destination).toEqual(record.destination);
   });
 
   it("keeps provider execution as a candidate until a destination transaction exists", () => {
