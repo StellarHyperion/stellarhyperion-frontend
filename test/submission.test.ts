@@ -9,11 +9,13 @@ import {
   TransactionBuilder,
   nativeToScVal,
   rpc,
-  type xdr,
+  scValToNative,
+  xdr,
 } from "@stellar/stellar-sdk";
 import { sorobanErrorCode, toHex } from "@hyperion/protocol";
 import {
   assertReviewedFeeCurrent,
+  bridgeOperation,
   classifySubmissionFailure,
   describeBindingLimit,
   SubmissionFailure,
@@ -214,6 +216,47 @@ describe("Signed Stellar submission failure boundaries", () => {
       [2n, 30n],
     ])
       expect(() => cctpPayoutBreakdown(amount, budget)).toThrow();
+  });
+  it("encodes the exact displayed CCTP minimum and approved forwarding budget in the router request", () => {
+    const value: LiveQuote = {
+      route: 0,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000000n,
+      grossAmount: 9999995n,
+      fee: 30005n,
+      netAmount: 9969990n,
+      representableAmount: 996999n,
+      destinationAmount: 946999n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 500000n,
+    };
+    const operation = bridgeOperation(key.publicKey(), value, "0x" + "1".repeat(40));
+    const transaction = new TransactionBuilder(new Account(key.publicKey(), "0"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(180)
+      .build();
+    const envelope = xdr.TransactionEnvelope.fromXdr(transaction.toXdr(), "base64");
+    if (envelope.type !== "envelopeTypeTx") throw new Error("Expected a v1 transaction");
+    const body = envelope.v1.tx.operations[0]!.body;
+    if (body.type !== "invokeHostFunction") throw new Error("Expected a contract operation");
+    const hostFunction = body.invokeHostFunctionOp.hostFunction;
+    if (hostFunction.type !== "hostFunctionTypeInvokeContract")
+      throw new Error("Expected a contract invocation");
+    const args = hostFunction.invokeContract.args;
+    expect(scValToNative(args[1]!)).toMatchObject({
+      amount: 10000000n,
+      destination_decimals: 6,
+      min_destination_amount: 946999n,
+    });
+    expect(scValToNative(args[2]!)).toBe(500000n);
+    expect(cctpPayoutBreakdown(value.representableAmount, value.relayGas).minimumReceived).toBe(
+      946999n,
+    );
   });
   it("holds the reviewed budget and minimum through improved fees and rejects material changes", () => {
     const reviewed: LiveQuote = {
