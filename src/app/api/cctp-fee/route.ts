@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { destinationFor } from "../../../config/testnet";
-import { relayBudget } from "../../../lib/relay-budget";
+import { feeObservation, relayBudget } from "../../../lib/relay-budget";
 import {
   feeRequestGuard,
   readFeeResponse,
@@ -105,6 +105,9 @@ export async function GET(request: Request) {
         decimals: 7,
         destination: destination.key,
         finality: 2000,
+        provider: "Circle CCTP",
+        ...feeObservation(),
+        lane: { source: "stellar-testnet", destination: destination.key, route: 0 },
       },
       {
         token: "USDC",

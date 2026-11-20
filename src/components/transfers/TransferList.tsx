@@ -158,7 +158,10 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
             </p>
           )}
 
-          <EvidenceTimeline transfer={t} />
+          <details className={styles.proofDrawer}>
+            <summary>Inspect proof evidence</summary>
+            <EvidenceTimeline transfer={t} />
+          </details>
 
           <div className={styles.cardBottom}>
             <div className={styles.amountGroup}>

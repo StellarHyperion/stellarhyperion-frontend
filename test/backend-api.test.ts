@@ -279,6 +279,25 @@ describe("Real indexer client", () => {
       "https://indexer.example/v1/transfers?search=hash+%26+recipient&offset=40",
     );
   });
+
+  it("passes a keyset cursor when the backend advertises cursor pagination", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const payload = {
+      transfers: [],
+      count: 0,
+      limit: 20,
+      offset: 0,
+      cursor: "after-1",
+      nextCursor: null,
+      hasMore: false,
+    };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)));
+    vi.stubGlobal("fetch", fetcher);
+    expect(await fetchTransfers({ limit: "20", cursor: "after-1" })).toEqual(payload);
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      "https://indexer.example/v1/transfers?limit=20&cursor=after-1",
+    );
+  });
   it("lists claims with explicit chain and settlement filters", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
     const payload = { claims: [], count: 0, limit: 20, offset: 0 };
