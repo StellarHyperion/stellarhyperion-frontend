@@ -1,4 +1,5 @@
 "use client";
+import { cctpPayoutBreakdown } from "../../lib/relay-budget";
 
 import Link from "next/link";
 import {
@@ -265,6 +266,24 @@ function QuoteDetails({
           {quote.route === 0 ? "USDC" : "XLM"}
         </dd>
       </div>
+      {quote.route === 0 && (
+        <>
+          <div>
+            <dt>Full destination forwarding deduction</dt>
+            <dd>
+              {formatUnits(
+                cctpPayoutBreakdown(quote.representableAmount, quote.relayGas).destinationBudget,
+                6,
+              )}{" "}
+              USDC
+            </dd>
+          </div>
+          <div>
+            <dt>Conservative destination minimum</dt>
+            <dd>{formatUnits(quote.destinationAmount, 6)} USDC</dd>
+          </div>
+        </>
+      )}
       {resourceFee !== undefined && (
         <div>
           <dt>Assembled resource fee</dt>

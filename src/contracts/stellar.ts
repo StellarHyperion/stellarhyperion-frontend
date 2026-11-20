@@ -38,6 +38,7 @@ import type { TransferCheckpoint } from "./checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 import { validateProviderFee } from "../lib/fee-schema";
+import { cctpPayoutBreakdown } from "../lib/relay-budget";
 
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
@@ -935,7 +936,10 @@ export async function quoteTransfer(
     grossAmount: integer(quote.gross_amount),
     fee: integer(quote.fee),
     netAmount: integer(quote.net_amount),
-    destinationAmount: representableAmount - (route === 0 ? relayGas / quantum : 0n),
+    destinationAmount:
+      route === 0
+        ? cctpPayoutBreakdown(representableAmount, relayGas).minimumReceived
+        : representableAmount,
     representableAmount,
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
@@ -1830,14 +1834,7 @@ export async function submitBridgeOut(
     quoted.requestedAmount,
     quoted.route as BridgeRoute,
   );
-  if (
-    refreshed.grossAmount !== quoted.grossAmount ||
-    refreshed.destinationAmount < quoted.destinationAmount ||
-    refreshed.fee !== quoted.fee ||
-    (refreshed.estimatedRelayGas ?? refreshed.relayGas) > quoted.relayGas
-  ) {
-    throw new Error("The quote changed. Review a fresh quote before signing.");
-  }
+  assertReviewedFeeCurrent(quoted, refreshed);
   const balance = await readBalance(sender);
   if (balance < refreshed.grossAmount)
     throw new Error(`Insufficient testnet USDC. Your balance is ${formatUnits(balance, 7)} USDC.`);
@@ -1851,6 +1848,23 @@ export async function submitBridgeOut(
     simulated,
     signal,
   );
+}
+
+/** A fresh read can confirm the bound but cannot silently replace the reviewed budget. */
+export function assertReviewedFeeCurrent(reviewed: LiveQuote, refreshed: LiveQuote): void {
+  quoteBreakdown(reviewed);
+  quoteBreakdown(refreshed);
+  if (
+    refreshed.route !== reviewed.route ||
+    refreshed.destination !== reviewed.destination ||
+    refreshed.adapter !== reviewed.adapter ||
+    refreshed.requestedAmount !== reviewed.requestedAmount ||
+    refreshed.grossAmount !== reviewed.grossAmount ||
+    refreshed.fee !== reviewed.fee ||
+    refreshed.destinationAmount < reviewed.destinationAmount ||
+    (refreshed.estimatedRelayGas ?? refreshed.relayGas) > reviewed.relayGas
+  )
+    throw new Error("The quote changed. Review a fresh quote before signing.");
 }
 
 export async function getClaim(id: bigint): Promise<PendingClaim> {
