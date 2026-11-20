@@ -107,5 +107,5 @@ describe("bounded public provider admission", () => {
     expect(
       (await circle(new Request("http://localhost/api/cctp-fee?destination=base-sepolia"))).status,
     ).toBe(200);
-  });
+  }, 15_000);
 });

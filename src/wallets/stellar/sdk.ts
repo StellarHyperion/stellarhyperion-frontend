@@ -460,7 +460,6 @@ export async function walletCurrentAddress(
   );
   return address ? account(address) : null;
 }
-}
 
 export async function walletSign(
   id: StellarWalletId,

@@ -2576,7 +2576,8 @@ export function Bridge() {
                   !lane?.available ||
                   reviewedReserveInsufficient ||
                   (!!reviewed.quote.conversion && !reserve) ||
-                  (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation)) ||
+                  (!reviewed.quote.conversion &&
+                    (simulating || !!simulationError || !simulation)) ||
                   !wallet.isReady
                 }
                 onClick={() => {
@@ -2690,7 +2691,6 @@ export function Bridge() {
               Simulation failed: {simulationError}. Approval blocked.
             </p>
           )}
-
         </ReviewDialog>
       )}
     </>
