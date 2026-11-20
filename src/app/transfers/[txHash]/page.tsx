@@ -6,7 +6,7 @@ import { fetchTransferByTx, getRouteName, type FormattedTransfer } from "../../.
 import { readTransaction, errorMessage, type TransactionResult } from "../../../contracts";
 import { STELLAR_DEPLOYMENT } from "../../../config/testnet";
 import { formatTokenAmount, formatTokenIdentity, getExplorerUrl } from "../../../lib/format";
-import { hasVerifiedDestinationEvidence } from "../../../lib/evidence";
+import { hasVerifiedDestinationEvidence, getEvidenceAwareStage } from "../../../lib/evidence";
 import { EvidenceTimeline } from "../../../components/transfers/EvidenceTimeline";
 import { useVisibilityPoll } from "../../../lib/visibility-poll";
 import { ActivityRequestGuard } from "../../../lib/activity-request";
@@ -144,7 +144,7 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
       {record && (
         <section className={styles.legPanel} aria-label="Indexed transfer status">
           <h2>{getRouteName(record.route)}</h2>
-          <p role="status">Status: {record.stage}</p>
+          <p role="status">Status: {getEvidenceAwareStage(record)}</p>
           <EvidenceTimeline transfer={record} />
           <p>
             Sent from {record.origin.chain} to {record.destination.chain}

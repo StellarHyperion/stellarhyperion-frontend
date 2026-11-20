@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { relayBudget } from "../../../lib/relay-budget";
+import { feeRouteCapabilityResponse } from "../../../lib/runtime-capabilities";
+import { feeObservation, relayBudget } from "../../../lib/relay-budget";
 import {
   feeRequestGuard,
   readFeeResponse,
@@ -8,6 +9,10 @@ import {
 } from "../../../lib/fee-request-guard";
 import { validateProviderFee } from "../../../lib/fee-schema";
 // The fee API expects a method in the JSON body. Its /gmp/estimateITSFee path returns help text.
+export function HEAD(): Response {
+  return feeRouteCapabilityResponse("relay");
+}
+
 export async function GET(request: Request) {
   try {
     validateFeeRequest(request, []);
@@ -80,6 +85,9 @@ export async function GET(request: Request) {
         token: "XLM",
         decimals: 7,
         destination: "ethereum-sepolia",
+        provider: "Axelar ITS",
+        ...feeObservation(),
+        lane: { source: "stellar-testnet", destination: "ethereum-sepolia", route: 1 },
       },
       { token: "XLM", destination: "ethereum-sepolia" },
     );

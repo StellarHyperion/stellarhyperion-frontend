@@ -90,11 +90,13 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   const [asset, setAsset] = useState("");
   const [deployment, setDeployment] = useState("");
   const [offset, setOffset] = useState(0);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [cursorHistory, setCursorHistory] = useState<(string | null)[]>([]);
   const [ready, setReady] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [loading, setLoading] = useState(true);
-  const scope = JSON.stringify([address ?? null, search, offset, retry, localIdentity]);
+  const scope = JSON.stringify([address ?? null, search, offset, cursor, retry, localIdentity]);
   const [snapshot, setSnapshot] = useState<{
     scope: string;
     response: TransfersResponse | null;
@@ -124,6 +126,8 @@ function TransfersPageContent({ address }: { address?: string | null }) {
         setDeployment(result.filters.deployment ?? "");
         setUrlError(result.error);
         setOffset(0);
+        setCursor(null);
+        setCursorHistory([]);
         setReady(true);
       });
     };
@@ -154,7 +158,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
               ...(address ? { sender: address } : {}),
               search,
               limit: "20",
-              offset: String(offset),
+              ...(cursor ? { cursor } : { offset: String(offset) }),
             },
             signal,
           ),
@@ -273,6 +277,8 @@ function TransfersPageContent({ address }: { address?: string | null }) {
         onChange={(event) => {
           setSearch(event.target.value);
           setOffset(0);
+          setCursor(null);
+          setCursorHistory([]);
         }}
       />
       <div className={styles.identityFilters} role="group" aria-label="Transfer identity filters">
@@ -342,19 +348,29 @@ function TransfersPageContent({ address }: { address?: string | null }) {
       <div className={styles.filterControls}>
         <button
           type="button"
-          disabled={offset === 0 || pending}
+          disabled={(offset === 0 && cursorHistory.length === 0) || pending}
           onClick={() => {
-            setOffset((value) => Math.max(0, value - 20));
+            if (cursorHistory.length > 0) {
+              setCursor(cursorHistory[cursorHistory.length - 1] ?? null);
+              setCursorHistory((history) => history.slice(0, -1));
+            } else {
+              setOffset((value) => Math.max(0, value - 20));
+            }
           }}
         >
           Previous
         </button>
-        <span>Page {offset / 20 + 1}</span>
+        <span>Page {offset / 20 + cursorHistory.length + 1}</span>
         <button
           type="button"
-          disabled={(response?.transfers.length ?? 0) < 20 || pending}
+          disabled={!(response?.hasMore ?? (response?.transfers.length ?? 0) >= 20) || pending}
           onClick={() => {
-            setOffset((value) => value + 20);
+            if (response?.nextCursor) {
+              setCursorHistory((history) => [...history, cursor]);
+              setCursor(response.nextCursor);
+            } else {
+              setOffset((value) => value + 20);
+            }
           }}
         >
           Next

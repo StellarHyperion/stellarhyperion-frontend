@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { feeRouteCapabilityResponse } from "../../../lib/runtime-capabilities";
 import { destinationFor } from "../../../config/testnet";
-import { relayBudget } from "../../../lib/relay-budget";
+import { feeObservation, relayBudget } from "../../../lib/relay-budget";
 import {
   feeRequestGuard,
   readFeeResponse,
@@ -8,6 +9,10 @@ import {
   providerFeeCooldown,
 } from "../../../lib/fee-request-guard";
 import { validateProviderFee } from "../../../lib/fee-schema";
+
+export function HEAD(): Response {
+  return feeRouteCapabilityResponse("cctp");
+}
 
 export async function GET(request: Request) {
   let url: URL;
@@ -105,6 +110,9 @@ export async function GET(request: Request) {
         decimals: 7,
         destination: destination.key,
         finality: 2000,
+        provider: "Circle CCTP",
+        ...feeObservation(),
+        lane: { source: "stellar-testnet", destination: destination.key, route: 0 },
       },
       {
         token: "USDC",
