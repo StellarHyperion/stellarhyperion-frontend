@@ -13,11 +13,7 @@
     "src/wallets/stellar/WalletPicker.module.css": "c01b6142e6251e4ca338a2d69847ea6c31c64e53595591f81fcfc80df702cedd",
     "src/components/wallet/StellarWalletButton.tsx": "a956f1ef69ae31a42214e68accd8397e277850129c20e318888b10dae99b6be0",
     "src/components/common/Dialog.tsx": "ec7ca654ac1b1aaa7ff049589c834353e042eddf94dde967fa9db66d73b0d327",
-    "src/app/transfers/page.tsx": "0c7dcbb429a9d66399c07276dd6650c1d71209df72035d7b85c8ae461d95e580",
-    "src/app/transfers/[txHash]/page.tsx": "e1acf2e2d9b800fe73a83ccb7db6af39fd14d5c374e6c0ffcd978f09edd2b82e",
     "src/api/backend.ts": "6662dd4441308e90d35b9645c0b37e44a3bd5361db1e883f8380ca590e146b97",
-    "src/lib/visibility-poll.ts": "ecffd4396bf8f67f6c7151a70357fc4773bc575c8ebfcb61602c9ec9821949fa",
-    "src/lib/visibility-poll-budget.ts": "9a03e3bd9bef228eef4c9e7a6f75db2632ddf3ed3256d892055d076d731eb1dc",
     "src/contracts/stellar.ts": "9ae9504846356da1c7cc676350122a662891db6caa2e664d7605e905f9c52a0b",
     "src/app/globals.css": "15024b300b2d45decdc9a3c333fa3c7935d609bc3f7dd9c62664cbbef5fffc21"
   },
