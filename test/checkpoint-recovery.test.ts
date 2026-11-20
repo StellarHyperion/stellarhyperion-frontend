@@ -13,7 +13,7 @@ import {
   resolveCheckpointTransaction,
   type LiveQuote,
 } from "../src/contracts/stellar";
-import { requireRecoveredUsdc } from "../src/contracts/assets";
+import { USDC, XLM, requireRecoveredUsdc } from "../src/contracts/assets";
 import { type TransferCheckpoint } from "../src/contracts/checkpoint";
 import { TESTNET } from "../src/config/testnet";
 
@@ -114,6 +114,21 @@ function mockHistory(body: unknown, status = 200, network: string = TESTNET.netw
   vi.stubGlobal("fetch", fetcher);
   return fetcher;
 }
+describe("conversion source asset binding", () => {
+  it("checks the source against independent envelope evidence while retaining the signed hash", async () => {
+    const item = fixture("conversion");
+    item.checkpoint.source = { id: XLM.id, code: XLM.code, issuer: XLM.issuer };
+    mockHistory(history(item));
+    expect((await resolveCheckpointTransaction(item.checkpoint)).status).toBe("confirmed");
+    const rebound = {
+      ...item.checkpoint,
+      source: { id: USDC.id, code: USDC.code, issuer: USDC.issuer },
+    };
+    expect((await resolveCheckpointTransaction(rebound)).status).toBe("unknown");
+    expect(rebound.txHash).toBe(item.checkpoint.txHash);
+  });
+});
+
 beforeEach(() => {
   vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
     passphrase: TESTNET.networkPassphrase,

@@ -56,7 +56,7 @@ describe("live provider endpoint schema boundaries", () => {
   });
   it("rejects an oversized Axelar scalar with a bounded public error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('"' + "9".repeat(100000) + '"')));
-    const response = await relayFee();
+    const response = await relayFee(new Request("http://localhost/api/relay-fee"));
     expect(response.status).toBe(503);
     const body = (await response.json()) as { error: string };
     expect(body.error.length).toBeLessThan(120);

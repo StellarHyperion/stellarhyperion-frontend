@@ -1,3 +1,4 @@
+import { cctpPayoutBreakdown } from "../src/lib/relay-budget";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Account,
@@ -8,11 +9,15 @@ import {
   TransactionBuilder,
   nativeToScVal,
   rpc,
-  type xdr,
+  scValToNative,
+  xdr,
 } from "@stellar/stellar-sdk";
-import { toHex } from "@hyperion/protocol";
+import { sorobanErrorCode, toHex } from "@hyperion/protocol";
 import {
+  assertReviewedFeeCurrent,
+  bridgeOperation,
   classifySubmissionFailure,
+  describeBindingLimit,
   SubmissionFailure,
   quoteFreshness,
   quoteBreakdown,
@@ -20,12 +25,13 @@ import {
   submitSettleClaim,
   submitOperation,
   simulateOperation,
+  TransferLimitError,
 } from "../src/contracts/stellar";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
 
-import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
+import { STELLAR_DEPLOYMENT, TESTNET, supportedLanes } from "../src/config/testnet";
 import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
 import {
   planMaxUsdcAmount,
@@ -86,6 +92,35 @@ const sign = (value: string) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Signed Stellar submission failure boundaries", () => {
+  it("refuses fresh claim data that differs from the reviewed amount before wallet approval", async () => {
+    const { send } = setup();
+    const wallet = vi.fn(sign);
+    await expect(
+      submitSettleClaim(key.publicKey(), 1n, wallet, undefined, undefined, undefined, {
+        id: 1n,
+        recipient: key.publicKey(),
+        token: TESTNET.token,
+        amount: 20n,
+        settled: false,
+        eligibility: {
+          status: "eligible",
+          reason: "Generated fixture",
+          previewMethod: "preview_settle_claim",
+          trustline: "not-required",
+        },
+        deployment: {
+          ...STELLAR_DEPLOYMENT,
+          chain: "stellar-testnet",
+          router: TESTNET.router,
+          networkPassphrase: TESTNET.networkPassphrase,
+          commit: "fixture",
+          deployedLedger: 1,
+        },
+      }),
+    ).rejects.toThrow(/claim changed/);
+    expect(wallet).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
   it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
     const checkpointKey = "hyperion.testnet.pending-transfer";
     const values = new Map<string, string>([[checkpointKey, "existing signed hash"]]);
@@ -166,6 +201,105 @@ describe("Signed Stellar submission failure boundaries", () => {
       representableBridgeAmount: 9969990n,
       retainedDust: 5n,
     });
+  });
+  it("deducts the complete approved Circle forwarding budget in destination units", () => {
+    expect(cctpPayoutBreakdown(996999n, 500000n)).toEqual({
+      destinationBudget: 50000n,
+      minimumReceived: 946999n,
+    });
+    expect(cctpPayoutBreakdown(2n, 10n)).toEqual({ destinationBudget: 1n, minimumReceived: 1n });
+    for (const [amount, budget] of [
+      [1n, 10n],
+      [0n, 10n],
+      [2n, 11n],
+      [2n, -10n],
+      [2n, 30n],
+    ])
+      expect(() => cctpPayoutBreakdown(amount, budget)).toThrow();
+  });
+  it("encodes the exact displayed CCTP minimum and approved forwarding budget in the router request", () => {
+    const value: LiveQuote = {
+      route: 0,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000000n,
+      grossAmount: 9999995n,
+      fee: 30005n,
+      netAmount: 9969990n,
+      representableAmount: 996999n,
+      destinationAmount: 946999n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 500000n,
+    };
+    const operation = bridgeOperation(key.publicKey(), value, "0x" + "1".repeat(40));
+    const transaction = new TransactionBuilder(new Account(key.publicKey(), "0"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(180)
+      .build();
+    const envelope = xdr.TransactionEnvelope.fromXdr(transaction.toXdr(), "base64");
+    if (envelope.type !== "envelopeTypeTx") throw new Error("Expected a v1 transaction");
+    const operationBody = envelope.v1.tx.operations[0];
+    if (!operationBody) throw new Error("Expected a router operation");
+    const body = operationBody.body;
+    if (body.type !== "invokeHostFunction") throw new Error("Expected a contract operation");
+    const hostFunction = body.invokeHostFunctionOp.hostFunction;
+    if (hostFunction.type !== "hostFunctionTypeInvokeContract")
+      throw new Error("Expected a contract invocation");
+    const args = hostFunction.invokeContract.args;
+    const request = args[1];
+    const budget = args[2];
+    if (!request || !budget) throw new Error("Expected router request and relay budget");
+    expect(scValToNative(request)).toMatchObject({
+      amount: 10000000n,
+      destination_decimals: 6,
+      min_destination_amount: 946999n,
+    });
+    expect(scValToNative(budget)).toBe(500000n);
+    expect(cctpPayoutBreakdown(value.representableAmount, value.relayGas).minimumReceived).toBe(
+      946999n,
+    );
+  });
+  it("holds the reviewed budget and minimum through improved fees and rejects material changes", () => {
+    const reviewed: LiveQuote = {
+      route: 0,
+      adapter: TESTNET.router,
+      destination: "sepolia",
+      requestedAmount: 10000000n,
+      grossAmount: 9999995n,
+      fee: 30005n,
+      netAmount: 9969990n,
+      representableAmount: 996999n,
+      destinationAmount: 946999n,
+      flowAvailable: 10000000000n,
+      ledger: 1,
+      relayGas: 500000n,
+      estimatedRelayGas: 450000n,
+    };
+    const improved = {
+      ...reviewed,
+      relayGas: 400000n,
+      estimatedRelayGas: 350000n,
+      destinationAmount: 956999n,
+    };
+    expect(() => {
+      assertReviewedFeeCurrent(reviewed, improved);
+    }).not.toThrow();
+    expect(reviewed.relayGas).toBe(500000n);
+    expect(reviewed.destinationAmount).toBe(946999n);
+    for (const change of [
+      { estimatedRelayGas: 500001n },
+      { destinationAmount: 946998n },
+      { adapter: TESTNET.token },
+      { destination: "base-sepolia" as const },
+      { requestedAmount: 10000001n },
+    ])
+      expect(() => {
+        assertReviewedFeeCurrent(reviewed, { ...reviewed, ...change });
+      }).toThrow("fresh quote");
   });
   it("retains no dust on Axelar ITS, whose seven-decimal destination matches Stellar exactly", () => {
     const value: LiveQuote = {
@@ -866,9 +1000,12 @@ describe("Checkpoint staleness guards", () => {
     bridgeAmount: "10000000",
     stage: "bridge",
     txHash: "0".repeat(64),
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
   const sameIntent = {
     account: checkpoint.account,
+    recipient: checkpoint.recipient,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
     destination: checkpoint.destination,
     route: checkpoint.route,
     bridgeAmount: checkpoint.bridgeAmount,
@@ -894,6 +1031,12 @@ describe("Checkpoint staleness guards", () => {
   it("rejects a stale confirmation when the amount changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, bridgeAmount: "20000000" })).toBe(false);
   });
+  it("rejects a stale confirmation when recipient or issuer-specific source identity changes", () => {
+    expect(checkpointMatches(checkpoint, { ...sameIntent, recipient: "0x" + "b".repeat(40) })).toBe(
+      false,
+    );
+    expect(checkpointMatches(checkpoint, { ...sameIntent, source: USDC })).toBe(false);
+  });
   it("rejects a stale confirmation when the stage changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, stage: "conversion" })).toBe(false);
   });
@@ -911,6 +1054,7 @@ describe("Source identity and explorer access", () => {
     bridgeAmount: "10000000",
     stage: "bridge" as const,
     txHash: realHash,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
 
   it("preserves the real signed hash exactly in a saved checkpoint", () => {
@@ -944,5 +1088,93 @@ describe("Source identity and explorer access", () => {
     expect(parsed.txHash).toBe(realHash);
     // The checkpoint itself carries no status; confirmation comes only from readTransaction.
     expect(parsed.stage).toBe("bridge");
+  });
+});
+
+describe("Binding flow-limit diagnostics", () => {
+  it.each([null, -1n, 1n << 127n])(
+    "does not invent current capacity from unavailable or invalid values (%s)",
+    (available) => {
+      const code = sorobanErrorCode("FlowLimitExceeded");
+      const diagnostic = describeBindingLimit(code, 10_000_000n, available, "sepolia", 1);
+      expect(diagnostic.available).toBeNull();
+      expect(diagnostic.summary).toContain("capacity is unavailable");
+      expect(diagnostic.nextStep).not.toContain("Reduce the amount");
+      expect(diagnostic.nextStep).toContain("Refresh the quote");
+    },
+  );
+  it.each([undefined, null, -1, NaN, Infinity, "", "1.1", "-1", "999999999999999999999999"])(
+    "keeps malformed reason %s unclassified",
+    (reason) => {
+      const diagnostic = describeBindingLimit(reason, 10_000_000n, 0n, "sepolia", 1);
+      expect(diagnostic.code).toBeNull();
+      expect(diagnostic.kind).toBe("other");
+    },
+  );
+  it("names the exact flow-window headroom and an exact amount to retry", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 10_000_000n, 2_500_000n, "sepolia", 1);
+    expect(diagnostic.kind).toBe("flow");
+    expect(diagnostic.available).toBe(2_500_000n);
+    expect(diagnostic.requested).toBe(10_000_000n);
+    expect(diagnostic.retryable).toBe(true);
+    expect(diagnostic.summary).toContain("0.25");
+    expect(diagnostic.summary).toContain("Axelar ITS");
+    expect(diagnostic.nextStep).toContain("0.25");
+    // The Sepolia lane also carries Circle CCTP on this deployment, so it is a real next step.
+    expect(diagnostic.alternateLanes.map((lane) => lane.provider)).toEqual(["Circle CCTP"]);
+    expect(diagnostic.nextStep).toContain("Circle CCTP");
+  });
+  it("tells the sender to wait when the flow window has no headroom left at all", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 5_000_000n, 0n, "sepolia", 1);
+    expect(diagnostic.available).toBe(0n);
+    expect(diagnostic.nextStep).toContain("fully used");
+    expect(diagnostic.nextStep).not.toContain("Reduce the amount");
+  });
+  it("never offers a lane this testnet deployment does not independently support", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    // Only Sepolia carries Axelar ITS; the Circle CCTP lane on another destination has no
+    // alternate lane to offer, and the diagnostic must not invent one.
+    const diagnostic = describeBindingLimit(code, 5_000_000n, 1_000_000n, "base-sepolia", 0);
+    expect(diagnostic.alternateLanes).toEqual([]);
+    expect(diagnostic.nextStep).not.toContain("also supports");
+  });
+  it("reports the route's maximum transfer cap as non-retryable without inventing a value", () => {
+    const code = sorobanErrorCode("ExceedsRouteLimit");
+    if (code === null) throw new Error("ExceedsRouteLimit has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 50_000_000n, 0n, "sepolia", 0);
+    expect(diagnostic.kind).toBe("routeMax");
+    expect(diagnostic.available).toBeNull();
+    expect(diagnostic.retryable).toBe(false);
+    expect(diagnostic.nextStep).toContain("Split it into smaller transfers");
+  });
+  it("marks a liquidity shortfall as retryable and suggests a smaller amount or a wait", () => {
+    const code = sorobanErrorCode("InsufficientLiquidity");
+    if (code === null) throw new Error("InsufficientLiquidity has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 50_000_000n, 0n, "sepolia", 0);
+    expect(diagnostic.kind).toBe("liquidity");
+    expect(diagnostic.retryable).toBe(true);
+    expect(diagnostic.nextStep).toContain("liquidity");
+  });
+  it("composes the thrown error message from the same summary and next step", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 10_000_000n, 2_500_000n, "sepolia", 1);
+    const error = new TransferLimitError(diagnostic);
+    expect(error.diagnostic).toBe(diagnostic);
+    expect(error.message).toBe(`${diagnostic.summary} ${diagnostic.nextStep}`);
+  });
+  it("only ever names testnet lanes this deployment actually carries", () => {
+    expect(supportedLanes("sepolia").map((lane) => lane.provider)).toEqual([
+      "Circle CCTP",
+      "Axelar ITS",
+    ]);
+    for (const destination of ["base-sepolia", "arc-testnet"] as const) {
+      expect(supportedLanes(destination).map((lane) => lane.provider)).toEqual(["Circle CCTP"]);
+    }
   });
 });

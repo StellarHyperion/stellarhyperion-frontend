@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { USDC, XLM } from "../src/contracts/assets";
 import { TESTNET } from "../src/config/testnet";
 import {
+  checkpointForAsset,
   parseCheckpoint,
   saveCheckpoint,
   type TransferCheckpoint,
@@ -54,6 +56,66 @@ describe("pending transfer checkpoints", () => {
     );
   });
 
+  it("retains a legacy conversion hash without guessing its original source asset", () => {
+    const legacy = { ...checkpoint, stage: "conversion" as const };
+    const parsed = parseCheckpoint(JSON.stringify(legacy));
+    expect(parsed).toEqual(legacy);
+    expect(checkpointForAsset(parsed, XLM)).toBeNull();
+  });
+
+  it("keeps a saved original intent when a newly selected asset does not match it", () => {
+    const storage = createStorage();
+    vi.stubGlobal("localStorage", storage);
+    const original = {
+      ...checkpoint,
+      stage: "conversion" as const,
+      source: {
+        id: XLM.id,
+        code: XLM.code,
+        issuer: XLM.issuer,
+      },
+    };
+    saveCheckpoint(original);
+    expect(checkpointForAsset(original, USDC)).toBeNull();
+    expect(checkpointForAsset(original, { ...XLM, code: "OTHER" })).toBeNull();
+    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toEqual(original);
+    expect(() => {
+      saveCheckpoint({ ...original, source: USDC });
+    }).toThrow("previous transaction");
+    expect(() => {
+      saveCheckpoint({ ...original, stage: "bridge", txHash: "b".repeat(64), source: USDC });
+    }).toThrow("previous transaction");
+    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toEqual(original);
+  });
+
+  it("refuses a stale reset after another tab changes the source binding for the same hash", () => {
+    const storage = createStorage();
+    vi.stubGlobal("localStorage", storage);
+    const original = {
+      ...checkpoint,
+      stage: "conversion" as const,
+      source: {
+        id: XLM.id,
+        code: XLM.code,
+        issuer: XLM.issuer,
+      },
+    };
+    saveCheckpoint(original);
+    const changed = { ...original, source: { id: USDC.id, code: USDC.code, issuer: USDC.issuer } };
+    storage.setItem("hyperion.testnet.pending-transfer", JSON.stringify(changed));
+    expect(() => {
+      saveCheckpoint(null, original);
+    }).toThrow("changed in another tab");
+    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toEqual(changed);
+  });
+
+  it("refuses a JSON numeric amount that has already lost integer precision", () => {
+    expect(
+      parseCheckpoint(
+        JSON.stringify({ ...checkpoint, bridgeAmount: Number(checkpoint.bridgeAmount) }),
+      ),
+    ).toBeNull();
+  });
   it("retains compatibility with existing checkpoints while rejecting a different token", () => {
     expect(parseCheckpoint(JSON.stringify({ ...checkpoint, token: undefined }))).toEqual(
       checkpoint,
