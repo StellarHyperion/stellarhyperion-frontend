@@ -1,0 +1,9 @@
+{
+  "sources": {
+    "src/components/bridge/Bridge.tsx": "bd82164a7ef3f45a5ee2279e13a3c3f2fa158b1f05f0654c4fec806ff3d7de79",
+    "src/components/bridge/Bridge.module.css": "f4a6694d7ecac4935d075c5bc1c88deac0a5b4c6f3ba36c1b256881ec42f8ac6",
+    "src/contracts/stellar.ts": "56e9c912a7e6bba083c8f2cf0f704efd5d6204fe2ea01cf5c02305cf669652cc",
+    "src/config/testnet.ts": "2078560491eb1b3d3ed6781ca664f25f830c9f5f9e79f2769674d5ba918247a8"
+  },
+  "fixture": "Exact diagnostic JSX extracted by TypeScript AST, actual production classifier/config/styles; local fixture controls only, no wallet or transport."
+}

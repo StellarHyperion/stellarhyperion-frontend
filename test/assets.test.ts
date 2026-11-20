@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Account, Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Account, Keypair, TransactionBuilder, rpc } from "@stellar/stellar-sdk";
 import {
   quoteConversion,
   accountAssets,
@@ -29,7 +29,11 @@ import {
   trustlineLabel,
   xlmShortfall,
 } from "../src/contracts/assets";
-import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
+import {
+  checkpointForAsset,
+  parseCheckpoint,
+  type TransferCheckpoint,
+} from "../src/contracts/checkpoint";
 import {
   DESTINATIONS,
   deploymentIdentityMismatch,
@@ -37,6 +41,7 @@ import {
   TESTNET,
 } from "../src/config/testnet";
 import { relayBudget } from "../src/lib/relay-budget";
+import { createReviewedIntentSnapshot } from "../src/contracts/stellar";
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -760,8 +765,9 @@ describe("Interrupted transfer recovery", () => {
     bridgeAmount: "1000000",
     stage: "conversion",
     txHash: "a".repeat(64),
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
-  it("preserves a real conversion hash and the intended second leg", () => {
+  it("preserves a real conversion hash, the intended second leg and the originating asset", () => {
     expect(parseCheckpoint(JSON.stringify(checkpoint))).toEqual(checkpoint);
   });
   it.each([
@@ -773,8 +779,23 @@ describe("Interrupted transfer recovery", () => {
     { bridgeAmount: "0" },
     { txHash: "fake" },
     { recipient: `0x${"0".repeat(40)}` },
+    { source: null },
+    { source: { id: "FAKE", code: "FAKE", issuer: null } },
+    { source: { id: USDC.id, code: USDC.code, issuer: TESTNET.reader } },
   ])("refuses a corrupted recovery record %j", (change) => {
     expect(parseCheckpoint(JSON.stringify({ ...checkpoint, ...change }))).toBeNull();
+  });
+  it("never lets a conversion-only checkpoint stand in for a completed cross-chain transfer", () => {
+    const conversionOnly = parseCheckpoint(JSON.stringify({ ...checkpoint, stage: "conversion" }));
+    expect(conversionOnly?.stage).toBe("conversion");
+    expect(conversionOnly?.stage).not.toBe("bridge");
+  });
+  it("never lets a newly selected asset reuse another asset's converted-USDC recovery data", () => {
+    expect(checkpointForAsset(parseCheckpoint(JSON.stringify(checkpoint)), XLM)).toEqual(
+      checkpoint,
+    );
+    expect(checkpointForAsset(parseCheckpoint(JSON.stringify(checkpoint)), USDC)).toBeNull();
+    expect(checkpointForAsset(null, USDC)).toBeNull();
   });
 });
 describe("Spendable XLM accounts for reserves and fees", () => {
@@ -1195,5 +1216,169 @@ describe("Horizon search cancellation", () => {
     const assets = await current;
     expect(assets.map((asset) => asset.id)).toEqual([USDC.id]);
     vi.unstubAllGlobals();
+  });
+});
+describe("Live Stellar liquidity acceptance proof schema", () => {
+  // Explicit opt-in only: reads real Stellar Testnet Horizon liquidity, never signs or spends.
+  // Normal checks stay credential-free and skip this suite.
+  const liveEnabled = process.env.HYPERION_LIVE_TESTNET === "1";
+  it.skipIf(!liveEnabled)(
+    "keeps issuer-specific USDC identity and exact integer amounts on a real liquid path",
+    async () => {
+      vi.unstubAllGlobals();
+      const amount = 10000000n;
+      const conversion = await quoteConversion(XLM, amount);
+      expect(conversion.sourceMax).toBe(amount);
+      expect(conversion.usdcAmount).toBeGreaterThan(0n);
+      const tx = new TransactionBuilder(new Account(TESTNET.reader, "1"), {
+        fee: "100",
+        networkPassphrase: TESTNET.networkPassphrase,
+      });
+      for (const operation of conversionOperations(TESTNET.reader, conversion, true))
+        tx.addOperation(operation);
+      const decoded = TransactionBuilder.fromXdr(
+        tx.setTimeout(60).build().toXdr(),
+        TESTNET.networkPassphrase,
+      );
+      const payment = decoded.operations.find(
+        (operation) => operation.type === "pathPaymentStrictReceive",
+      );
+      if (payment?.type !== "pathPaymentStrictReceive")
+        throw new Error("Missing conversion operation.");
+      // Issuer-specific token identity: the real liquid path must still resolve to the exact
+      // canonical USDC issuer, never a different asset that merely shares the USDC code.
+      expect(payment.destAsset.getIssuer()).toBe(USDC.issuer);
+      // Exact integer amounts: Stellar's classic amount strings never carry scientific notation
+      // or extra rounding beyond the fixed seven decimal places.
+      expect(payment.sendMax).toMatch(/^\d+\.\d{7}$/);
+      expect(payment.destAmount).toMatch(/^\d+\.\d{7}$/);
+    },
+    30_000,
+  );
+});
+
+describe("Reviewed conversion submission", () => {
+  it("keeps the copied source identity and spend bound while account reads are pending", async () => {
+    const conversion: Conversion = {
+      source: { ...XLM },
+      sourceMax: 10000000n,
+      usdcAmount: 8000000n,
+      path: [],
+      pathComparison: pathComparison(8100000n),
+    };
+    let release: ((response: Response) => void) | undefined;
+    const first = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const account = {
+      subentry_count: 1,
+      num_sponsoring: 0,
+      num_sponsored: 0,
+      balances: [
+        { asset_type: "native", balance: "100.0000000", selling_liabilities: "0.0000000" },
+        {
+          asset_type: "credit_alphanum4",
+          asset_code: USDC.code,
+          asset_issuer: USDC.issuer,
+          balance: "100.0000000",
+          selling_liabilities: "0.0000000",
+          is_authorized: true,
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockReturnValueOnce(first)
+        .mockImplementation((url: string) =>
+          Promise.resolve(
+            Response.json(
+              url.includes("/accounts/")
+                ? account
+                : {
+                    _embedded: {
+                      records: [
+                        {
+                          base_fee_in_stroops: 100,
+                          base_reserve_in_stroops: 5000000,
+                          sequence: 100,
+                        },
+                      ],
+                    },
+                  },
+            ),
+          ),
+        ),
+    );
+    const network = vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
+      passphrase: "fixture-wrong-network",
+      protocolVersion: "27",
+    });
+    const wallet = vi.fn();
+    try {
+      const submission = submitConversion(TESTNET.reader, conversion, wallet);
+      conversion.sourceMax = 10000000000n;
+      conversion.source.id = "changed-source";
+      if (!release) throw new Error("Missing pending read fixture");
+      release(Response.json(account));
+      await expect(submission).rejects.toThrow("not Stellar Testnet");
+      expect(wallet).not.toHaveBeenCalled();
+    } finally {
+      network.mockRestore();
+    }
+  });
+  it("refuses changed exact spend, output or issuer identity before reading account data or asking the wallet", async () => {
+    const account = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(22)).publicKey();
+    const conversion: Conversion = {
+      source: XLM,
+      sourceMax: 10000000n,
+      usdcAmount: 8000000n,
+      path: [],
+      pathComparison: {
+        returnedPaths: 1,
+        eligiblePaths: 1,
+        selectedOutput: 8100000n,
+        excludedPaths: 0,
+        diagnostics: [],
+        omittedDiagnostics: 0,
+      },
+    };
+    const intent = createReviewedIntentSnapshot({
+      account,
+      asset: XLM,
+      destination: "sepolia",
+      route: 1,
+      recipient: "0x" + "1".repeat(40),
+      amount: conversion.usdcAmount,
+      sourceDebit: conversion.usdcAmount,
+      protocolFee: 30000n,
+      netAmount: 7970000n,
+      representableAmount: 7970000n,
+      adapter: TESTNET.router,
+      minimum: 7970000n,
+      providerBudget: 100n,
+      estimatedProviderBudget: 80n,
+      sourceAmount: conversion.sourceMax,
+      sourceMaximum: conversion.sourceMax,
+      stage: "conversion",
+    });
+    const fetchRead = vi.fn();
+    vi.stubGlobal("fetch", fetchRead);
+    const wallet = vi.fn();
+    for (const change of [
+      { sourceMax: conversion.sourceMax + 1n },
+      { usdcAmount: conversion.usdcAmount - 1n },
+      { source: USDC },
+    ]) {
+      await expect(
+        submitConversion(account, { ...conversion, ...change }, wallet, undefined, undefined, {
+          expectedAccount: account,
+          reviewedIntent: intent,
+        }),
+      ).rejects.toThrow("reviewed conversion intent changed");
+    }
+    expect(fetchRead).not.toHaveBeenCalled();
+    expect(wallet).not.toHaveBeenCalled();
   });
 });
