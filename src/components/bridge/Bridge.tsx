@@ -562,7 +562,7 @@ function PendingTransferCard({
 }: {
   checkpoint: TransferCheckpoint;
   busy: boolean;
-  onReset: () => void;
+  onReset: () => Promise<void>;
 }) {
   const wallet = useStellarWallet();
   const [copied, setCopied] = useState(false);
@@ -922,7 +922,9 @@ function PendingTransferCard({
           ref={actionRef}
           type="button"
           className={styles.secondary}
-          onClick={onReset}
+          onClick={() => {
+            void resetRecovered();
+          }}
           disabled={busy || checking}
         >
           Start another transfer
@@ -1776,9 +1778,7 @@ export function Bridge() {
           key={JSON.stringify([checkpoint, wallet.address])}
           checkpoint={checkpoint}
           busy={busy}
-          onReset={() => {
-            void reset();
-          }}
+          onReset={reset}
         />
       )}
       <section
