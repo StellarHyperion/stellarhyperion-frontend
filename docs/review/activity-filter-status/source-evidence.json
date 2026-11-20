@@ -1,0 +1,33 @@
+{
+  "engine": "chromium",
+  "version": "158.0.8127.18",
+  "sources": {
+    "src/app/transfers/page.tsx": "6c366f385c4a81d97cf11acfebc68df36208e2423ec6c335f4c5b6fc20fd1a80",
+    "src/app/transfers/[txHash]/page.tsx": "e1acf2e2d9b800fe73a83ccb7db6af39fd14d5c374e6c0ffcd978f09edd2b82e",
+    "src/app/transfers/page.module.css": "8a1879c80060f493aa842d4e841d6a22a07553fa3086bbfd92fb6d8b382a125c",
+    "src/app/transfers/[txHash]/page.module.css": "52ccf52be83aab82dcba5eeb36a8a40b046c8e2e479155b5f4cb3500576a8d75",
+    "src/components/transfers/TransferList.tsx": "88ab6c696b1ec0fe1fad21fe0ca83b8ab5ef53402e28c2ab7e9223fa390cbd7b",
+    "src/api/backend.ts": "6662dd4441308e90d35b9645c0b37e44a3bd5361db1e883f8380ca590e146b97",
+    "src/lib/transfer-filters.ts": "050b7250553382bfea0b88228dd9f9376d7ab8019c6144edc20f5c00e80ecde2",
+    "src/app/globals.css": "15024b300b2d45decdc9a3c333fa3c7935d609bc3f7dd9c62664cbbef5fffc21",
+    "src/contracts/stellar.ts": "98e1cc4b6055bf389a8bd21990d64ff5e0260d22e46a929fd362259ff6666a00",
+    "src/wallets/stellar/context.tsx": "9cb9e66e401c615dd52ea05bcbd3186cb7813f05d184080cde88f88c85c5e17c",
+    "src/lib/visibility-poll.ts": "ecffd4396bf8f67f6c7151a70357fc4773bc575c8ebfcb61602c9ec9821949fa",
+    "src/lib/visibility-poll-budget.ts": "9a03e3bd9bef228eef4c9e7a6f75db2632ddf3ed3256d892055d076d731eb1dc"
+  },
+  "checks": [
+    "canonical URL state",
+    "symbol and duplicate rejection",
+    "same nonce distinct deployment rows",
+    "loaded-page-only filters and unfiltered API queries",
+    "pagination and partial coverage",
+    "missing deployment metadata visible",
+    "invalid hash makes zero reads",
+    "confirmed source with unavailable indexer",
+    "404 indexer is unindexed, never definitive source absence",
+    "read-only retry",
+    "synthesized hidden visibility suppresses reads and foreground triggers immediate refresh",
+    "desktop/mobile overflow"
+  ],
+  "fixture": "Complete production history/detail pages, provider, API client and RPC source verifier. Next Link renders an anchor; generated records/envelope/result and read-only transport fixtures. No wallet connection, signing or submission."
+}
