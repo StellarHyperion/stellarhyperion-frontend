@@ -220,16 +220,22 @@ function getApiBaseUrl(): string {
   ).replace(/\/$/, "");
 }
 
-function request<T>(path: string): Promise<T>;
-function request<T>(path: string, notFoundIsNull: true): Promise<T | null>;
-async function request<T>(path: string, notFoundIsNull = false): Promise<T | null> {
+function request<T>(path: string, notFoundIsNull?: false, signal?: AbortSignal): Promise<T>;
+function request<T>(path: string, notFoundIsNull: true, signal?: AbortSignal): Promise<T | null>;
+async function request<T>(
+  path: string,
+  notFoundIsNull = false,
+  signal?: AbortSignal,
+): Promise<T | null> {
   const base = getApiBaseUrl();
   if (!base) throw new Error("Transfer history is unavailable: no indexer is configured.");
   let response: Response;
   try {
     response = await fetch(`${base}${path}`, {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(15_000),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+        : AbortSignal.timeout(15_000),
       cache: "no-store",
     });
   } catch {
@@ -252,19 +258,25 @@ function params(query?: object): string {
   const encoded = values.toString();
   return encoded ? `?${encoded}` : "";
 }
-export async function fetchTransfers(query?: TransfersQuery): Promise<TransfersResponse> {
-  return await request<TransfersResponse>(`/v1/transfers${params(query)}`);
+export async function fetchTransfers(
+  query?: TransfersQuery,
+  signal?: AbortSignal,
+): Promise<TransfersResponse> {
+  return await request<TransfersResponse>(`/v1/transfers${params(query)}`, false, signal);
 }
 export async function fetchClaims(query?: ClaimsQuery): Promise<ClaimsResponse> {
   return await request<ClaimsResponse>(`/v1/claims${params(query)}`);
 }
 
-export async function fetchIndexerMetrics(): Promise<IndexerMetrics> {
-  return await request<IndexerMetrics>("/v1/metrics");
+export async function fetchIndexerMetrics(signal?: AbortSignal): Promise<IndexerMetrics> {
+  return await request<IndexerMetrics>("/v1/metrics", false, signal);
 }
 
-export function fetchTransferByTx(hash: string): Promise<FormattedTransfer | null> {
+export function fetchTransferByTx(
+  hash: string,
+  signal?: AbortSignal,
+): Promise<FormattedTransfer | null> {
   if (!/^[0-9a-f]{64}$/i.test(hash))
     return Promise.reject(new Error("Enter a 64-character Stellar transaction hash."));
-  return request<FormattedTransfer>(`/v1/transfers/by-tx/${hash.toLowerCase()}`, true);
+  return request<FormattedTransfer>(`/v1/transfers/by-tx/${hash.toLowerCase()}`, true, signal);
 }

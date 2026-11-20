@@ -11,6 +11,7 @@ import {
 } from "../../api";
 import { TransferList } from "../../components/transfers";
 import { errorMessage } from "../../contracts";
+import { useVisibilityPoll } from "../../lib/visibility-poll";
 import { ActivityRequestGuard } from "../../lib/activity-request";
 import { useStellarWallet } from "../../wallets";
 import styles from "./page.module.css";
@@ -103,7 +104,6 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   const metrics = current?.metrics ?? null;
   const metricsError = current?.metricsError ?? null;
   const error = current?.error ?? null;
-  const pending = loading || current === null;
   const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
     const readUrl = () => {
@@ -121,23 +121,33 @@ function TransfersPageContent({ address }: { address?: string | null }) {
     };
   }, []);
   useEffect(() => {
-    if (!ready) return;
     const guard = requestGuard.current;
-    guard.setIdentity(address ?? null);
+    guard.setIdentity(scope);
     guard.invalidate();
-    const load = async () => {
+    return () => {
+      guard.invalidate();
+    };
+  }, [scope]);
+  const refreshing = useVisibilityPoll(
+    async (signal) => {
+      if (!ready) return;
+      const guard = requestGuard.current;
       const token = guard.begin();
+      setLoading(true);
       try {
         const [historyResult, metricsResult] = await Promise.allSettled([
-          fetchTransfers({
-            ...(address ? { sender: address } : {}),
-            search,
-            limit: "20",
-            offset: String(offset),
-          }),
-          fetchIndexerMetrics(),
+          fetchTransfers(
+            {
+              ...(address ? { sender: address } : {}),
+              search,
+              limit: "20",
+              offset: String(offset),
+            },
+            signal,
+          ),
+          fetchIndexerMetrics(signal),
         ]);
-        if (!guard.isCurrent(token)) return;
+        if (signal.aborted || !guard.isCurrent(token)) return;
         setSnapshot({
           scope,
           response: historyResult.status === "fulfilled" ? historyResult.value : null,
@@ -147,20 +157,16 @@ function TransfersPageContent({ address }: { address?: string | null }) {
             metricsResult.status === "rejected" ? errorMessage(metricsResult.reason) : null,
         });
       } finally {
-        if (guard.isCurrent(token)) setLoading(false);
+        if (!signal.aborted && guard.isCurrent(token)) setLoading(false);
       }
-    };
-    const delay = setTimeout(() => {
-      setLoading(true);
-      void load();
-    }, 300);
-    const timer = setInterval(() => void load(), 10_000);
-    return () => {
-      guard.invalidate();
-      clearTimeout(delay);
-      clearInterval(timer);
-    };
-  }, [address, offset, search, scope, ready]);
+    },
+    10_000,
+    60_000,
+    scope,
+    300,
+  );
+  const pending = loading || refreshing || current === null;
+
   const updateFilter = (name: "asset" | "deployment", value: string) => {
     if (name === "asset") setAsset(value);
     else setDeployment(value);
@@ -266,6 +272,9 @@ function TransfersPageContent({ address }: { address?: string | null }) {
           No record on this loaded page matches the selected identity. Later pages and incomplete
           history may contain more records.
         </p>
+      )}
+      {refreshing && transfers.length > 0 && (
+        <p role="status">Refreshing indexed history before changing pages...</p>
       )}
       {filterError ? null : pending && transfers.length === 0 ? (
         <p role="status">Loading indexed transfers...</p>
