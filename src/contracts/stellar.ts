@@ -41,6 +41,9 @@ import {
   type ClaimSettlementCheckpoint,
 } from "./claim-checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
+import { compareQuotes, type QuoteDiff } from "../lib/quote-diff";
+
+export type { QuoteDiff } from "../lib/quote-diff";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 import { CapabilityCache } from "../lib/capability-cache";
 import { validateProviderFee } from "../lib/fee-schema";
@@ -1989,6 +1992,18 @@ async function signAndSubmit(
   return { status: "pending", txHash: hash };
 }
 
+/** Raised before signing when a refreshed quote materially changes the reviewed transfer. */
+export class QuoteChangedError extends Error {
+  readonly diff: QuoteDiff;
+  constructor(diff: QuoteDiff) {
+    super(
+      "The refreshed quote differs from the reviewed quote. Review the exact differences before signing.",
+    );
+    this.name = "QuoteChangedError";
+    this.diff = diff;
+  }
+}
+
 export async function submitBridgeOut(
   sender: string,
   quoted: LiveQuote,
@@ -1999,6 +2014,7 @@ export async function submitBridgeOut(
   reconcile?: SubmissionReconciliation,
   simulated?: SimulatedOperation,
   signal?: AbortSignal,
+  onQuoteDiff?: (diff: QuoteDiff) => void,
 ): Promise<TransactionResult> {
   const reviewedQuote: LiveQuote = { ...quoted };
   validateRecipient(recipient);
@@ -2027,7 +2043,14 @@ export async function submitBridgeOut(
     reviewedQuote.requestedAmount,
     reviewedQuote.route,
   );
-  assertReviewedFeeCurrent(reviewedQuote, refreshed);
+  quoteBreakdown(reviewedQuote);
+  quoteBreakdown(refreshed);
+  const diff = compareQuotes(reviewedQuote, refreshed);
+  if (diff.changed) {
+    const requiresReview = diff.materialWorsening;
+    onQuoteDiff?.(diff);
+    if (requiresReview) throw new QuoteChangedError(diff);
+  }
   const balance = await readBalance(sender);
   if (balance < refreshed.grossAmount)
     throw new Error(`Insufficient testnet USDC. Your balance is ${formatUnits(balance, 7)} USDC.`);
