@@ -1,8 +1,12 @@
 "use client";
+import Link from "next/link";
+import { parseLocalTransfers, useLocalTransfers } from "../../lib/local-transfers";
 import { startTransition, useEffect, useRef, useState } from "react";
 import { Column } from "../../components/chrome";
 import {
   fetchIndexerMetrics,
+  reconcileTransfers,
+  type ReconciliationResult,
   fetchTransfers,
   cursorFreshness,
   filterTransfers,
@@ -77,6 +81,11 @@ export default function TransfersPage() {
   return <TransfersPageContent key={address ?? "public"} address={address} />;
 }
 function TransfersPageContent({ address }: { address?: string | null }) {
+  const localRaw = useLocalTransfers();
+  const localReferences = parseLocalTransfers(localRaw).filter(
+    (reference) => reference.checkpoint.account === address,
+  );
+  const localIdentity = JSON.stringify(localReferences);
   const [search, setSearch] = useState("");
   const [asset, setAsset] = useState("");
   const [deployment, setDeployment] = useState("");
@@ -87,16 +96,18 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   const [urlError, setUrlError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [loading, setLoading] = useState(true);
-  const scope = JSON.stringify([address ?? null, search, offset, cursor, retry]);
+  const scope = JSON.stringify([address ?? null, search, offset, cursor, retry, localIdentity]);
   const [snapshot, setSnapshot] = useState<{
     scope: string;
     response: TransfersResponse | null;
+    reconciled: ReconciliationResult[];
     metrics: IndexerMetrics | null;
     metricsError: string | null;
     error: string | null;
   } | null>(null);
   const current = snapshot?.scope === scope ? snapshot : null;
   const response = current?.response ?? null;
+  const reconciled = current?.reconciled ?? [];
   const validated = validateTransferFilters({ asset, deployment });
   const filterError =
     urlError ?? validated.error ?? filterSupportError(response?.transfers ?? [], validated.filters);
@@ -141,7 +152,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
       const token = guard.begin();
       setLoading(true);
       try {
-        const [historyResult, metricsResult] = await Promise.allSettled([
+        const [historyResult, metricsResult, localResult] = await Promise.allSettled([
           fetchTransfers(
             {
               ...(address ? { sender: address } : {}),
@@ -152,11 +163,21 @@ function TransfersPageContent({ address }: { address?: string | null }) {
             signal,
           ),
           fetchIndexerMetrics(signal),
+          address ? reconcileTransfers(address, localReferences, signal) : Promise.resolve([]),
         ]);
         if (signal.aborted || !guard.isCurrent(token)) return;
         setSnapshot({
           scope,
-          response: historyResult.status === "fulfilled" ? historyResult.value : null,
+          response:
+            historyResult.status === "fulfilled"
+              ? {
+                  ...historyResult.value,
+                  transfers: historyResult.value.transfers.filter(
+                    (record) => !address || record.origin.sender === address,
+                  ),
+                }
+              : null,
+          reconciled: localResult.status === "fulfilled" ? localResult.value : [],
           error: historyResult.status === "rejected" ? errorMessage(historyResult.reason) : null,
           metrics: metricsResult.status === "fulfilled" ? metricsResult.value : null,
           metricsError:
@@ -210,6 +231,41 @@ function TransfersPageContent({ address }: { address?: string | null }) {
         Claim numbers appear when a destination router holds funds for recovery. Delivered transfers
         need no claim recovery. Open transfer details to check a claim and its status.
       </p>
+      {localReferences.length > 0 && (
+        <section className={styles.indexerStatus} aria-label="Recent local source references">
+          <h2>Recent local sends</h2>
+          <p>
+            These public source references are retained in this browser. Source confirmation and
+            destination delivery are checked separately.
+          </p>
+          {localReferences.map((reference) => {
+            const result = reconciled.find(
+              (item) => item.reference.checkpoint.txHash === reference.checkpoint.txHash,
+            );
+            return (
+              <article className={styles.localReference} key={reference.checkpoint.txHash}>
+                <Link href={`/transfers/${reference.checkpoint.txHash}`}>
+                  {reference.checkpoint.txHash}
+                </Link>
+                <p>
+                  {reference.sourceStatus === "confirmed"
+                    ? "Source confirmation saved locally."
+                    : reference.sourceStatus === "failed"
+                      ? "Source failure saved locally."
+                      : "Signed source hash; outcome unknown."}
+                </p>
+                <p role="status">
+                  {result?.transfer
+                    ? "Matching indexed reference found. Open details for delivery evidence."
+                    : result?.error
+                      ? `Indexer lookup unavailable: ${result.error} The local source reference is retained.`
+                      : "Not indexed yet. The local source reference is retained."}
+                </p>
+              </article>
+            );
+          })}
+        </section>
+      )}
       {(response !== null || metricsError !== null) && (
         <ActivityCoverage response={response} metrics={metrics} metricsError={metricsError} />
       )}

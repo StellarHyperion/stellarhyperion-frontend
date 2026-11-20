@@ -35,7 +35,7 @@ import {
 import { compareQuotes } from "../src/lib/quote-diff";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
-import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
+import { checkpointMatches, parseCheckpoint, saveCheckpoint } from "../src/contracts/checkpoint";
 
 import { DESTINATIONS, STELLAR_DEPLOYMENT, TESTNET, supportedLanes } from "../src/config/testnet";
 import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
@@ -690,6 +690,46 @@ describe("Signed Stellar submission failure boundaries", () => {
       submitOperation(TESTNET.reader, new Contract(TESTNET.router).call("noop"), sign, progress),
     ).rejects.toMatchObject({ stage: "checkpoint", txHash: undefined });
     expect(send).not.toHaveBeenCalled();
+  });
+  it("rejects a stale checkpoint revision after signing and before actual RPC broadcast", async () => {
+    const { send } = setup();
+    const existing = {
+      router: TESTNET.router,
+      token: TESTNET.token,
+      account: key.publicKey(),
+      recipient: "0x" + "1".repeat(40),
+      destination: "sepolia" as const,
+      route: 1 as const,
+      bridgeAmount: "1000000",
+      stage: "conversion" as const,
+      txHash: "a".repeat(64),
+      schemaVersion: 1 as const,
+      revision: 1,
+    };
+    const latest = { ...existing, revision: 2 };
+    const raw = JSON.stringify(latest);
+    vi.stubGlobal("localStorage", { getItem: () => raw });
+    try {
+      await expect(
+        submitOperation(
+          TESTNET.reader,
+          new Contract(TESTNET.router).call("noop"),
+          sign,
+          undefined,
+          undefined,
+          {
+            expectedAccount: key.publicKey(),
+            onSigned: (hash) => {
+              saveCheckpoint({ ...existing, stage: "bridge", txHash: hash }, existing);
+            },
+          },
+        ),
+      ).rejects.toMatchObject({ stage: "checkpoint", txHash: undefined });
+      expect(send).not.toHaveBeenCalled();
+      expect(localStorage.getItem("hyperion.testnet.pending-transfer")).toBe(raw);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
   it("retains the actual signed hash and broadcast stage for an uncertain network send", async () => {
     const { send } = setup();

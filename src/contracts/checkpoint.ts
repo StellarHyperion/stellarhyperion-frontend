@@ -7,6 +7,10 @@ import { stellarAsset, type SourceAsset } from "./assets";
 export type CheckpointSource = Pick<SourceAsset, "id" | "code" | "issuer">;
 
 export interface TransferCheckpoint {
+  /** Versioned storage format. Legacy records migrate on a successful guarded write. */
+  schemaVersion?: 1;
+  /** Monotonic revision used to reject stale tab writers. */
+  revision?: number;
   router: string;
   token?: string;
   account: string;
@@ -21,6 +25,8 @@ export interface TransferCheckpoint {
 }
 const key = "hyperion.testnet.pending-transfer";
 const event = "hyperion:pending-transfer";
+const revisionKey = `${key}.revision`;
+let memoryRevision = 0;
 let probeGeneration = 0;
 export interface CheckpointStorageDiagnostics {
   readonly available: boolean;
@@ -72,6 +78,8 @@ export function assertCheckpointStorage(): void {
   }
   if (!diagnostics.available)
     throw new Error(`${diagnostics.reason} No transaction will be signed or broadcast.`);
+  const recoveryError = storageRecoveryError();
+  if (recoveryError) throw new Error(recoveryError);
 }
 let memoryCheckpoint: string | null = null;
 let checkpointPersistenceFailed = false;
@@ -116,6 +124,8 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as {
+      schemaVersion?: number;
+      revision?: number;
       router: string;
       token?: string;
       account: string;
@@ -127,6 +137,13 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       txHash: string;
       source?: unknown;
     };
+    if (value.schemaVersion !== undefined && value.schemaVersion !== 1) return null;
+    if (
+      (value.schemaVersion === 1 &&
+        (!Number.isSafeInteger(value.revision) || (value.revision ?? 0) <= 0)) ||
+      (value.schemaVersion === undefined && value.revision !== undefined)
+    )
+      return null;
     if (
       typeof value.router !== "string" ||
       typeof value.account !== "string" ||
@@ -147,8 +164,11 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       return null;
     const source = value.source === undefined ? undefined : checkpointSource(value.source);
     destinationFor(value.destination);
+    const { schemaVersion, revision } = value;
     return {
       router: value.router,
+      ...(schemaVersion === undefined ? {} : { schemaVersion: 1 as const }),
+      ...(revision === undefined ? {} : { revision }),
       token: TESTNET.token,
       account: value.account,
       recipient: value.recipient,
@@ -214,6 +234,7 @@ function checkpointSourceIdentity(source: CheckpointSource | undefined): string 
 export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
   return JSON.stringify([
     checkpoint.router,
+    checkpoint.token ?? TESTNET.token,
     checkpoint.account,
     checkpoint.recipient,
     checkpoint.destination,
@@ -226,10 +247,122 @@ export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
     checkpoint.source?.issuer ?? null,
   ]);
 }
-export function saveCheckpoint(value: TransferCheckpoint | null, expected?: TransferCheckpoint) {
-  const existing = parseCheckpoint(snapshot());
-  if (expected && (!existing || checkpointIdentity(existing) !== checkpointIdentity(expected)))
+let checkpointLockHeld = false;
+
+function storageRecoveryError(): string | null {
+  if (checkpointPersistenceFailed)
+    return "Recovery storage failed. Keep this tab open and retain the signed hash. Restore browser storage before continuing.";
+  let raw: string | null;
+  try {
+    raw = typeof localStorage === "undefined" ? memoryCheckpoint : localStorage.getItem(key);
+  } catch {
+    return "Recovery storage cannot be read. Keep the saved transaction and restore browser storage before signing.";
+  }
+  if (!raw || parseCheckpoint(raw)) return null;
+  try {
+    const record = JSON.parse(raw) as { schemaVersion?: unknown } | null;
+    if (record?.schemaVersion !== undefined && record.schemaVersion !== 1)
+      return "This saved transaction uses an unsupported recovery version. Keep its data and open it with the compatible app before signing another transaction.";
+  } catch {
+    /* Malformed unresolved records must remain intact. */
+  }
+  return "The saved recovery record cannot be safely migrated. Keep its data and resolve the original transaction before signing another.";
+}
+export function useCheckpointStorageError(): string | null {
+  return useSyncExternalStore(subscribe, storageRecoveryError, () => null);
+}
+function announceCheckpoint() {
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new Event(event));
+  }
+}
+
+/** All browser mutations share one Web Lock, including recovery resets. */
+export async function commitCheckpoint(
+  value: TransferCheckpoint | null,
+  expected?: TransferCheckpoint,
+): Promise<TransferCheckpoint | null> {
+  if (typeof window === "undefined") return saveCheckpoint(value, expected);
+  const locks = (navigator as { locks?: LockManager }).locks;
+  if (!locks)
+    throw new Error(
+      "This browser cannot coordinate recovery tabs. Use a supported browser before signing.",
+    );
+  return locks.request("hyperion.testnet.checkpoint-write", () => {
+    checkpointLockHeld = true;
+    try {
+      return saveCheckpoint(value, expected);
+    } finally {
+      checkpointLockHeld = false;
+    }
+  });
+}
+
+export function saveCheckpoint(
+  value: TransferCheckpoint | null,
+  expected?: TransferCheckpoint,
+): TransferCheckpoint | null {
+  if (typeof window !== "undefined" && !checkpointLockHeld)
+    throw new Error(
+      "Recovery changes require the shared browser lock. No transaction was submitted.",
+    );
+  const raw = snapshot();
+  if (checkpointPersistenceFailed && typeof localStorage !== "undefined") {
+    let persisted: string | null;
+    try {
+      persisted = localStorage.getItem(key);
+    } catch {
+      throw new Error("Recovery storage cannot be read. Keep the signed transaction.");
+    }
+    if (persisted && persisted !== memoryCheckpoint)
+      throw new Error(
+        "Recovery storage and the retained signed hash conflict. Keep both records and resolve their outcomes before continuing.",
+      );
+  }
+  const existing = parseCheckpoint(raw);
+  if (raw && !existing)
+    throw new Error(
+      storageRecoveryError() ?? "The saved recovery record cannot be safely migrated.",
+    );
+  if (value && !parseCheckpoint(JSON.stringify(value)))
+    throw new Error("Invalid recovery data. No transaction was submitted.");
+  if (
+    expected &&
+    (!existing ||
+      checkpointIdentity(existing) !== checkpointIdentity(expected) ||
+      (existing.revision ?? 0) !== (expected.revision ?? 0))
+  )
     throw new Error("The pending transaction changed in another tab. Check its current outcome.");
+  if (
+    existing &&
+    !expected &&
+    (!value || checkpointIdentity(value) !== checkpointIdentity(existing))
+  )
+    throw new Error(
+      "A previous transaction remains pending. Read its latest revision before changing it.",
+    );
+  // Progress/account-switch callbacks can repeat the same signed checkpoint safely.
+  if (
+    !checkpointPersistenceFailed &&
+    existing &&
+    value &&
+    checkpointIdentity(value) === checkpointIdentity(existing)
+  )
+    return existing;
+  let committedRevision = memoryRevision;
+  if (typeof localStorage !== "undefined") {
+    const storedRevision = localStorage.getItem(revisionKey);
+    if (storedRevision !== null) {
+      if (!/^\d+$/.test(storedRevision) || !Number.isSafeInteger(Number(storedRevision)))
+        throw new Error(
+          "Recovery revision data is invalid. Keep the original record before continuing.",
+        );
+      committedRevision = Number(storedRevision);
+    } else committedRevision = 0;
+  }
+  const revision = Math.max(committedRevision, existing?.revision ?? 0) + 1;
+  if (!Number.isSafeInteger(revision))
+    throw new Error("Recovery revision exhausted. Keep the original record before continuing.");
   if (
     value &&
     existing &&
@@ -250,13 +383,21 @@ export function saveCheckpoint(value: TransferCheckpoint | null, expected?: Tran
     throw new Error(
       "A previous transaction remains pending. Check its outcome before submitting another.",
     );
-  if (value) memoryCheckpoint = JSON.stringify(value);
+  const next = value
+    ? existing && checkpointIdentity(value) === checkpointIdentity(existing)
+      ? existing
+      : { ...value, schemaVersion: 1 as const, revision }
+    : null;
+  if (next) memoryCheckpoint = JSON.stringify(next);
   try {
     if (typeof window !== "undefined" && typeof localStorage === "undefined")
       throw new Error("Transaction recovery storage is unavailable.");
     if (typeof localStorage !== "undefined") {
-      if (value) {
-        const serialized = JSON.stringify(value);
+      localStorage.setItem(revisionKey, String(revision));
+      if (localStorage.getItem(revisionKey) !== String(revision))
+        throw new Error("Recovery revision did not persist.");
+      if (next) {
+        const serialized = JSON.stringify(next);
         localStorage.setItem(key, serialized);
         if (localStorage.getItem(key) !== serialized)
           throw new Error("Recovery checkpoint did not persist.");
@@ -266,19 +407,16 @@ export function saveCheckpoint(value: TransferCheckpoint | null, expected?: Tran
           throw new Error("Recovery checkpoint was not removed.");
       }
     }
+    memoryRevision = revision;
     checkpointPersistenceFailed = false;
   } catch {
     checkpointPersistenceFailed = true;
+    announceCheckpoint();
     throw new Error("Browser storage is unavailable. The next transaction was not submitted.");
   }
-  if (!value) memoryCheckpoint = null;
-  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-    try {
-      window.dispatchEvent(new Event(event));
-    } catch {
-      /* ignore */
-    }
-  }
+  if (!next) memoryCheckpoint = null;
+  announceCheckpoint();
+  return next;
 }
 export function useTransferCheckpoint(): TransferCheckpoint | null {
   const raw = useSyncExternalStore(subscribe, snapshot, () => null);
@@ -345,6 +483,8 @@ export async function acquireOperationOwnership(
             `Another tab owns this transfer (checkpoint ${current?.id ?? "unavailable"}). Finish or recover it before trying again.`,
           );
         }
+        const recoveryError = storageRecoveryError();
+        if (recoveryError) throw new Error(recoveryError);
         if (getClaimSettlementCheckpoint())
           throw new Error(
             "A signed claim settlement is unresolved. Check it before another transfer.",

@@ -43,7 +43,7 @@ export function EvidenceProofDrawer({ transfer }: { readonly transfer: Formatted
         ["Message / command", proof.commandId],
         ["Execution receipt transaction", proof.executionHash],
         ["Receipt block number", proof.receiptBlock],
-        ["Receipt canonical block hash", proof.receiptBlockHash],
+        ["Receipt block hash", proof.receiptBlockHash],
         ["Token mapping proof block", proof.mappingBlock],
         ["Token mapping block hash", proof.mappingBlockHash],
         ["Payment token", proof.token],

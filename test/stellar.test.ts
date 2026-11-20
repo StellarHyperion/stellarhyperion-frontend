@@ -6,6 +6,8 @@ import {
   releaseOperationOwnership,
   parseCheckpoint,
   saveCheckpoint,
+  commitCheckpoint,
+  getTransferCheckpoint,
   type TransferCheckpoint,
 } from "../src/contracts/checkpoint";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -459,12 +461,12 @@ describe("Real Stellar transaction encoding", () => {
         ...cp1,
         txHash: "2".repeat(64),
       };
-      saveCheckpoint(null);
+      saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
       saveCheckpoint(cp1);
       expect(() => {
         saveCheckpoint(cp2);
       }).toThrow("previous transaction remains pending");
-      saveCheckpoint(null);
+      saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
     });
 
     it("confirms displayed operation matches the exact envelope sent to the wallet", () => {
@@ -538,12 +540,13 @@ describe("Real Stellar transaction encoding", () => {
       expect(() => {
         saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) });
       }).toThrow("previous transaction remains pending");
-      saveCheckpoint(null);
+      vi.unstubAllGlobals();
+      saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
     });
 
     it.each(["unavailable", "discarded"] as const)(
       "retains the signed hash and blocks another transaction when checkpoint storage is %s",
-      (failure) => {
+      async (failure) => {
         const checkpoint: TransferCheckpoint = {
           router: TESTNET.router,
           account: TESTNET.reader,
@@ -555,8 +558,13 @@ describe("Real Stellar transaction encoding", () => {
           txHash: "a".repeat(64),
           source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
         };
-        saveCheckpoint(null);
+        saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
         vi.stubGlobal("window", {});
+        vi.stubGlobal("navigator", {
+          locks: {
+            request: (_name: string, callback: () => unknown) => Promise.resolve().then(callback),
+          },
+        });
         vi.stubGlobal(
           "localStorage",
           failure === "unavailable"
@@ -571,14 +579,15 @@ describe("Real Stellar transaction encoding", () => {
                 },
               },
         );
-        expect(() => {
-          saveCheckpoint(checkpoint);
-        }).toThrow("Browser storage is unavailable");
-        expect(() => {
-          saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) });
-        }).toThrow("previous transaction remains pending");
+        await expect(commitCheckpoint(checkpoint)).rejects.toThrow(
+          "Browser storage is unavailable",
+        );
+        expect(getTransferCheckpoint()?.txHash).toBe(checkpoint.txHash);
+        await expect(commitCheckpoint({ ...checkpoint, txHash: "b".repeat(64) })).rejects.toThrow(
+          "previous transaction remains pending",
+        );
         vi.unstubAllGlobals();
-        saveCheckpoint(null);
+        saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
       },
     );
 
