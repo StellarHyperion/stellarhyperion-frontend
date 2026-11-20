@@ -1,8 +1,10 @@
 import { parseClaimPreview } from "../src/contracts/stellar";
+import { XLM } from "../src/contracts/assets";
 import {
   claimOperationOwnership,
   getOperationOwnership,
   releaseOperationOwnership,
+  parseCheckpoint,
   saveCheckpoint,
   type TransferCheckpoint,
 } from "../src/contracts/checkpoint";
@@ -24,6 +26,7 @@ import {
   settleClaimsOperation,
   supportsBatchClaimSettlement,
   readTransaction,
+  transactionDeadline,
   reconcileSignatureReturn,
   validateReviewMatch,
   validateRecipient,
@@ -41,12 +44,46 @@ const quote: LiveQuote = {
   fee: 30000n,
   netAmount: 9970009n,
   destinationAmount: 9970009n,
+  representableAmount: 9970009n,
   flowAvailable: 10000000000n,
   ledger: 1,
   relayGas: 1051082n,
+  observedAt: "2026-11-18T20:00:00.000Z",
+  scope: {
+    destination: "sepolia",
+    route: 1,
+    adapter: TESTNET.router,
+    ledger: 1,
+  },
 };
 afterEach(() => vi.unstubAllGlobals());
 describe("Real Stellar transaction encoding", () => {
+  it("diagnoses expired envelope bounds before broadcast", () => {
+    const transaction = new TransactionBuilder(new Account(TESTNET.reader, "0"), {
+      fee: "100",
+      networkPassphrase: TESTNET.networkPassphrase,
+    })
+      .addOperation(new Contract(TESTNET.router).call("noop"))
+      .setTimeout(60)
+      .build();
+    const maxTime = Number(transaction.timeBounds?.maxTime ?? 0);
+    const deadline = transactionDeadline(transaction, maxTime + 1);
+    expect(deadline.expired).toBe(true);
+    expect(deadline.remainingSeconds).toBe(0);
+  });
+  it("rejects malformed bounds and identifies envelopes before their valid window", () => {
+    expect(() => transactionDeadline(null)).toThrow(/bounds/);
+    expect(() => transactionDeadline({ timeBounds: { minTime: "-1", maxTime: "60" } })).toThrow(
+      /invalid/,
+    );
+    expect(() => transactionDeadline({ timeBounds: { minTime: "0", maxTime: "0" } })).toThrow(
+      /invalid/,
+    );
+    expect(
+      transactionDeadline({ timeBounds: { minTime: "100", maxTime: "200" } }, 99).notYetValid,
+    ).toBe(true);
+  });
+
   it("only advertises batch settlement when the router exposes its batch entrypoint", () => {
     const method = (
       name: string,
@@ -332,19 +369,62 @@ describe("Real Stellar transaction encoding", () => {
       });
       expect(getOperationOwnership()?.id).toBe(op1.id);
 
-      const op2 = claimOperationOwnership({
+      expect(() =>
+        claimOperationOwnership({
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "2000000",
+          stage: "bridge",
+        }),
+      ).toThrow("Another tab owns this transfer");
+      expect(getOperationOwnership()?.id).toBe(op1.id);
+
+      releaseOperationOwnership(op1.id);
+      expect(getOperationOwnership()).toBeNull();
+    });
+
+    it("rejects a second live tab from replacing the unresolved owner", () => {
+      const first = claimOperationOwnership({
         account: TESTNET.reader,
         recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
         destination: "sepolia",
         route: 1,
-        bridgeAmount: "2000000",
+        bridgeAmount: "1000000",
         stage: "bridge",
+        id: "tab-a",
       });
-      expect(getOperationOwnership()?.id).toBe(op2.id);
-      expect(getOperationOwnership()?.id).not.toBe(op1.id);
+      expect(() =>
+        claimOperationOwnership({
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "2000000",
+          stage: "bridge",
+          id: "tab-b",
+        }),
+      ).toThrow("Another tab owns this transfer");
+      expect(getOperationOwnership()?.id).toBe(first.id);
+      releaseOperationOwnership(first.id);
+    });
 
-      releaseOperationOwnership(op2.id);
-      expect(getOperationOwnership()).toBeNull();
+    it("accepts the browser harness checkpoint", () => {
+      expect(
+        parseCheckpoint(
+          JSON.stringify({
+            router: TESTNET.router,
+            account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+            recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            destination: "sepolia",
+            route: 1,
+            bridgeAmount: "10000000",
+            stage: "bridge",
+            txHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          }),
+        ),
+      ).not.toBeNull();
     });
 
     it("diagnoses matching sequence between constructed intent and ledger state", () => {
@@ -373,6 +453,7 @@ describe("Real Stellar transaction encoding", () => {
         bridgeAmount: "1000000",
         stage: "bridge",
         txHash: "1".repeat(64),
+        source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
       };
       const cp2: TransferCheckpoint = {
         ...cp1,
@@ -442,6 +523,7 @@ describe("Real Stellar transaction encoding", () => {
         bridgeAmount: "1000000",
         stage: "bridge" as const,
         txHash: "a".repeat(64),
+        source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
       };
       vi.stubGlobal("localStorage", {
         getItem: () => null,
@@ -458,6 +540,47 @@ describe("Real Stellar transaction encoding", () => {
       }).toThrow("previous transaction remains pending");
       saveCheckpoint(null);
     });
+
+    it.each(["unavailable", "discarded"] as const)(
+      "retains the signed hash and blocks another transaction when checkpoint storage is %s",
+      (failure) => {
+        const checkpoint: TransferCheckpoint = {
+          router: TESTNET.router,
+          account: TESTNET.reader,
+          recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "1000000",
+          stage: "bridge",
+          txHash: "a".repeat(64),
+          source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
+        };
+        saveCheckpoint(null);
+        vi.stubGlobal("window", {});
+        vi.stubGlobal(
+          "localStorage",
+          failure === "unavailable"
+            ? undefined
+            : {
+                getItem: () => null,
+                setItem: () => {
+                  /* Simulate a browser discarding writes. */
+                },
+                removeItem: () => {
+                  /* No value was retained. */
+                },
+              },
+        );
+        expect(() => {
+          saveCheckpoint(checkpoint);
+        }).toThrow("Browser storage is unavailable");
+        expect(() => {
+          saveCheckpoint({ ...checkpoint, txHash: "b".repeat(64) });
+        }).toThrow("previous transaction remains pending");
+        vi.unstubAllGlobals();
+        saveCheckpoint(null);
+      },
+    );
 
     it("blocks ownership creation before signing when storage is unavailable", () => {
       vi.stubGlobal("localStorage", {
