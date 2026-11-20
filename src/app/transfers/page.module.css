@@ -74,3 +74,14 @@
   font-size: 0.6875rem;
   color: var(--text-secondary);
 }
+
+.identityFilters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--space-4);
+}
+.identityFilters label {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}

@@ -174,19 +174,25 @@ export function filterTransfers(
   transfers: readonly FormattedTransfer[],
   filters: TransferFilters,
 ): readonly FormattedTransfer[] {
-  const asset = filters.asset?.trim().toLowerCase();
-  const deployment = filters.deployment?.trim().toLowerCase();
+  const asset = filters.asset?.trim();
+  const deployment = filters.deployment?.trim();
   return transfers.filter((transfer) => {
     const assetMatches =
       !asset ||
       [transfer.origin.token, transfer.destination.token]
         .filter((value): value is string => Boolean(value))
-        .some((value) => value.toLowerCase() === asset);
+        .some((value) =>
+          /^0x/i.test(value) ? value.toLowerCase() === asset.toLowerCase() : value === asset,
+        );
     const deploymentMatches =
       !deployment ||
       [transfer.origin.router, transfer.origin.revision]
         .filter((value): value is string => Boolean(value))
-        .some((value) => value.toLowerCase() === deployment);
+        .some((value) =>
+          /^0x/i.test(value) || /^[0-9a-f]{64}$/i.test(value)
+            ? value.toLowerCase() === deployment.toLowerCase()
+            : value === deployment,
+        );
     return assetMatches && deploymentMatches;
   });
 }
@@ -258,5 +264,7 @@ export async function fetchIndexerMetrics(): Promise<IndexerMetrics> {
 }
 
 export function fetchTransferByTx(hash: string): Promise<FormattedTransfer | null> {
-  return request<FormattedTransfer>(`/v1/transfers/by-tx/${encodeURIComponent(hash)}`, true);
+  if (!/^[0-9a-f]{64}$/i.test(hash))
+    return Promise.reject(new Error("Enter a 64-character Stellar transaction hash."));
+  return request<FormattedTransfer>(`/v1/transfers/by-tx/${hash.toLowerCase()}`, true);
 }
