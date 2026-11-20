@@ -1,3 +1,5 @@
+import { createFeeCooldown } from "./relay-budget";
+
 export const FEE_WINDOW_MS = 60_000;
 export const FEE_MAX_REQUESTS = 120;
 export const FEE_MAX_IN_FLIGHT = 4;
@@ -38,8 +40,10 @@ export function createFeeRequestGuard(now = Date.now) {
 
 // Next may load routes through separate bundles. Keep one budget for this server process.
 const runtime = globalThis as typeof globalThis & {
+  __hyperionProviderFeeCooldown?: ReturnType<typeof createFeeCooldown>;
   __hyperionFeeRequestGuard?: ReturnType<typeof createFeeRequestGuard>;
 };
+export const providerFeeCooldown = (runtime.__hyperionProviderFeeCooldown ??= createFeeCooldown());
 export const feeRequestGuard = (runtime.__hyperionFeeRequestGuard ??= createFeeRequestGuard());
 
 export function validateFeeRequest(request: Request, allowed: readonly string[]): URL {

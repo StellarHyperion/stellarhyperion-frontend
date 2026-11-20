@@ -283,12 +283,24 @@ export function cachedPublicAssetMetadata(query: string, now = Date.now()): Publ
 }
 export type BridgeRoute = 0 | 1;
 const cctpDestinations = new Set(
-  stellar.activation.cctp.status === "active" && stellar.activation.cctp.acceptance === "delivered"
-    ? stellar.activation.cctp.destinations
+  stellar.activation.cctp.status === "active" &&
+    stellar.activation.cctp.acceptance === "delivered" &&
+    !!stellar.activation.cctp.verifiedAt
+    ? stellar.activation.cctp.transfers
+        .filter(
+          (transfer) =>
+            stellar.activation.cctp.destinations.includes(transfer.destination) &&
+            /^[0-9a-f]{64}$/i.test(transfer.sourceHash) &&
+            /^0x[0-9a-f]{64}$/i.test(transfer.destinationHash),
+        )
+        .map((transfer) => transfer.destination)
     : [],
 );
 const itsDestinations = new Set(
-  stellar.activation.status === "active" && stellar.activation.acceptance === "delivered"
+  stellar.activation.status === "active" &&
+    stellar.activation.acceptance === "delivered" &&
+    /^[0-9a-f]{64}$/i.test(stellar.activation.sourceHash) &&
+    /^0x[0-9a-f]{64}$/i.test(stellar.activation.destinationHash)
     ? [stellar.peerChain]
     : [],
 );
