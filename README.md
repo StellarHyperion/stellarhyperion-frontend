@@ -91,3 +91,13 @@ As of October 29, 2026, `npm audit` reports zero known vulnerabilities after pat
 The layout study used [Jumper](https://jumper.xyz/), [Relay](https://relay.link/bridge) and [Stargate](https://stargate.finance/) as reference points for focused asset selection and progressive route details. Hyperion adds explicit receive-token identity, quote request feedback, review and interruption recovery. Decorative orbital paths provide background motion without implying that funds are moving. One theme button switches between light and dark; all motion honors reduced-motion preferences.
 
 MIT.
+
+## Independent acceptance proof checks
+
+Live ITS and route runners save the public signed source envelope and hash before broadcast, use atomic proof-file replacement and permit one runner per proof. An interrupted lock stays in place for manual inspection. Pending source and conversion hashes cannot be overwritten by a retry.
+
+Acceptance requires matching source account, canonical token contract, route, destination, recipient and exact integer amounts; origin gross, fee and net must agree. A successful destination receipt must match the indexed hash and block and contain the exact token Transfer payment to the recipient. A balance increase or provider reference alone cannot satisfy this check.
+
+Set `HYPERION_LIVE_PROOF=1` to inspect an existing ITS proof without signing. It uses `HYPERION_TESTNET_PROOF` or the same private default proof path as the ITS runner, verifies the public signature and source confirmation, then independently reads the Sepolia receipt. It does not enable the spending suites. Existing proofs without their public signed envelope remain available for manual recovery and cannot pass acceptance automatically.
+
+Deterministic checks cover source-only evidence, wrong chains, recipient or token, missing and inexact amounts, unrelated receipts, interrupted writes, retained hashes and competing proof owners. Application source and dependencies match the fully validated binding-limit head. Its diagnostic browser evidence and the included conversion-recovery evidence are retained under `docs/review/`. Live spending remained disabled during this repair.
