@@ -1,0 +1,23 @@
+{
+  "sources": {
+    "src/app/providers.tsx": "e1d95a4ff5169be0ca0626f8f68f08c9f2d77658fc0be9848cc1e50ccb2b3da1",
+    "src/wallets/provider.tsx": "3f6ec1bf4498277d7709513d3cecf3f8fefb0bdd7c9ba0ea9bdba11a1f528bf2",
+    "src/components/common/Dialog.tsx": "ec7ca654ac1b1aaa7ff049589c834353e042eddf94dde967fa9db66d73b0d327",
+    "src/components/bridge/Bridge.tsx": "781b4a49f28648469bee76f78b035d732ec33ab1ef8fd789590f066f580c91c1",
+    "src/components/bridge/AssetPicker.tsx": "b2b08b4e8511e6fe0525a4aa01977c292ebf0a36780e97d71b100348295f6605",
+    "src/wallets/stellar/context.tsx": "ccbf1ccd54a479b7ea351acbb19fac5065fbf54d3e266e2e6846eec3afaa82f3",
+    "src/wallets/stellar/sdk.ts": "fc63230d8ee4fa7c702bc1c7177d5597b13ea87126ee9025aee8205ca7fde484",
+    "src/config/testnet.ts": "3eb3529e42294eb6ef9c9fbb42443f43a474ac0f2f8bee7b6092c79ac62dc080",
+    "src/components/bridge/AssetPicker.module.css": "5a77d2eb2475747226576c0a5906ebf80826ed46f9cf1e74dfefca222d2ad523",
+    "src/components/bridge/Bridge.module.css": "f4a6694d7ecac4935d075c5bc1c88deac0a5b4c6f3ba36c1b256881ec42f8ac6",
+    "src/app/globals.css": "15024b300b2d45decdc9a3c333fa3c7935d609bc3f7dd9c62664cbbef5fffc21"
+  },
+  "fixture": "Actual complete Bridge/Dialog/picker/provider/SDK. Mock read-only quote/lane/simulation boundaries; execution boundary invokes actual wallet callback, transport rejects approval. Generated unsigned local envelope, mocked Horizon reads. No broadcast.",
+  "browser": "Chromium 158.0.8127.18",
+  "assertions": [
+    "Nested heading focus; forward/backward Tab boundaries exclude hidden/disabled controls; background focus blocked; Escape closes only child; parent opener and close-all context restored.",
+    "Actual wallet picker, source picker and destination picker open/cancel via keyboard with restored opener; actual full Bridge rejects wallet approval and restores enabled Review transfer.",
+    "Desktop 1280x1000/mobile 390x844; no document or review-body horizontal overflow; fee body scroll preserves footer actions.",
+    "Actual Providers renders unavailable state for a synthetic credential-bearing public RPC URL, blocks child action and omits URL values."
+  ]
+}

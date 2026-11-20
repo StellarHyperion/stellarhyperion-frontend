@@ -1,0 +1,50 @@
+{
+  "head": "b3e28b55569311767da398cda757f1c8cbeefa26",
+  "lock_sha256": "01fb86074774817c16d680d8d19443a2a4d5443ab4798c216bd2988b94fa1063",
+  "commands": [
+    {
+      "command": ["npm", "run", "fmt:check"],
+      "exit": 0,
+      "seconds": 4.33
+    },
+    {
+      "command": ["npm", "run", "house"],
+      "exit": 0,
+      "seconds": 0.22
+    },
+    {
+      "command": ["npm", "run", "contrast"],
+      "exit": 0,
+      "seconds": 0.18
+    },
+    {
+      "command": ["npm", "run", "test", "--", "--maxWorkers=1"],
+      "exit": 0,
+      "seconds": 24.64
+    },
+    {
+      "command": [
+        "npm",
+        "run",
+        "lint",
+        "--",
+        "--cache",
+        "--cache-location",
+        "/tmp/hyperion-frontend219-integrated-eslintcache"
+      ],
+      "exit": 0,
+      "seconds": 33.47
+    },
+    {
+      "command": ["npm", "run", "typecheck"],
+      "exit": 0,
+      "seconds": 10.54
+    },
+    {
+      "command": ["npm", "run", "build"],
+      "exit": 0,
+      "seconds": 14.93
+    }
+  ],
+  "complete": true
+}

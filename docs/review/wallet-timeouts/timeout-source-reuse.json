@@ -1,0 +1,17 @@
+{
+  "module": "src/wallets/stellar/timeout.ts",
+  "sha256": "d0e7268a242093c753288955b8819a656a95755a7a5f715dabd9270aba4e9b4b",
+  "scope": "Current cancellation normalization in the timeout helper only; provider/SDK source differs after account-change and compatibility work.",
+  "evidence": [
+    {
+      "engine": "chromium",
+      "version": null,
+      "source_record": "wallet-browser-interruptions/chromium-source-evidence.json"
+    },
+    {
+      "engine": "firefox",
+      "version": null,
+      "source_record": "wallet-browser-interruptions/firefox-source-evidence.json"
+    }
+  ]
+}

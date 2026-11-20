@@ -27,8 +27,16 @@ export interface SourceAsset {
   trustline: TrustlineState;
   balance?: string;
   sellingLiabilities?: string;
+  /**
+   * Spendable balance: balance minus selling liabilities, and, for native XLM, also minus the
+   * account's live minimum reserve (base reserve times its actual subentry/sponsorship count
+   * from Horizon) and a margin for the transaction fees a conversion can incur. Exact stroop
+   * integer arithmetic, formatted to 7 decimals.
+   */
   available?: string;
+  /** Native XLM only: the account's live minimum reserve. Absent when it could not be confirmed. */
   nativeMinimumReserve?: string;
+  nativeFeeMargin?: string;
   metadata?: PublicAssetMetadata;
 }
 export type AssetVerification =
@@ -59,6 +67,12 @@ export const USDC: SourceAsset = {
   trustline: "not-checked",
 };
 export const SLIPPAGE_BPS = 50n;
+const RESERVE_UNAVAILABLE = "Stellar reserve and fee parameters could not be confirmed.";
+/**
+ * Conversion builds up to two operations (an optional `changeTrust` plus the path payment, see
+ * `conversionOperations`). The spendable figure reserves this many base fees against that.
+ */
+const XLM_FEE_MARGIN_OPERATIONS = 2n;
 
 export function isCanonicalUsdc(asset: SourceAsset): boolean {
   return asset.id === USDC.id && asset.code === USDC.code && asset.issuer === USDC.issuer;
@@ -109,7 +123,7 @@ export function suggestSourceSpend(asset: SourceAsset): string {
   return spendableBalance(asset);
 }
 
-export function stellarAsset(asset: SourceAsset): Asset {
+export function stellarAsset(asset: Pick<SourceAsset, "id" | "code" | "issuer">): Asset {
   if (asset.id === "native" && asset.issuer === null && asset.code === "XLM") return Asset.native();
   if (
     !asset.issuer ||
@@ -151,6 +165,8 @@ export function trustlineReservePreview(
     nativeBalance < 0n ||
     sellingLiabilities < 0n ||
     baseReserve <= 0n ||
+    baseReserve > 0xffffffffn ||
+    !Number.isSafeInteger(2 + subentryCount + numSponsoring - numSponsored) ||
     ![subentryCount, numSponsoring, numSponsored].every((v) => Number.isSafeInteger(v) && v >= 0) ||
     2 + subentryCount + numSponsoring - numSponsored < 0
   )
@@ -189,21 +205,18 @@ export async function accountTrustlineReserve(
   );
   if (!native) throw new Error("Invalid Stellar account reserve data.");
   const ledger = records(await horizon("/ledgers?order=desc&limit=1", signal))[0];
-  if (
-    !ledger ||
-    !Number.isSafeInteger(ledger.base_reserve_in_stroops) ||
-    Number(ledger.base_reserve_in_stroops) <= 0
-  )
-    throw new Error("The current Stellar base reserve is unavailable.");
+  const baseReserve = ledgerStroops(ledger?.base_reserve_in_stroops);
+  if (typeof body.num_sponsoring !== "number" || typeof body.num_sponsored !== "number")
+    throw new Error("Invalid Stellar account reserve data.");
   const selling = (native as unknown as Record<string, unknown>).selling_liabilities;
   if (selling !== undefined && typeof selling !== "string")
     throw new Error("Invalid Stellar liabilities.");
   return trustlineReservePreview(
     parseUnits(native.balance, 7),
     body.subentry_count,
-    typeof body.num_sponsoring === "number" ? body.num_sponsoring : 0,
-    typeof body.num_sponsored === "number" ? body.num_sponsored : 0,
-    BigInt(Number(ledger.base_reserve_in_stroops)),
+    body.num_sponsoring,
+    body.num_sponsored,
+    baseReserve,
     selling === undefined ? 0n : parseUnits(selling, 7),
   );
 }
@@ -245,45 +258,163 @@ function records(body: Record<string, unknown>): Record<string, unknown>[] {
   );
 }
 
+interface LedgerReserveParams {
+  baseFee: bigint;
+  baseReserve: bigint;
+}
+function ledgerStroops(value: unknown): bigint {
+  if (!(
+    (typeof value === "number" && Number.isSafeInteger(value) && value > 0) ||
+    (typeof value === "string" && /^[1-9]\d{0,9}$/.test(value))
+  ))
+    throw new Error(RESERVE_UNAVAILABLE);
+  const amount = BigInt(value);
+  if (amount > 0xffffffffn) throw new Error(RESERVE_UNAVAILABLE);
+  return amount;
+}
+/** The network's current base fee and base reserve, read live from the latest ledger. */
+async function ledgerReserveParams(signal?: AbortSignal): Promise<LedgerReserveParams> {
+  const [ledger] = records(await horizon("/ledgers?order=desc&limit=1", signal));
+  return {
+    baseFee: ledgerStroops(ledger?.base_fee_in_stroops),
+    baseReserve: ledgerStroops(ledger?.base_reserve_in_stroops),
+  };
+}
+
+/**
+ * The account's minimum XLM balance: the base reserve times (2 + subentries + sponsoring -
+ * sponsored), per Horizon's account fields. This already scales with however many trustlines,
+ * offers or sponsorships the account actually holds.
+ */
+export function minimumXlmReserve(
+  subentryCount: number,
+  numSponsoring: number,
+  numSponsored: number,
+  baseReserve: bigint,
+): bigint {
+  const entries = 2 + subentryCount + numSponsoring - numSponsored;
+  if (
+    ![subentryCount, numSponsoring, numSponsored].every(
+      (count) => Number.isSafeInteger(count) && count >= 0,
+    ) ||
+    !Number.isSafeInteger(entries) ||
+    entries < 0 ||
+    baseReserve <= 0n ||
+    baseReserve > 0xffffffffn
+  )
+    throw new Error("Invalid Stellar reserve accounting.");
+  return BigInt(entries) * baseReserve;
+}
+
+/** Conservative spendable XLM: balance minus selling liabilities, the reserve and a fee margin. */
+export function spendableXlm(
+  balance: bigint,
+  sellingLiabilities: bigint,
+  reserve: bigint,
+  feeMargin: bigint,
+): bigint {
+  if ([balance, sellingLiabilities, reserve, feeMargin].some((amount) => amount < 0n))
+    throw new Error("Invalid Stellar spendable balance data.");
+  const spendable = balance - sellingLiabilities - reserve - feeMargin;
+  return spendable > 0n ? spendable : 0n;
+}
+
+/**
+ * Whether `native`'s spendable XLM (`available`, already net of its own live reserve) covers an
+ * additional `required` stroops, such as a bridge's relay gas budget. Returns `"unknown"` rather
+ * than assuming safety when the live reserve could not be confirmed from Horizon.
+ */
+export function xlmShortfall(
+  native: SourceAsset | undefined,
+  required: bigint,
+): "ok" | "insufficient" | "unknown" {
+  if (
+    required < 0n ||
+    native?.id !== XLM.id ||
+    native.code !== XLM.code ||
+    native.issuer !== null ||
+    native.nativeMinimumReserve === undefined ||
+    native.nativeFeeMargin === undefined ||
+    native.balance === undefined ||
+    native.available === undefined
+  )
+    return "unknown";
+  try {
+    const balance = parseUnits(native.balance, 7);
+    const liabilities = parseUnits(native.sellingLiabilities ?? "0", 7);
+    const reserve = parseUnits(native.nativeMinimumReserve, 7);
+    const feeMargin = parseUnits(native.nativeFeeMargin, 7);
+    const available = parseUnits(native.available, 7);
+    if ([balance, liabilities, reserve, available].some((amount) => amount < 0n) || feeMargin <= 0n)
+      return "unknown";
+    return balance - liabilities - reserve - feeMargin >= required && available >= required
+      ? "ok"
+      : "insufficient";
+  } catch {
+    return "unknown";
+  }
+}
+
 export async function accountAssets(account: string, signal?: AbortSignal): Promise<SourceAsset[]> {
   if (!StrKey.isValidEd25519PublicKey(account)) throw new Error("Invalid Stellar account.");
   const body = await horizon(`/accounts/${account}`, signal);
   if (!Array.isArray(body.balances)) throw new Error("Invalid Stellar account balances.");
-  let nativeMinimumReserve: bigint | null = null;
-  const counts = [body.subentry_count, body.num_sponsoring, body.num_sponsored];
-  if (
-    counts.every((value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
-  ) {
-    const ledger = records(await horizon("/ledgers?order=desc&limit=1", signal))[0];
-    const base = ledger?.base_reserve_in_stroops;
-    const entries =
-      2 + Number(body.subentry_count) + Number(body.num_sponsoring) - Number(body.num_sponsored);
-    if (
-      Number.isSafeInteger(entries) &&
-      entries >= 0 &&
-      ((typeof base === "number" && Number.isSafeInteger(base) && base > 0) ||
-        (typeof base === "string" && /^[1-9]\d*$/.test(base)))
-    )
-      nativeMinimumReserve = BigInt(entries) * BigInt(base);
-  }
-  return body.balances.flatMap((entry: Record<string, unknown>) => {
+  const subentryCount =
+    typeof body.subentry_count === "number" &&
+    Number.isSafeInteger(body.subentry_count) &&
+    body.subentry_count >= 0
+      ? body.subentry_count
+      : null;
+  const numSponsoring =
+    typeof body.num_sponsoring === "number" &&
+    Number.isSafeInteger(body.num_sponsoring) &&
+    body.num_sponsoring >= 0
+      ? body.num_sponsoring
+      : null;
+  const numSponsored =
+    typeof body.num_sponsored === "number" &&
+    Number.isSafeInteger(body.num_sponsored) &&
+    body.num_sponsored >= 0
+      ? body.num_sponsored
+      : null;
+  const reserve =
+    subentryCount === null || numSponsoring === null || numSponsored === null
+      ? null
+      : await ledgerReserveParams(signal)
+          .then((params) => ({
+            params,
+            minReserve: minimumXlmReserve(
+              subentryCount,
+              numSponsoring,
+              numSponsored,
+              params.baseReserve,
+            ),
+          }))
+          .catch((cause: unknown) => {
+            if (signal?.aborted) throw cause;
+            return null;
+          });
+  return body.balances.flatMap((entry: Record<string, unknown>): SourceAsset[] => {
     if (typeof entry.balance !== "string") return [];
     if (entry.asset_type === "native") {
+      if (entry.selling_liabilities !== undefined && typeof entry.selling_liabilities !== "string")
+        return [{ ...XLM, balance: entry.balance, available: "0.0000000" }];
       const sellingLiabilities =
         typeof entry.selling_liabilities === "string" ? entry.selling_liabilities : "0.0000000";
-      const total = parseUnits(entry.balance, 7);
+      if (!reserve)
+        return [{ ...XLM, balance: entry.balance, sellingLiabilities, available: "0.0000000" }];
+      const balance = parseUnits(entry.balance, 7);
       const liabilities = parseUnits(sellingLiabilities, 7);
-      const afterReserve =
-        nativeMinimumReserve === null ? 0n : total - liabilities - nativeMinimumReserve;
-      const availableUnits = afterReserve > 0n ? afterReserve : 0n;
+      const minReserve = reserve.minReserve;
+      const feeMargin = XLM_FEE_MARGIN_OPERATIONS * reserve.params.baseFee;
+      const availableUnits = spendableXlm(balance, liabilities, minReserve, feeMargin);
       return [
         {
           ...XLM,
-          ...(nativeMinimumReserve === null
-            ? {}
-            : { nativeMinimumReserve: formatSpendableUnits(nativeMinimumReserve) }),
           balance: entry.balance,
           sellingLiabilities,
+          nativeMinimumReserve: formatSpendableUnits(minReserve),
+          nativeFeeMargin: formatSpendableUnits(feeMargin),
           available: formatSpendableUnits(availableUnits),
         },
       ];
@@ -735,20 +866,43 @@ export async function submitConversion(
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
+  const reviewedConversion: Conversion = {
+    ...conversion,
+    source: { ...conversion.source },
+    path: conversion.path.map((asset) => ({ ...asset })),
+  };
+  const intent = reconcile?.reviewedIntent;
+  if (
+    intent &&
+    (intent.network !== TESTNET.networkPassphrase ||
+      intent.router !== TESTNET.router ||
+      intent.token !== TESTNET.token ||
+      intent.account !== sender ||
+      intent.stage !== "conversion" ||
+      intent.asset.id !== reviewedConversion.source.id ||
+      intent.asset.code !== reviewedConversion.source.code ||
+      intent.asset.issuer !== reviewedConversion.source.issuer ||
+      intent.sourceAmount !== reviewedConversion.sourceMax ||
+      intent.sourceMaximum !== reviewedConversion.sourceMax ||
+      intent.amount !== reviewedConversion.usdcAmount)
+  )
+    throw new Error("The reviewed conversion intent changed. Review it again before signing.");
   const assets = await accountAssets(sender);
-  const sourceAsset = assets.find((asset) => asset.id === conversion.source.id);
+  const sourceAsset = assets.find((asset) => asset.id === reviewedConversion.source.id);
   if (!sourceAsset)
-    throw new Error(`Trustline for ${conversion.source.code} not found on your account.`);
+    throw new Error(`Trustline for ${reviewedConversion.source.code} not found on your account.`);
   if (sourceAsset.trustline === "frozen")
-    throw new Error(`Trustline for ${conversion.source.code} is frozen by the issuer.`);
+    throw new Error(`Trustline for ${reviewedConversion.source.code} is frozen by the issuer.`);
   if (sourceAsset.trustline === "unauthorized")
-    throw new Error(`Trustline for ${conversion.source.code} is not authorized by the issuer.`);
+    throw new Error(
+      `Trustline for ${reviewedConversion.source.code} is not authorized by the issuer.`,
+    );
   const spendable = parseUnits(spendableBalance(sourceAsset), 7);
-  if (spendable < conversion.sourceMax)
+  if (spendable < reviewedConversion.sourceMax)
     throw new Error(
       sourceAsset.sellingLiabilities && parseUnits(sourceAsset.sellingLiabilities, 7) > 0n
-        ? `Insufficient available ${conversion.source.code} balance. Selling liabilities reduce your spendable balance to ${spendableBalance(sourceAsset)} ${conversion.source.code}.`
-        : `Insufficient ${conversion.source.code} balance.`,
+        ? `Insufficient available ${reviewedConversion.source.code} balance. Selling liabilities reduce your spendable balance to ${spendableBalance(sourceAsset)} ${reviewedConversion.source.code}.`
+        : `Insufficient ${reviewedConversion.source.code} balance.`,
     );
   const addTrustline = !assets.some((asset) => asset.id === USDC.id);
   // Re-read the reserve right before building the transaction (never trust UI-cached state) and
@@ -756,17 +910,17 @@ export async function submitConversion(
   // account below its minimum balance. This is the one place every caller of submitConversion
   // passes through, so it holds even if a stale quote slipped past the review screen's own check.
   const reserve = await accountTrustlineReserve(sender);
-  const impact = trustlineReserveImpact(reserve, conversion, addTrustline);
+  const impact = trustlineReserveImpact(reserve, reviewedConversion, addTrustline);
   if (impact.projectedSpendable < 0n)
     throw new Error(
       addTrustline
-        ? `Adding the USDC trustline locks ${formatUnits(reserve.trustlineReserve, 7)} XLM in reserve. Your balance cannot cover that reserve, the network fee and this conversion.`
+        ? `Adding the USDC trustline locks ${formatUnits(reserve.trustlineReserve, 7)} XLM in reserve. Your balance cannot cover that reserve, the network fee and this reviewedConversion.`
         : "Your XLM balance cannot cover this conversion and its network fee.",
     );
   return submitClassicOperations(
     sender,
     async () => {
-      const current = await revalidateConversion(conversion);
+      const current = await revalidateConversion(reviewedConversion);
       return conversionOperations(sender, current, addTrustline);
     },
     sign,

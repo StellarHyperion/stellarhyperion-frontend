@@ -1,0 +1,9 @@
+{
+  "current_source_head": "94a8226bd6e6f60ea5fff3430ca5e25e64c38321",
+  "full_validation_head": "01ae2d8cc8edd5c58d15ee60e7d53b72159a930f",
+  "all_seven_commands": "PASS fmt,house,contrast,433tests/four skips,strictlint,types,build",
+  "source_package_lock_unchanged_after_full_validation": true,
+  "original_ancestor": "14adb02af0a154cc3f2c59dd6a5c9e2d849bb71c",
+  "prepared_211_main_ancestor": "afeeec26c2f1797988837de11521d4b89df63716",
+  "current_browser": "PASS actual full Bridge/ClaimRecovery/Providers/provider/SDK; genuine synthetic signed XDR, transport-only mocks, explicit reconciliation, no live broadcast/payment;three current captures inspected."
+}
