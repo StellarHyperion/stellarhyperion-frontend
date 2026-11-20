@@ -4,7 +4,6 @@ import Link from "next/link";
 import {
   ArrowDown,
   ArrowRight,
-  Copy,
   ArrowUpRight,
   ChevronDown,
   LoaderCircle,
@@ -427,7 +426,6 @@ function PendingTransferCard({
   onReset: () => void;
 }) {
   const wallet = useStellarWallet();
-  const [copied, setCopied] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState<
     (CheckpointRecoveryResult & { txHash: string; owner: string }) | null
@@ -672,26 +670,8 @@ function PendingTransferCard({
       <div className={styles.transactionIdentity}>
         <span>Source transaction on Stellar Testnet</span>
         <div className={styles.transactionIdentityValue}>
-          <code className={styles.transactionHash}>{checkpoint.txHash}</code>
-          <button
-            type="button"
-            className={styles.copyHash}
-            aria-label="Copy transaction hash"
-            onClick={() => {
-              void navigator.clipboard
-                .writeText(checkpoint.txHash)
-                .then(() => {
-                  setCopied(true);
-                })
-                .catch(() => {
-                  setCopied(false);
-                });
-            }}
-          >
-            <Copy size={14} aria-hidden="true" />
-          </button>
+          <CopyableAddress value={checkpoint.txHash} label="transaction hash" />
         </div>
-        {copied && <span role="status">Transaction hash copied.</span>}
         <a
           className={styles.transactionLink}
           href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -2137,7 +2117,8 @@ export function ClaimRecovery() {
                 {claims.map((claim) => (
                   <li key={claim.id.toString()}>
                     <p className={styles.address}>
-                      Claim {claim.id.toString()} recipient: {claim.recipient}
+                      Claim {claim.id.toString()} recipient:{" "}
+                      <CopyableAddress value={claim.recipient} label="claim recipient" />
                     </p>
                     <p>
                       Amount:{" "}
@@ -2147,10 +2128,15 @@ export function ClaimRecovery() {
                     </p>
                     <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
                     <p className={styles.address}>
-                      Verified router: {claim.deployment.router} (revision {claim.deployment.commit}
-                      , deployed at ledger {claim.deployment.deployedLedger})
+                      Verified router:{" "}
+                      <CopyableAddress value={claim.deployment.router} label="verified router" />{" "}
+                      (revision {claim.deployment.commit}, deployed at ledger{" "}
+                      {claim.deployment.deployedLedger})
                     </p>
-                    <p className={styles.address}>Router WASM: {claim.deployment.wasmHash}</p>
+                    <p className={styles.address}>
+                      Router WASM:{" "}
+                      <CopyableAddress value={claim.deployment.wasmHash} label="router WASM hash" />
+                    </p>
                     {(claims.length === 1 || batchSupported === false) &&
                       !claim.settled &&
                       claimApproval && (

@@ -224,6 +224,23 @@
     transform: translateY(0);
   }
 }
+.identityDetails {
+  margin-top: 12px;
+  border: 1px solid var(--edge-color);
+  border-radius: 6px;
+  padding: 8px;
+}
+.identityDetails summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.identityList {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
 @media (width <= 40rem) {
   .amountGroup {
     flex-wrap: wrap;

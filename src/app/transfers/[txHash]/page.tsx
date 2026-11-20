@@ -8,6 +8,7 @@ import { STELLAR_DEPLOYMENT } from "../../../config/testnet";
 import { formatTokenAmount, getExplorerUrl } from "../../../lib/format";
 import { hasVerifiedDestinationEvidence } from "../../../lib/evidence";
 import { EvidenceTimeline } from "../../../components/transfers/EvidenceTimeline";
+import { CopyableAddress } from "../../../components/bridge/AssetPicker";
 import { ActivityRequestGuard } from "../../../lib/activity-request";
 import styles from "./page.module.css";
 export default function TransferDetailPage({ params }: { params: Promise<{ txHash: string }> }) {
@@ -59,9 +60,7 @@ export default function TransferDetailPage({ params }: { params: Promise<{ txHas
     <Column>
       <Link href="/transfers">Back to transfer history</Link>
       <h1 className="display">Transaction status</h1>
-      <p className="mono" style={{ overflowWrap: "anywhere" }}>
-        {txHash}
-      </p>
+      <CopyableAddress value={txHash} label="transaction hash" />
       {loading && <p role="status">Checking chain and indexer...</p>}
       {error && <p role="alert">{error}</p>}
       {origin && (

@@ -13,11 +13,21 @@ export function Dialog({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const dialog = ref.current;
-    dialog?.showModal();
+    previousFocus.current = (document.activeElement as HTMLElement | null) ?? null;
+    if (dialog) dialog.showModal();
+    const focusTarget =
+      dialog === null
+        ? null
+        : dialog.querySelector<HTMLElement>(
+            "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+          );
+    focusTarget?.focus();
     return () => {
-      dialog?.close();
+      if (dialog) dialog.close();
+      if (previousFocus.current) previousFocus.current.focus();
     };
   }, []);
   return (
@@ -25,6 +35,7 @@ export function Dialog({
       ref={ref}
       className={styles.dialog}
       aria-label={title}
+      aria-modal="true"
       onCancel={(event) => {
         event.preventDefault();
         onClose();
