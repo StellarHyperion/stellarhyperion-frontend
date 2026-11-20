@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
+import { getClaimSettlementCheckpoint } from "./claim-checkpoint";
 import { TESTNET, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
 import { stellarAsset, type SourceAsset } from "./assets";
 
@@ -284,59 +285,17 @@ export function useTransferCheckpoint(): TransferCheckpoint | null {
   return useMemo(() => parseCheckpoint(raw), [raw]);
 }
 
-export interface ClaimSettlementCheckpoint {
-  router: string;
-  account: string;
-  claimId: string;
-  recipient: string;
-  token: string;
-  amount: string;
-  txHash: string;
-}
-const claimKey = "hyperion.testnet.pending-claim-settlement";
-export function parseClaimSettlementCheckpoint(
-  raw: string | null,
-): ClaimSettlementCheckpoint | null {
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw) as ClaimSettlementCheckpoint;
-    if (
-      value.router !== TESTNET.router ||
-      !StrKey.isValidEd25519PublicKey(value.account) ||
-      !StrKey.isValidEd25519PublicKey(value.recipient) ||
-      !/^\d+$/.test(value.claimId) ||
-      BigInt(value.claimId) <= 0n ||
-      !(StrKey.isValidContract(value.token) || StrKey.isValidEd25519PublicKey(value.token)) ||
-      !/^\d+$/.test(value.amount) ||
-      BigInt(value.amount) <= 0n ||
-      !/^[0-9a-fA-F]{64}$/.test(value.txHash)
-    )
-      return null;
-    return value;
-  } catch {
-    return null;
-  }
-}
-export function getClaimSettlementCheckpoint(): ClaimSettlementCheckpoint | null {
-  try {
-    return parseClaimSettlementCheckpoint(
-      typeof localStorage === "undefined" ? null : localStorage.getItem(claimKey),
-    );
-  } catch {
-    return null;
-  }
-}
-export function saveClaimSettlementCheckpoint(value: ClaimSettlementCheckpoint | null): void {
-  try {
-    if (typeof localStorage === "undefined")
-      throw new Error("Browser storage is unavailable. Settlement was not submitted.");
-    if (value) localStorage.setItem(claimKey, JSON.stringify(value));
-    else localStorage.removeItem(claimKey);
-  } catch (error) {
-    if (value) throw new Error("Browser storage is unavailable. Settlement was not submitted.");
-    if (error instanceof Error && error.message.includes("unavailable")) throw error;
-  }
-}
+export {
+  parseClaimSettlementCheckpoint,
+  getClaimSettlementCheckpoint,
+  saveClaimSettlementCheckpoint,
+  useClaimSettlementCheckpoint,
+  acquireClaimSettlementLease,
+  claimSettlementIdentities,
+  claimSettlementCheckpointIdentity,
+  type ClaimSettlementCheckpoint,
+  type ClaimSettlementIdentity,
+} from "./claim-checkpoint";
 
 export interface OperationOwnership {
   id: string;
@@ -386,6 +345,10 @@ export async function acquireOperationOwnership(
             `Another tab owns this transfer (checkpoint ${current?.id ?? "unavailable"}). Finish or recover it before trying again.`,
           );
         }
+        if (getClaimSettlementCheckpoint())
+          throw new Error(
+            "A signed claim settlement is unresolved. Check it before another transfer.",
+          );
         const checkpoint = getTransferCheckpoint();
         if (checkpoint) {
           throw new Error(
