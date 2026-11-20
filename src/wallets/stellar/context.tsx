@@ -13,6 +13,7 @@ import {
 } from "react";
 import type { StellarWalletContextValue, WalletApprovalProvenance } from "./types";
 import { TESTNET } from "../../config/testnet";
+import { assertWalletNetwork } from "./signature";
 
 import { Dialog } from "../../components/common/Dialog";
 import {
@@ -21,6 +22,7 @@ import {
   createSigningCoordinator,
   isWalletId,
   walletAddress,
+  walletNetwork,
   walletCurrentAddress,
   walletSign,
   walletErrorGuidance,
@@ -85,6 +87,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [pendingSigningRequest, setPendingSigningRequest] = useState<PendingSigningRequest | null>(
     null,
   );
+  // Non-null when a periodic network check detects that the wallet is not on Stellar Testnet.
+  // Signing is blocked while this is set. The message is actionable so the user knows what to fix.
+  const [networkMismatch, setNetworkMismatch] = useState<string | null>(null);
   // Tracks (at most) one outstanding signing request. It can be force-settled from here on
   // disconnect or explicit cancellation, so a vanished wallet extension/popup can never leave
   // this locked forever.
@@ -97,6 +102,42 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   // back the result if the generation has since moved on - so a slow wallet response can
   // never be applied to, or silently resubmitted under, a connection it was not issued for.
   const connectionGeneration = useRef(createGenerationTracker());
+
+  // Poll the wallet's reported network every 4 seconds while connected. This catches a user
+  // switching the wallet to mainnet mid-session before they reach the signing step. The state
+  // is also checked synchronously inside signTransaction so signing is always blocked when the
+  // networks disagree, regardless of poll timing.
+  //
+  // walletNetwork() returns null for wallets that do not expose a network query API (Albedo,
+  // xBull). For those adapters the network is enforced cryptographically at sign time instead.
+  useEffect(() => {
+    if (!walletId || !address) return;
+    const controller = new AbortController();
+    const check = async () => {
+      try {
+        const passphrase = await walletNetwork(walletId, controller.signal);
+        if (controller.signal.aborted) return;
+        if (passphrase !== null && passphrase !== TESTNET.networkPassphrase) {
+          const walletName =
+            STELLAR_WALLETS.find((wallet) => wallet.id === walletId)?.name ?? "Your wallet";
+          setNetworkMismatch(`Switch ${walletName} to Stellar Testnet before signing.`);
+        } else {
+          setNetworkMismatch(null);
+        }
+      } catch {
+        // A transient error does not set a mismatch; the sign-time check is the safety net.
+      }
+    };
+    void check();
+    const timer = setInterval(() => {
+      void check();
+    }, 4_000);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+      setNetworkMismatch(null);
+    };
+  }, [walletId, address]);
 
   useEffect(() => {
     let active = true;
@@ -316,6 +357,15 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
       if (opts?.approval && opts.approval.account !== address)
         throw new Error("The wallet account changed. Review the transaction again.");
+      // Perform a synchronous check of the cached networkMismatch state so that a network
+      // switch that was detected by the poller always blocks signing immediately. For wallets
+      // that do not expose a network query API (Albedo, xBull) also do a live check here so
+      // wrong-network is caught before the wallet prompt is opened.
+      if (networkMismatch) throw new Error(networkMismatch);
+      const livePassphrase = await walletNetwork(walletId);
+      const walletName =
+        STELLAR_WALLETS.find((wallet) => wallet.id === walletId)?.name ?? "Your wallet";
+      assertWalletNetwork(livePassphrase, TESTNET.networkPassphrase, walletName);
       const generation = connectionGeneration.current.value();
       const result = await coordinator.current.run(
         {
@@ -349,8 +399,15 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         );
       return result;
     },
-    [address, walletId, invalidateAccount],
+    [address, walletId, networkMismatch, invalidateAccount],
   );
+
+  const isReady =
+    address !== null &&
+    !isConnecting &&
+    pendingSigningRequest === null &&
+    networkMismatch === null &&
+    error === null;
 
   const value = useMemo(
     () => ({
@@ -360,7 +417,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       isConnected: address !== null,
       isConnecting,
       isSigning: pendingSigningRequest !== null,
+      isReady,
       error,
+      networkMismatch,
       rememberedWallet,
       preferenceError,
       clearRememberedWallet,
@@ -374,7 +433,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       address,
       walletId,
       isConnecting,
+      isReady,
       error,
+      networkMismatch,
       rememberedWallet,
       preferenceError,
       clearRememberedWallet,

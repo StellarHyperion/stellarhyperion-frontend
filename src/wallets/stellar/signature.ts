@@ -13,6 +13,22 @@ export function assertWalletApproval(approval: WalletApprovalProvenance, account
     );
 }
 
+/**
+ * Asserts that the wallet's reported network matches the required Stellar network.
+ *
+ * Throws a clear, actionable error identifying what the user must do to resolve the mismatch.
+ * A null network means the wallet does not expose a network query API (Albedo, xBull), so
+ * verification is deferred to the cryptographic signature check.
+ */
+export function assertWalletNetwork(
+  actualNetwork: string | null,
+  expectedNetwork: string = TESTNET.networkPassphrase,
+  walletName = "Your wallet",
+): void {
+  if (actualNetwork !== null && actualNetwork !== expectedNetwork)
+    throw new Error(`Switch ${walletName} to Stellar Testnet before signing.`);
+}
+
 // Re-exported here, next to the signature check it governs, so a reader of this file sees the
 // conservative-timeout type that applies to a signing response. Defined in "./timeout" (not here)
 // so that importing it never pulls in this file's "@stellar/stellar-sdk" dependency: sdk.ts needs

@@ -1,5 +1,5 @@
 import { TESTNET } from "../../config/testnet";
-import { assertWalletApproval } from "./signature";
+import { assertWalletApproval, assertWalletNetwork } from "./signature";
 import type { WalletApprovalProvenance } from "./types";
 import {
   withTimeout as requestTimeout,
@@ -346,6 +346,71 @@ export async function walletAddress(
   }
 }
 
+/**
+ * Queries the wallet's currently selected network passphrase without requesting a signature.
+ *
+ * Returns the network passphrase string when the wallet can report it, or null when the wallet
+ * does not expose a network query API (Albedo, xBull). A null return does NOT mean the wrong
+ * network is selected; it means the check is deferred to sign time for those adapters.
+ *
+ * Never throws: a failed or timed-out query is treated as unknown (null) so that a transient
+ * extension hiccup does not block the UI while the wallet is otherwise healthy.
+ */
+export async function walletNetwork(
+  id: StellarWalletId,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  try {
+    switch (id) {
+      case "freighter": {
+        const api = await import("@stellar/freighter-api");
+        signal?.throwIfAborted();
+        const result = await withTimeout(
+          api.getNetworkDetails(),
+          WALLET_AVAILABILITY_TIMEOUT_MS,
+          "Freighter did not respond to a network query.",
+          false,
+          signal,
+        );
+        if (result.error) return null;
+        return result.networkPassphrase;
+      }
+      case "lobstr": {
+        const api = await import("@lobstrco/signer-extension-api");
+        signal?.throwIfAborted();
+        // getConnectedWallet returns null when nothing is connected or the extension is absent.
+        const connected = await withTimeout(
+          api.getConnectedWallet(),
+          WALLET_AVAILABILITY_TIMEOUT_MS,
+          "LOBSTR did not respond to a network query.",
+          false,
+          signal,
+        );
+        if (!connected) return null;
+        // LOBSTR reports "stellar" for mainnet. We check for the testnet passphrase at sign
+        // time via cryptographic verification; here we surface a mismatch only when the wallet
+        // explicitly reports a non-Stellar network (e.g. ripple), which can never produce a
+        // valid testnet signature.
+        //
+        // LOBSTR's internal "stellar" network covers both mainnet and testnet accounts; the
+        // passphrase the user chose inside the extension is not exposed through the public API.
+        // So we can only confirm the wallet is on a Stellar network, not which Stellar network.
+        // For LOBSTR, we therefore return the testnet passphrase unconditionally when it reports
+        // "stellar" (or similar), because the actual network-mismatch is enforced by the
+        // cryptographic signature check in verifyWalletSignature.
+        if (String(connected.network) === "ripple") return "Ripple";
+        return TESTNET.networkPassphrase;
+      }
+      // Albedo and xBull do not expose a network query API. Network is validated at sign time.
+      case "albedo":
+      case "xbull":
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
 /** Query an extension account without opening a wallet access prompt. Popup wallets have no silent query. */
 export async function walletCurrentAddress(
   id: StellarWalletId,
@@ -425,8 +490,7 @@ export async function walletSign(
         signal,
       );
       if (network.error) throwWalletError(network.error);
-      if (network.networkPassphrase !== TESTNET.networkPassphrase)
-        throw new Error("Switch Freighter to Stellar Testnet before signing.");
+      assertWalletNetwork(network.networkPassphrase, TESTNET.networkPassphrase, "Freighter");
       signal?.throwIfAborted();
       const result = await withTimeout(
         api.signTransaction(xdr, {
@@ -481,6 +545,9 @@ export async function walletSign(
       const api = await import("@lobstrco/signer-extension-api");
       if ((await walletAddress(id, false, signal)) !== address)
         throw new Error("Your wallet account changed. Connect again.");
+      signal?.throwIfAborted();
+      const networkPassphrase = await walletNetwork(id, signal);
+      assertWalletNetwork(networkPassphrase, TESTNET.networkPassphrase, "LOBSTR");
       signal?.throwIfAborted();
       signed = await withTimeout(
         api.signTransaction(xdr),

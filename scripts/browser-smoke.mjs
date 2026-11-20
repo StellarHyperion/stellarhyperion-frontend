@@ -236,6 +236,77 @@ try {
       `Horizontal overflow on ${route}`,
     );
   }
+  // Verify wallet network change detection and wrong network blocking in browser.
+  const networkPage = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  networkPage.on("pageerror", (error) => errors.push(error.message));
+  await networkPage.addInitScript(() => {
+    window.freighter = true;
+    window.__freighterNetwork = "Public Global Stellar Network ; September 2015";
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if (data && data.source === "FREIGHTER_EXTERNAL_MSG_REQUEST") {
+        if (data.type === "REQUEST_CONNECTION_STATUS") {
+          window.postMessage(
+            {
+              source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
+              messagedId: data.messageId,
+              isConnected: true,
+              data: { isConnected: true },
+            },
+            window.location.origin,
+          );
+        } else if (data.type === "REQUEST_ACCESS" || data.type === "REQUEST_PUBLIC_KEY") {
+          window.postMessage(
+            {
+              source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
+              messagedId: data.messageId,
+              publicKey: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+              address: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+              data: {
+                publicKey: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                address: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+              },
+            },
+            window.location.origin,
+          );
+        } else if (data.type === "REQUEST_NETWORK_DETAILS") {
+          const details = {
+            network: window.__freighterNetwork.includes("Test") ? "TESTNET" : "PUBLIC",
+            networkPassphrase: window.__freighterNetwork,
+            networkUrl: "https://horizon-testnet.stellar.org",
+          };
+          window.postMessage(
+            {
+              source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
+              messagedId: data.messageId,
+              networkDetails: details,
+              ...details,
+              data: {
+                networkDetails: details,
+                ...details,
+              },
+            },
+            window.location.origin,
+          );
+        }
+      }
+    });
+  });
+  await networkPage.goto(origin, { waitUntil: "networkidle" });
+  await networkPage.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
+  await networkPage.getByRole("button", { name: "Freighter" }).click();
+  await networkPage.getByText("(wrong network)").waitFor();
+  await networkPage
+    .getByText("Switch Freighter to Stellar Testnet before signing.")
+    .first()
+    .waitFor();
+  // Switching wallet network to Testnet updates the status and clears the warning.
+  await networkPage.evaluate(() => {
+    window.__freighterNetwork = "Test SDF Network ; September 2015";
+  });
+  await networkPage.getByText("(testnet)").waitFor();
+  await networkPage.close();
+
   // Touch targets and small screens. The dialog body scrolls while its close control and the
   // recovery action stay inside the viewport, long amounts and hashes never overlap the controls
   // beside them, and 320 by 640 CSS pixels stands in for a 640 pixel window at 200 percent zoom.
@@ -339,7 +410,7 @@ try {
     "This read-only smoke check must never submit or broadcast a signed transaction.",
   );
   console.log(
-    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history, mobile layout and no live submission calls.",
+    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, network detection, history, mobile layout and no live submission calls.",
   );
 } finally {
   await browser.close();

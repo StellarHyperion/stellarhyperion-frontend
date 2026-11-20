@@ -1263,6 +1263,20 @@ export function Bridge() {
     destination,
     route,
   ]);
+  // A network change detected mid-review must invalidate the reviewed quote immediately.
+  // The user switched their wallet to a different network while the review dialog was open:
+  // the transaction envelope they would sign is now for the wrong network, so we must close
+  // the review and surface the mismatch error. Never auto-resubmit or preserve a stale review.
+  useEffect(() => {
+    if (!wallet.networkMismatch) return;
+    if (!reviewing && !reviewed) return;
+    queueMicrotask(() => {
+      setReviewing(false);
+      setReviewed(null);
+      setReviewApproval(null);
+      setError(wallet.networkMismatch);
+    });
+  }, [wallet.networkMismatch, reviewing, reviewed]);
   const spendableStr =
     accounts?.account === wallet.address && !accounts.error && walletAsset
       ? spendableBalance(walletAsset)
@@ -1474,6 +1488,16 @@ export function Bridge() {
       (!!reviewed.quote.conversion && !reserve)
     )
       return;
+    // Block signing if the wallet's network disagrees with Stellar Testnet. This can happen when
+    // the user switches their wallet to mainnet between the review and the sign tap. The review
+    // is stale for the wrong network; never auto-resubmit or forward it to the wallet.
+    if (wallet.networkMismatch) {
+      setReviewing(false);
+      setReviewApproval(null);
+      setReviewed(null);
+      setError(wallet.networkMismatch);
+      return;
+    }
     if (reviewApproval?.account !== wallet.address) {
       setReviewing(false);
       setReviewApproval(null);
@@ -2244,16 +2268,26 @@ export function Bridge() {
             {checkpointStorageError}
           </p>
         )}
-        {!error && !wallet.error && quoteError && quoteDiagnostic ? (
+        {!error && !wallet.error && !wallet.networkMismatch && quoteError && quoteDiagnostic ? (
           <div role="alert" className={styles.limitDiagnostic}>
             <strong>{quoteDiagnostic.limitLabel}</strong>
             <span>{quoteDiagnostic.summary}</span>
             <span>{quoteDiagnostic.nextStep}</span>
           </div>
         ) : (
-          (error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
+          (error ??
+            wallet.error ??
+            wallet.networkMismatch ??
+            quoteError ??
+            laneError ??
+            (touched && inputError)) && (
             <p role="alert" className={styles.error}>
-              {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
+              {error ??
+                wallet.error ??
+                wallet.networkMismatch ??
+                quoteError ??
+                laneError ??
+                inputError}
             </p>
           )
         )}
@@ -2396,14 +2430,16 @@ export function Bridge() {
                 activeSource.trustline === "frozen" ||
                 activeSource.trustline === "unauthorized" ||
                 trustlineReserveUnknown ||
-                trustlineReserveInsufficient
+                trustlineReserveInsufficient ||
+                !wallet.isReady
               }
               onClick={() => {
                 if (
                   !runtimeReady ||
                   !wallet.address ||
                   !quote ||
-                  (!quote.conversion && !simulation)
+                  (!quote.conversion && !simulation) ||
+                  !wallet.isReady
                 )
                   return;
                 const intent = makeReviewedIntent(
@@ -2435,11 +2471,13 @@ export function Bridge() {
             >
               {fetching
                 ? "Finding your route..."
-                : simulating
-                  ? "Estimating bridge fees..."
-                  : simulationError
-                    ? "Refresh to retry simulation"
-                    : message("reviewTransfer")}
+                : wallet.networkMismatch
+                  ? "Switch to Stellar Testnet"
+                  : simulating
+                    ? "Estimating bridge fees..."
+                    : simulationError
+                      ? "Refresh to retry simulation"
+                      : message("reviewTransfer")}
               <ArrowRight size={18} aria-hidden="true" />
             </button>
           )
@@ -2538,7 +2576,9 @@ export function Bridge() {
                   !lane?.available ||
                   reviewedReserveInsufficient ||
                   (!!reviewed.quote.conversion && !reserve) ||
-                  (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
+                  (!reviewed.quote.conversion &&
+                    (simulating || !!simulationError || !simulation)) ||
+                  !wallet.isReady
                 }
                 onClick={() => {
                   void submit();
