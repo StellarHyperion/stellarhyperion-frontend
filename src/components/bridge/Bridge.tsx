@@ -30,6 +30,7 @@ import {
 import {
   errorMessage,
   batchClaimSettlementSupport,
+  createReviewedIntentSnapshot,
   getClaims,
   quoteTransfer,
   TRANSACTION_TIMEOUT_SECONDS,
@@ -49,10 +50,12 @@ import {
   type LaneState,
   type LiveQuote,
   type PendingClaim,
+  type ReviewedIntentSnapshot,
   type SimulatedOperation,
   type SubmissionReconciliation,
   type TransactionPhase,
   type TransactionResult,
+  reviewedIntentMatches,
 } from "../../contracts";
 import {
   USDC,
@@ -109,6 +112,38 @@ import styles from "./Bridge.module.css";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
+
+function makeReviewedIntent(
+  account: string,
+  asset: Pick<SourceAsset, "id" | "code" | "issuer">,
+  recipient: string,
+  bridge: LiveQuote,
+  sourceAmount: bigint,
+  sourceMaximum: bigint | null,
+  stage: "conversion" | "bridge",
+  destination: DestinationKey = bridge.destination,
+  route: BridgeRoute = bridge.route,
+): ReviewedIntentSnapshot {
+  return createReviewedIntentSnapshot({
+    account,
+    asset: { id: asset.id, code: asset.code, issuer: asset.issuer },
+    destination,
+    route,
+    recipient: validateRecipient(recipient),
+    amount: bridge.requestedAmount,
+    sourceDebit: bridge.grossAmount,
+    protocolFee: bridge.fee,
+    netAmount: bridge.netAmount,
+    representableAmount: bridge.representableAmount,
+    adapter: bridge.adapter,
+    minimum: bridge.destinationAmount,
+    providerBudget: bridge.relayGas,
+    estimatedProviderBudget: bridge.estimatedRelayGas ?? bridge.relayGas,
+    sourceAmount,
+    sourceMaximum,
+    stage,
+  });
+}
 
 export interface BridgeFormParams {
   amount: string;
@@ -477,6 +512,7 @@ function PendingTransferCard({
   const [cardSimulation, setCardSimulation] = useState<SimulatedOperation | null>(null);
   const [cardSimulating, setCardSimulating] = useState(false);
   const [cardSimError, setCardSimError] = useState<string | null>(null);
+  const [reviewedIntent, setReviewedIntent] = useState<ReviewedIntentSnapshot | null>(null);
   const sameAccount = wallet.address === checkpoint.account;
   const actionRef = useRef<HTMLButtonElement>(null);
   const recoveryMessageRef = useRef<HTMLParagraphElement>(null);
@@ -534,6 +570,7 @@ function PendingTransferCard({
       const result = await resolveCheckpointTransaction(checkpoint, controller.signal);
       if (!active()) return;
       setReview(null);
+      setReviewedIntent(null);
       setCardSimulation(null);
       setChecked({ ...result, txHash: checkpoint.txHash, owner });
       if (result.status === "unknown") {
@@ -554,6 +591,19 @@ function PendingTransferCard({
         );
         if (!active()) return;
         setReview(nextQuote);
+        setReviewedIntent(
+          makeReviewedIntent(
+            checkpoint.account,
+            USDC,
+            checkpoint.recipient,
+            nextQuote,
+            nextQuote.requestedAmount,
+            null,
+            "bridge",
+            checkpoint.destination,
+            checkpoint.route,
+          ),
+        );
         setCardSimulating(true);
         setCardSimError(null);
         try {
@@ -581,6 +631,7 @@ function PendingTransferCard({
   const continueBridge = async () => {
     if (
       !review ||
+      !reviewedIntent ||
       checked?.owner !== recoveryOwner ||
       checked.status !== "confirmed" ||
       !sameAccount ||
@@ -629,8 +680,12 @@ function PendingTransferCard({
         { account: checkpoint.account, network: TESTNET.networkPassphrase, operation: "bridge" },
         {
           expectedAccount: checkpoint.account,
+          reviewedIntent,
           getCurrentAccount: () => currentAccount.current,
           isSuperseded: () => !active(),
+          onSigned: (hash) => {
+            saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
+          },
         },
         cardSimulation,
         controller.signal,
@@ -648,6 +703,7 @@ function PendingTransferCard({
               },
         );
         setReview(null);
+        setReviewedIntent(null);
         setCardSimulation(null);
       }
     } catch (cause) {
@@ -798,6 +854,7 @@ function PendingTransferCard({
           onClose={() => {
             if (!checking) {
               setReview(null);
+              setReviewedIntent(null);
               setCardSimulation(null);
               setCardSimError(null);
             }
@@ -910,6 +967,7 @@ export function Bridge() {
   const [reviewed, setReviewed] = useState<{
     key: string;
     quote: TradeQuote;
+    intent: ReviewedIntentSnapshot;
     addTrustline: boolean;
     simulation: SimulatedOperation | null;
   } | null>(null);
@@ -976,6 +1034,8 @@ export function Bridge() {
     recipient,
     amount,
     sourceId: source.id,
+    sourceCode: source.code,
+    sourceIssuer: source.issuer,
     destination,
     route,
   });
@@ -985,10 +1045,21 @@ export function Bridge() {
       recipient,
       amount,
       sourceId: source.id,
+      sourceCode: source.code,
+      sourceIssuer: source.issuer,
       destination,
       route,
     };
-  }, [wallet.address, recipient, amount, source.id, destination, route]);
+  }, [
+    wallet.address,
+    recipient,
+    amount,
+    source.id,
+    source.code,
+    source.issuer,
+    destination,
+    route,
+  ]);
   const spendableStr =
     accounts?.account === wallet.address && !accounts.error && walletAsset
       ? spendableBalance(walletAsset)
@@ -1100,6 +1171,9 @@ export function Bridge() {
   const invalidateQuote = () => {
     setQuoteVersion((version) => version + 1);
     setQuoted(null);
+    setReviewing(false);
+    setReviewApproval(null);
+    setReviewed(null);
   };
 
   useEffect(() => {
@@ -1188,11 +1262,30 @@ export function Bridge() {
       setError("Your wallet account changed. Review the transfer again.");
       return;
     }
-    if (reviewed.key !== quoteKey) {
+    let intentMatches = false;
+    try {
+      intentMatches = reviewedIntentMatches(
+        reviewed.intent,
+        makeReviewedIntent(
+          wallet.address,
+          source,
+          recipient,
+          reviewed.quote.bridge,
+          parseUnits(amount.trim(), 7),
+          reviewed.quote.conversion?.sourceMax ?? null,
+          reviewed.quote.conversion ? "conversion" : "bridge",
+          destination,
+          route,
+        ),
+      );
+    } catch {
+      intentMatches = false;
+    }
+    if (reviewed.key !== quoteKey || !intentMatches) {
       setReviewing(false);
       setReviewed(null);
       setReviewApproval(null);
-      setError("The conversion route changed. Review the updated path before signing.");
+      setError("The reviewed transfer intent changed. Review the updated path before signing.");
       return;
     }
     const reviewedQuote = reviewed.quote;
@@ -1270,7 +1363,29 @@ export function Bridge() {
         current.route !== initialRoute
       )
         return true;
-      return false;
+      if (!current.account) return true;
+      try {
+        return !reviewedIntentMatches(
+          reviewed.intent,
+          makeReviewedIntent(
+            current.account,
+            {
+              id: current.sourceId,
+              code: current.sourceCode,
+              issuer: current.sourceIssuer,
+            },
+            current.recipient,
+            reviewedQuote.bridge,
+            parseUnits(current.amount.trim(), 7),
+            reviewedQuote.conversion?.sourceMax ?? null,
+            reviewedQuote.conversion ? "conversion" : "bridge",
+            current.destination,
+            current.route,
+          ),
+        );
+      } catch {
+        return true;
+      }
     };
     let converted: TransferCheckpoint | null = null;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
@@ -1291,16 +1406,24 @@ export function Bridge() {
     });
     const conversionReconcile: SubmissionReconciliation = {
       expectedAccount: sender,
+      reviewedIntent: reviewed.intent,
       getCurrentAccount: () => liveReview.current.account ?? null,
       isSuperseded,
+      onSigned: (hash) => {
+        saveCheckpoint(pending("conversion", hash));
+      },
       onAccountSwitch: (hash) => {
         saveCheckpoint(pending("conversion", hash));
       },
     };
     const bridgeReconcile: SubmissionReconciliation = {
       expectedAccount: sender,
+      reviewedIntent: reviewed.intent,
       getCurrentAccount: () => liveReview.current.account ?? null,
       isSuperseded,
+      onSigned: (hash) => {
+        saveCheckpoint(pending("bridge", hash));
+      },
       onAccountSwitch: (hash) => {
         saveCheckpoint(pending("bridge", hash));
       },
@@ -1481,6 +1604,7 @@ export function Bridge() {
                 onClick={() => {
                   if (conservativeMax !== null) {
                     setAmount(formatUnits(conservativeMax, 7));
+                    invalidateQuote();
                     setError(null);
                   }
                 }}
@@ -1889,6 +2013,17 @@ export function Bridge() {
               }
               onClick={() => {
                 if (!wallet.address || !quote || (!quote.conversion && !simulation)) return;
+                const intent = makeReviewedIntent(
+                  wallet.address,
+                  quote.source,
+                  recipient,
+                  quote.bridge,
+                  quote.sourceAmount,
+                  quote.conversion?.sourceMax ?? null,
+                  quote.conversion ? "conversion" : "bridge",
+                  destination,
+                  route,
+                );
                 setReviewApproval({
                   account: wallet.address,
                   network: TESTNET.networkPassphrase,
@@ -1897,6 +2032,7 @@ export function Bridge() {
                 setReviewed({
                   key: quoteKey,
                   quote,
+                  intent,
                   simulation,
                   addTrustline: needsTrustline,
                 });

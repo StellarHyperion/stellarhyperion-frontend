@@ -108,7 +108,7 @@ export interface CheckpointRecoveryResult {
   message: string;
 }
 export interface LiveQuote {
-  route: number;
+  route: BridgeRoute;
   grossAmount: bigint;
   fee: bigint;
   netAmount: bigint;
@@ -1437,8 +1437,166 @@ export interface ReviewSnapshot {
   networkFee?: bigint;
 }
 
+export interface ReviewedIntentSnapshot {
+  readonly network: string;
+  readonly router: string;
+  readonly token: string;
+  readonly account: string;
+  readonly asset: Readonly<{ id: string; code: string; issuer: string | null }>;
+  readonly destination: DestinationKey;
+  readonly route: BridgeRoute;
+  readonly recipient: string;
+  readonly amount: bigint;
+  readonly sourceDebit: bigint;
+  readonly protocolFee: bigint;
+  readonly netAmount: bigint;
+  readonly representableAmount: bigint;
+  readonly adapter: string;
+  readonly minimum: bigint;
+  readonly providerBudget: bigint;
+  readonly estimatedProviderBudget: bigint;
+  readonly sourceAmount: bigint;
+  readonly sourceMaximum: bigint | null;
+  readonly stage: "conversion" | "bridge";
+}
+
+export function createReviewedIntentSnapshot(
+  intent: Omit<ReviewedIntentSnapshot, "network" | "router" | "token">,
+): ReviewedIntentSnapshot {
+  const exactAmounts = [
+    intent.amount,
+    intent.sourceDebit,
+    intent.netAmount,
+    intent.representableAmount,
+    intent.minimum,
+    intent.sourceAmount,
+  ];
+  const budgets = [intent.protocolFee, intent.providerBudget, intent.estimatedProviderBudget];
+  if (
+    !StrKey.isValidEd25519PublicKey(intent.account) ||
+    !StrKey.isValidContract(intent.adapter) ||
+    !supportedLanes(intent.destination).some((lane) => lane.route === intent.route) ||
+    !["bridge", "conversion"].includes(intent.stage) ||
+    exactAmounts.some(
+      (amount) => typeof amount !== "bigint" || amount <= 0n || amount > I128_MAX,
+    ) ||
+    budgets.some((amount) => typeof amount !== "bigint" || amount < 0n || amount > I128_MAX) ||
+    (intent.sourceMaximum !== null &&
+      (typeof intent.sourceMaximum !== "bigint" ||
+        intent.sourceMaximum <= 0n ||
+        intent.sourceMaximum > I128_MAX)) ||
+    (intent.asset.issuer === null
+      ? intent.asset.id !== "native" || intent.asset.code !== "XLM"
+      : !StrKey.isValidEd25519PublicKey(intent.asset.issuer) ||
+        !/^[a-zA-Z0-9]{1,12}$/.test(intent.asset.code) ||
+        intent.asset.id !== `${intent.asset.code}:${intent.asset.issuer}`)
+  )
+    throw new Error("The reviewed transfer intent is invalid.");
+  return Object.freeze({
+    network: TESTNET.networkPassphrase,
+    router: TESTNET.router,
+    token: TESTNET.token,
+    account: intent.account,
+    asset: Object.freeze({
+      id: intent.asset.id,
+      code: intent.asset.code,
+      issuer: intent.asset.issuer,
+    }),
+    destination: intent.destination,
+    route: intent.route,
+    recipient: validateRecipient(intent.recipient),
+    amount: intent.amount,
+    sourceDebit: intent.sourceDebit,
+    protocolFee: intent.protocolFee,
+    netAmount: intent.netAmount,
+    representableAmount: intent.representableAmount,
+    adapter: intent.adapter,
+    minimum: intent.minimum,
+    providerBudget: intent.providerBudget,
+    estimatedProviderBudget: intent.estimatedProviderBudget,
+    sourceAmount: intent.sourceAmount,
+    sourceMaximum: intent.sourceMaximum,
+    stage: intent.stage,
+  });
+}
+
+export function reviewedIntentMatches(
+  original: ReviewedIntentSnapshot,
+  current: ReviewedIntentSnapshot,
+): boolean {
+  return (
+    original.network === current.network &&
+    original.router === current.router &&
+    original.token === current.token &&
+    original.account === current.account &&
+    original.asset.id === current.asset.id &&
+    original.asset.code === current.asset.code &&
+    original.asset.issuer === current.asset.issuer &&
+    original.destination === current.destination &&
+    original.route === current.route &&
+    original.recipient === current.recipient &&
+    original.amount === current.amount &&
+    original.sourceDebit === current.sourceDebit &&
+    original.protocolFee === current.protocolFee &&
+    original.netAmount === current.netAmount &&
+    original.representableAmount === current.representableAmount &&
+    original.adapter === current.adapter &&
+    original.minimum === current.minimum &&
+    original.providerBudget === current.providerBudget &&
+    original.estimatedProviderBudget === current.estimatedProviderBudget &&
+    original.sourceAmount === current.sourceAmount &&
+    original.sourceMaximum === current.sourceMaximum &&
+    original.stage === current.stage
+  );
+}
+
+export function reviewedBridgeMatches(
+  intent: ReviewedIntentSnapshot,
+  current: {
+    account: string;
+    recipient: string;
+    destination: DestinationKey;
+    route: BridgeRoute;
+    amount: bigint;
+    sourceDebit: bigint;
+    protocolFee: bigint;
+    netAmount: bigint;
+    representableAmount: bigint;
+    adapter: string;
+    minimum: bigint;
+    providerBudget: bigint;
+    estimatedProviderBudget: bigint;
+  },
+): boolean {
+  return (
+    intent.network === TESTNET.networkPassphrase &&
+    intent.router === TESTNET.router &&
+    intent.token === TESTNET.token &&
+    intent.stage === "bridge" &&
+    intent.asset.id === `${TESTNET.usdcCode}:${TESTNET.usdcIssuer}` &&
+    intent.asset.code === TESTNET.usdcCode &&
+    intent.asset.issuer === TESTNET.usdcIssuer &&
+    intent.sourceAmount === current.amount &&
+    intent.sourceMaximum === null &&
+    intent.account === current.account &&
+    intent.recipient === current.recipient &&
+    intent.destination === current.destination &&
+    intent.route === current.route &&
+    intent.amount === current.amount &&
+    intent.sourceDebit === current.sourceDebit &&
+    intent.protocolFee === current.protocolFee &&
+    intent.netAmount === current.netAmount &&
+    intent.representableAmount === current.representableAmount &&
+    intent.adapter === current.adapter &&
+    intent.minimum === current.minimum &&
+    intent.providerBudget === current.providerBudget &&
+    intent.estimatedProviderBudget === current.estimatedProviderBudget
+  );
+}
+
 export interface SubmissionReconciliation {
   expectedAccount: string;
+  reviewedIntent?: ReviewedIntentSnapshot;
   getCurrentAccount?: () => string | null;
   isSuperseded?: () => boolean;
   onAccountSwitch?: (
@@ -1760,7 +1918,9 @@ async function signAndSubmit(
   const hash = toHex(prepared.hash()).slice(2);
   await submissionStage("checkpoint", async () => {
     if (reconcile) {
-      if (reconcile.isSuperseded?.()) {
+      const superseded = reconcile.isSuperseded?.() === true;
+      if (reconcile.onSigned) await reconcile.onSigned(hash, signedTransaction);
+      if (superseded) {
         throw new Error(
           "The review was superseded before signing completed. Nothing was submitted.",
         );
@@ -1779,7 +1939,6 @@ async function signAndSubmit(
       if (reconcile.validate) {
         await reconcile.validate(hash, signedTransaction);
       }
-      if (reconcile.onSigned) await reconcile.onSigned(hash, signedTransaction);
     }
     progress?.("submitting", hash);
   });
@@ -1841,19 +2000,40 @@ export async function submitBridgeOut(
   simulated?: SimulatedOperation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
+  const reviewedQuote: LiveQuote = { ...quoted };
   validateRecipient(recipient);
+  const reviewedIntent = reconcile?.reviewedIntent;
+  if (
+    reviewedIntent &&
+    !reviewedBridgeMatches(reviewedIntent, {
+      account: sender,
+      recipient: validateRecipient(recipient),
+      destination: reviewedQuote.destination,
+      route: reviewedQuote.route,
+      amount: reviewedQuote.requestedAmount,
+      sourceDebit: reviewedQuote.grossAmount,
+      protocolFee: reviewedQuote.fee,
+      netAmount: reviewedQuote.netAmount,
+      representableAmount: reviewedQuote.representableAmount,
+      adapter: reviewedQuote.adapter,
+      minimum: reviewedQuote.destinationAmount,
+      providerBudget: reviewedQuote.relayGas,
+      estimatedProviderBudget: reviewedQuote.estimatedRelayGas ?? reviewedQuote.relayGas,
+    })
+  )
+    throw new Error("The reviewed transfer intent changed. Review it again before signing.");
   const refreshed = await quoteTransfer(
-    quoted.destination,
-    quoted.requestedAmount,
-    quoted.route as BridgeRoute,
+    reviewedQuote.destination,
+    reviewedQuote.requestedAmount,
+    reviewedQuote.route,
   );
-  assertReviewedFeeCurrent(quoted, refreshed);
+  assertReviewedFeeCurrent(reviewedQuote, refreshed);
   const balance = await readBalance(sender);
   if (balance < refreshed.grossAmount)
     throw new Error(`Insufficient testnet USDC. Your balance is ${formatUnits(balance, 7)} USDC.`);
   return submitOperation(
     sender,
-    bridgeOperation(sender, quoted, recipient),
+    bridgeOperation(sender, reviewedQuote, recipient),
     sign,
     progress,
     approval,
