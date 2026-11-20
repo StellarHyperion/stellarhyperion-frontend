@@ -189,6 +189,12 @@ try {
   );
   assert.doesNotMatch(await page.locator("body").innerText(), /[\u2013\u2014]/);
   await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
+  await page.getByText("Freighter", { exact: true }).waitFor();
+  await page.getByText("Albedo", { exact: true }).waitFor();
+  for (const walletName of ["Freighter", "Albedo", "xBull", "LOBSTR"])
+    await page.getByRole("dialog").getByText(walletName, { exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
   const pickerDialog = page.getByRole("dialog", { name: "Connect a Stellar wallet" });
   await pickerDialog.waitFor();
   await pickerDialog.getByText("Freighter", { exact: true }).waitFor();
