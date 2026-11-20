@@ -253,7 +253,7 @@ describe("Signed Stellar submission failure boundaries", () => {
       [2n, 11n],
       [2n, -10n],
       [2n, 30n],
-    ])
+    ] as const)
       expect(() => cctpPayoutBreakdown(amount, budget)).toThrow();
   });
   it("encodes the exact displayed CCTP minimum and approved forwarding budget in the router request", () => {
