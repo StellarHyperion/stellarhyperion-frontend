@@ -1,0 +1,34 @@
+.diagnostic {
+  display: grid;
+  gap: var(--space-3);
+  inline-size: min(100% - 2 * var(--space-4), 42rem);
+  margin: var(--space-5) auto;
+  padding: var(--space-4);
+  border: 1px solid var(--edge-color-strong);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic ul {
+  padding-inline-start: var(--space-4);
+  color: var(--text-secondary);
+}
+
+.retry {
+  min-block-size: var(--tap-target);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--edge-color-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.retry:disabled {
+  color: var(--text-secondary);
+  cursor: wait;
+}

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { feeRouteCapabilityResponse } from "../../../lib/runtime-capabilities";
 import { relayBudget } from "../../../lib/relay-budget";
 import {
   feeRequestGuard,
@@ -8,6 +9,10 @@ import {
 } from "../../../lib/fee-request-guard";
 import { validateProviderFee } from "../../../lib/fee-schema";
 // The fee API expects a method in the JSON body. Its /gmp/estimateITSFee path returns help text.
+export function HEAD(): Response {
+  return feeRouteCapabilityResponse("relay");
+}
+
 export async function GET(request: Request) {
   try {
     validateFeeRequest(request, []);

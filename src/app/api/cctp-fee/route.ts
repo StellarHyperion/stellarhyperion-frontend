@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { feeRouteCapabilityResponse } from "../../../lib/runtime-capabilities";
 import { destinationFor } from "../../../config/testnet";
 import { relayBudget } from "../../../lib/relay-budget";
 import {
@@ -8,6 +9,10 @@ import {
   providerFeeCooldown,
 } from "../../../lib/fee-request-guard";
 import { validateProviderFee } from "../../../lib/fee-schema";
+
+export function HEAD(): Response {
+  return feeRouteCapabilityResponse("cctp");
+}
 
 export async function GET(request: Request) {
   let url: URL;

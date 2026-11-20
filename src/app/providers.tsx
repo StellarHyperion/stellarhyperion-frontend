@@ -1,23 +1,58 @@
 "use client";
 
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { WalletProvider } from "../wallets";
-import { detectRuntimeCapabilities } from "../lib/runtime-capabilities";
-import { message } from "../lib/messages";
 import { publicConfigurationAdmission } from "../config/testnet";
+import {
+  detectRuntimeCapabilities,
+  initialRuntimeCapabilities,
+  type RuntimeCapabilities,
+} from "../lib/runtime-capabilities";
+import { RuntimeCapabilitiesProvider } from "../lib/runtime-capabilities-context";
+import { formatMessage, type TranslationCatalog } from "../lib/messages";
+import styles from "./providers.module.css";
 
 export interface ProvidersProps {
   readonly children: ReactNode;
+  readonly translations?: TranslationCatalog;
 }
 
-export function Providers({ children }: ProvidersProps): ReactElement {
-  const [feeRoutes, setFeeRoutes] = useState<boolean | null>(null);
-  useEffect(() => {
-    void detectRuntimeCapabilities().then((value) => {
-      setFeeRoutes(value.feeRoutes);
-    });
-  }, []);
+export function Providers({ children, translations }: ProvidersProps): ReactElement {
+  const [capabilities, setCapabilities] = useState<RuntimeCapabilities>(initialRuntimeCapabilities);
+  const controller = useRef<AbortController | null>(null);
+  const inFlight = useRef(false);
   const admission = publicConfigurationAdmission();
+  useEffect(() => {
+    if (!admission.available) return;
+    const owned = new AbortController();
+    controller.current = owned;
+    inFlight.current = true;
+    void detectRuntimeCapabilities(owned.signal).then((value) => {
+      if (controller.current === owned && !owned.signal.aborted) {
+        setCapabilities(value);
+        inFlight.current = false;
+      }
+    });
+    return () => {
+      owned.abort();
+      controller.current?.abort();
+      controller.current = null;
+      inFlight.current = false;
+    };
+  }, [admission.available]);
+  const refresh = () => {
+    if (inFlight.current || !admission.available || !controller.current) return;
+    const owned = new AbortController();
+    controller.current = owned;
+    inFlight.current = true;
+    setCapabilities(initialRuntimeCapabilities);
+    void detectRuntimeCapabilities(owned.signal).then((value) => {
+      if (controller.current === owned && !owned.signal.aborted) {
+        setCapabilities(value);
+        inFlight.current = false;
+      }
+    });
+  };
   if (!admission.available) {
     return (
       <main role="alert" aria-labelledby="configuration-title">
@@ -31,15 +66,56 @@ export function Providers({ children }: ProvidersProps): ReactElement {
       </main>
     );
   }
+  const states = Object.values(capabilities.routes);
+  const checking = states.includes("checking");
+  const diagnostic = checking
+    ? "runtimeChecking"
+    : states.includes("missing")
+      ? "staticFeeUnavailable"
+      : "runtimeUnknown";
   return (
-    <WalletProvider>
-      {children}
-      {feeRoutes === false && (
-        <p role="status" aria-live="polite">
-          {message("staticFeeUnavailable")} Read-only history remains available where configured.
-        </p>
-      )}
-    </WalletProvider>
+    <RuntimeCapabilitiesProvider
+      value={{ capabilities, refresh }}
+      {...(translations ? { translations } : {})}
+    >
+      <WalletProvider>
+        {children}
+        {states.some((state) => state !== "available") && (
+          <section className={styles.diagnostic} aria-label="Live fee availability">
+            <p role="status">{formatMessage(translations, diagnostic)}</p>
+            <ul>
+              <li>
+                {formatMessage(
+                  translations,
+                  capabilities.routes.relay === "available"
+                    ? "runtimeRouteAvailable"
+                    : "runtimeRouteUnavailable",
+                  { provider: "Axelar ITS" },
+                )}
+              </li>
+              <li>
+                {formatMessage(
+                  translations,
+                  capabilities.routes.cctp === "available"
+                    ? "runtimeRouteAvailable"
+                    : "runtimeRouteUnavailable",
+                  { provider: "Circle CCTP" },
+                )}
+              </li>
+            </ul>
+            <button
+              className={styles.retry}
+              type="button"
+              onClick={refresh}
+              disabled={checking}
+              aria-busy={checking}
+            >
+              {formatMessage(translations, "runtimeRetry")}
+            </button>
+          </section>
+        )}
+      </WalletProvider>
+    </RuntimeCapabilitiesProvider>
   );
 }
 
