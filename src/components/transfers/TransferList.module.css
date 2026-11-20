@@ -166,6 +166,23 @@
   color: var(--text-primary);
 }
 
+.proofDrawer {
+  border-block: 1px solid var(--edge-color);
+  padding-block: var(--space-2);
+}
+
+.proofDrawer summary {
+  cursor: pointer;
+  color: var(--leg-origin);
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+}
+
+.proofDrawer summary:focus-visible {
+  outline: 2px solid var(--leg-origin);
+  outline-offset: 3px;
+}
+
 .amountGroup {
   display: flex;
   align-items: baseline;

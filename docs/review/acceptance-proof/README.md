@@ -1,0 +1,5 @@
+# Acceptance proof verification
+
+The live runner requires genuine signed-source evidence and the exact destination payment receipt. It checks deployed route and token identity, exact integer amounts, recipient, signature and transaction result. Private proof files use an owner lock and atomic monotonic updates; read-only proof verification does not create transfers.
+
+The current proof security repair reads and validates the same opened inode and rejects symlinks, shared-readable files and invalid saved proof shapes. All seven local supported Node22 commands passed at source e9c7957bf34d638ce7d4f71598c9737825794d92: formatting, house, contrast, 373 deterministic tests with four opt-in live skips, strict lint, typecheck and build. Its 23 focused acceptance tests also pass. Preserving integrations retain production source matching fully validated PR208 and its browser evidence. See `validation-reuse.json` for exact evidence sources. Fresh hosted CodeQL and all other current-head gates remain required before merge. No funded live run or destination delivery is claimed.
