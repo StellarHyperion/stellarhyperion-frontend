@@ -2000,6 +2000,7 @@ export async function submitBridgeOut(
   simulated?: SimulatedOperation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
+  const reviewedQuote: LiveQuote = { ...quoted };
   validateRecipient(recipient);
   const reviewedIntent = reconcile?.reviewedIntent;
   if (
@@ -2007,28 +2008,32 @@ export async function submitBridgeOut(
     !reviewedBridgeMatches(reviewedIntent, {
       account: sender,
       recipient: validateRecipient(recipient),
-      destination: quoted.destination,
-      route: quoted.route,
-      amount: quoted.requestedAmount,
-      sourceDebit: quoted.grossAmount,
-      protocolFee: quoted.fee,
-      netAmount: quoted.netAmount,
-      representableAmount: quoted.representableAmount,
-      adapter: quoted.adapter,
-      minimum: quoted.destinationAmount,
-      providerBudget: quoted.relayGas,
-      estimatedProviderBudget: quoted.estimatedRelayGas ?? quoted.relayGas,
+      destination: reviewedQuote.destination,
+      route: reviewedQuote.route,
+      amount: reviewedQuote.requestedAmount,
+      sourceDebit: reviewedQuote.grossAmount,
+      protocolFee: reviewedQuote.fee,
+      netAmount: reviewedQuote.netAmount,
+      representableAmount: reviewedQuote.representableAmount,
+      adapter: reviewedQuote.adapter,
+      minimum: reviewedQuote.destinationAmount,
+      providerBudget: reviewedQuote.relayGas,
+      estimatedProviderBudget: reviewedQuote.estimatedRelayGas ?? reviewedQuote.relayGas,
     })
   )
     throw new Error("The reviewed transfer intent changed. Review it again before signing.");
-  const refreshed = await quoteTransfer(quoted.destination, quoted.requestedAmount, quoted.route);
-  assertReviewedFeeCurrent(quoted, refreshed);
+  const refreshed = await quoteTransfer(
+    reviewedQuote.destination,
+    reviewedQuote.requestedAmount,
+    reviewedQuote.route,
+  );
+  assertReviewedFeeCurrent(reviewedQuote, refreshed);
   const balance = await readBalance(sender);
   if (balance < refreshed.grossAmount)
     throw new Error(`Insufficient testnet USDC. Your balance is ${formatUnits(balance, 7)} USDC.`);
   return submitOperation(
     sender,
-    bridgeOperation(sender, quoted, recipient),
+    bridgeOperation(sender, reviewedQuote, recipient),
     sign,
     progress,
     approval,
