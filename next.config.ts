@@ -10,6 +10,8 @@ const nextConfig: NextConfig = {
   agentRules: false,
   // Budget attribution uses the modules in the emitted, mangled client chunks.
   productionBrowserSourceMaps: true,
+  // Keep cached clients on a consistent deployment revision during rolling updates.
+  deploymentId: stellarDeployment.commit,
   // The protocol tarball is installed inside this package.
   turbopack: { root: import.meta.dirname },
 };
