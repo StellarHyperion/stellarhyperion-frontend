@@ -54,18 +54,6 @@ export async function GET(request: Request) {
       { status: 429, headers: { "Retry-After": String(cooldown), "Cache-Control": "no-store" } },
     );
   }
-  const cooldown = providerFeeCooldown.remaining("cctp");
-  if (cooldown > 0) {
-    admission.release();
-    return NextResponse.json(
-      {
-        error: "Live provider pricing is cooling down. No transfer can be prepared.",
-        code: "RATE_LIMITED",
-        retryAfter: cooldown,
-      },
-      { status: 429, headers: { "Retry-After": String(cooldown), "Cache-Control": "no-store" } },
-    );
-  }
   try {
     const response = await fetch(
       `https://iris-api-sandbox.circle.com/v2/burn/USDC/fees/27/${destination.cctpDomain}?forward=true`,

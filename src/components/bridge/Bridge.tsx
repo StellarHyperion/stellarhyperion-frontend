@@ -299,7 +299,7 @@ function QuoteDetails({
         <dd>{formatUnits(breakdown.retainedDust, 7)} USDC</dd>
       </div>
       <div>
-        <dt>{quote.route === 0 ? "Circle forwarding budget" : "Axelar gas estimate"}</dt>
+        <dt>{quote.route === 0 ? "Circle forwarding estimate" : "Axelar gas estimate"}</dt>
         <dd>
           {formatUnits(quote.estimatedRelayGas ?? quote.relayGas, 7)}{" "}
           {quote.route === 0 ? "USDC" : "XLM"}
@@ -369,7 +369,7 @@ function QuoteDetails({
       </div>
       <div>
         <dt>Refund disclosure</dt>
-        <dd>{quote.route === 0 ? "Provider-dependent" : "Not guaranteed"}</dd>
+        <dd>{quote.route === 0 ? "Provider-dependent" : "Provider-dependent; not guaranteed"}</dd>
       </div>
       <div>
         <dt>Provider observation</dt>
@@ -1816,7 +1816,7 @@ export function Bridge() {
                 {quote ? (
                   formatUnits(quote.bridge.destinationAmount, destinationDecimals(route))
                 ) : (
-                  <span className={styles.emptyAmount}>0.00</span>
+                  <span className={styles.emptyAmount}>{quoteError ? "Unavailable" : "0.00"}</span>
                 )}
               </output>
             )}

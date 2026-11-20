@@ -14,7 +14,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build && npm run bundle:check",
+    "build": "next build --turbopack --analyze && npm run bundle:check",
     "start": "next start",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
