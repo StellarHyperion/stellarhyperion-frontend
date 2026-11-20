@@ -252,6 +252,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
           <p role="alert">{error}</p>
           <button
             type="button"
+            className={styles.readAction}
             onClick={() => {
               setRetry((value) => value + 1);
             }}
