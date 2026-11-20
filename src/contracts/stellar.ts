@@ -28,11 +28,18 @@ import {
   CIRCLE_STELLAR,
   destinationFor,
   destinationDecimals,
+  supportedLanes,
   deploymentIdentityMismatch,
   type BridgeRoute,
   type DestinationKey,
+  type SupportedLane,
 } from "../config/testnet";
 import type { TransferCheckpoint } from "./checkpoint";
+import {
+  claimSettlementIdentities,
+  parseClaimSettlementCheckpoint,
+  type ClaimSettlementCheckpoint,
+} from "./claim-checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 import { validateProviderFee } from "../lib/fee-schema";
@@ -324,6 +331,143 @@ async function claimPayoutEligibility(id: bigint, token: string): Promise<ClaimP
       trustline: "unknown",
     };
   }
+}
+
+/** The coarse family a binding limit falls into, used to pick an actionable next step. */
+export type LimitKind =
+  "flow" | "liquidity" | "routeMax" | "paused" | "disabled" | "input" | "other";
+
+/**
+ * Which specific limit blocked a requested transfer, its current value when the router reports
+ * one exactly, and what to actually do about it. Built from the same quote the router returns
+ * before anybody signs, never from a guess at what a contract might be configured with.
+ */
+export interface FlowLimitDiagnostic {
+  /** The Hyperion error name the router attached to this quote, when this build recognizes it. */
+  code: string | null;
+  kind: LimitKind;
+  /** The specific limit that is binding, named for display (e.g. "Axelar ITS flow window to Sepolia"). */
+  limitLabel: string;
+  /** A sentence naming the limit and, where known exactly, its current value. */
+  summary: string;
+  /** The exact amount still available under this limit right now, when the router reports one. */
+  available: bigint | null;
+  /** The amount that was requested and blocked. */
+  requested: bigint;
+  /** A concrete next step: an amount to try, a lane to switch to, or a reason to wait. */
+  nextStep: string;
+  /** Whether the same request could succeed later without any change. */
+  retryable: boolean;
+  /** Other lanes this testnet deployment actually carries to the same destination. */
+  alternateLanes: readonly SupportedLane[];
+}
+
+/** Raised when a live quote reports the transfer is blocked by a specific, binding limit. */
+export class TransferLimitError extends Error {
+  readonly diagnostic: FlowLimitDiagnostic;
+  constructor(diagnostic: FlowLimitDiagnostic) {
+    super(`${diagnostic.summary} ${diagnostic.nextStep}`.trim());
+    this.name = "TransferLimitError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+/**
+ * Turn a blocked `quote_routes` result into a diagnostic naming the binding limit, its exact
+ * value where the contract reports one, and an actionable next step. Pure and offline: it never
+ * queries the chain, so it can be exercised directly against any reason code a router could
+ * return.
+ */
+export function describeBindingLimit(
+  reasonCode: unknown,
+  requested: bigint,
+  flowAvailable: bigint | null,
+  destinationKey: DestinationKey,
+  route: BridgeRoute,
+): FlowLimitDiagnostic {
+  const destination = destinationFor(destinationKey);
+  const laneLabel = route === 0 ? "Circle CCTP" : "Axelar ITS";
+  const alternateLanes = supportedLanes(destinationKey).filter((lane) => lane.route !== route);
+  const laneSuggestion = alternateLanes.length
+    ? ` ${destination.name} also supports ${alternateLanes.map((lane) => lane.provider).join(" and ")} on this deployment; you can switch routes and try that lane instead.`
+    : "";
+  const candidate = typeof reasonCode === "bigint" ? reasonCode.toString() : reasonCode;
+  const parsedCode =
+    typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string" && /^\d{1,10}$/.test(candidate)
+        ? Number(candidate)
+        : NaN;
+  const name =
+    Number.isSafeInteger(parsedCode) && parsedCode >= 0 && parsedCode <= 0xffffffff
+      ? sorobanErrorName(parsedCode)
+      : null;
+  const help = name ? describeError(name) : null;
+  if (name === "FlowLimitExceeded") {
+    if (flowAvailable === null || flowAvailable < 0n || flowAvailable > I128_MAX)
+      return {
+        code: name,
+        kind: "flow",
+        limitLabel: `${laneLabel} flow window to ${destination.name}`,
+        summary: `The ${laneLabel} flow limit blocked ${formatUnits(requested, 7)} USDC. Current capacity is unavailable.`,
+        available: null,
+        requested,
+        nextStep: `Refresh the quote to check current capacity.${laneSuggestion}`,
+        retryable: true,
+        alternateLanes,
+      };
+    return {
+      code: name,
+      kind: "flow",
+      limitLabel: `${laneLabel} flow window to ${destination.name}`,
+      summary: `The ${laneLabel} lane to ${destination.name} has ${formatUnits(flowAvailable, 7)} USDC left in its current flow window, short of the ${formatUnits(requested, 7)} USDC requested.`,
+      available: flowAvailable,
+      requested,
+      nextStep:
+        flowAvailable > 0n
+          ? `Reduce the amount to ${formatUnits(flowAvailable, 7)} USDC or less, or wait for the window to roll forward and try again.${laneSuggestion}`
+          : `This window is fully used right now. Wait for it to roll forward and try again.${laneSuggestion}`,
+      retryable: true,
+      alternateLanes,
+    };
+  }
+  const kind: LimitKind =
+    name === "InsufficientLiquidity"
+      ? "liquidity"
+      : name === "ExceedsRouteLimit"
+        ? "routeMax"
+        : name === "Paused" || name === "RouteDisabled"
+          ? "paused"
+          : name === "TokenNotRegistered" || name === "TokenNotMapped"
+            ? "disabled"
+            : name === "InvalidAmount" || name === "AmountNotRepresentable"
+              ? "input"
+              : "other";
+  const nextStep =
+    kind === "liquidity"
+      ? `Try a smaller amount, or wait for liquidity on this lane to recover.${laneSuggestion}`
+      : kind === "routeMax"
+        ? `This exceeds the maximum single transfer this route allows. Split it into smaller transfers.${laneSuggestion}`
+        : kind === "paused"
+          ? `The operator must resume this lane before it can be used. Refresh its status before trying again.${laneSuggestion}`
+          : kind === "disabled"
+            ? `This asset or route is not enabled in the current configuration. Wait for a verified configuration change before trying this lane.${laneSuggestion}`
+            : kind === "input"
+              ? "Adjust the requested amount and try again."
+              : help?.retryable
+                ? `Try again shortly.${laneSuggestion}`
+                : `Review the amount or destination and try again.${laneSuggestion}`;
+  return {
+    code: name,
+    kind,
+    limitLabel: name ?? "Unrecognized limit",
+    summary: help ? `${name}: ${help.summary}` : "The router declined this amount.",
+    available: null,
+    requested,
+    nextStep,
+    retryable: help?.retryable ?? false,
+    alternateLanes,
+  };
 }
 
 function server() {
@@ -732,9 +876,26 @@ export async function quoteTransfer(
   const quote = response.value.map(object).find((q) => q.route === route);
   if (!quote) throw new Error("The router did not quote this bridge.");
   if (quote.available !== true) {
-    const name = sorobanErrorName(Number(quote.reason));
-    throw new Error(
-      name ? `${name}: ${describeError(name).summary}` : "The router declined this amount.",
+    throw new TransferLimitError(
+      describeBindingLimit(
+        quote.reason,
+        amount,
+        typeof quote.flow_available === "bigint" &&
+          quote.flow_available >= 0n &&
+          quote.flow_available <= I128_MAX
+          ? quote.flow_available
+          : typeof quote.flow_available === "number" &&
+              Number.isSafeInteger(quote.flow_available) &&
+              quote.flow_available >= 0
+            ? BigInt(quote.flow_available)
+            : typeof quote.flow_available === "string" &&
+                /^\d{1,39}$/.test(quote.flow_available) &&
+                BigInt(quote.flow_available) <= I128_MAX
+              ? BigInt(quote.flow_available)
+              : null,
+        destinationKey,
+        route,
+      ),
     );
   }
   const feeResponse = await readWithRetry(async () => {
@@ -977,6 +1138,9 @@ function matchesConversion(checkpoint: TransferCheckpoint, operations: ParsedOpe
     payment?.type === "pathPaymentStrictReceive" &&
     (!payment.source || payment.source === checkpoint.account) &&
     payment.destination === checkpoint.account &&
+    (!checkpoint.source ||
+      (payment.sendAsset.getCode() === checkpoint.source.code &&
+        (payment.sendAsset.getIssuer() ?? null) === checkpoint.source.issuer)) &&
     payment.destAsset.getCode() === TESTNET.usdcCode &&
     payment.destAsset.getIssuer() === TESTNET.usdcIssuer &&
     parseUnits(payment.destAmount, 7) === BigInt(checkpoint.bridgeAmount)
@@ -1273,6 +1437,8 @@ export interface SubmissionReconciliation {
     signedTx: Transaction | FeeBumpTransaction,
   ) => void | Promise<void>;
   validate?: (hash: string, signedTx: Transaction | FeeBumpTransaction) => void | Promise<void>;
+  /** Runs after signing but before broadcast. Throw to block a broadcast that cannot be checkpointed. */
+  onSigned?: (hash: string, signedTx: Transaction | FeeBumpTransaction) => void | Promise<void>;
 }
 
 export function validateReviewMatch(original: ReviewSnapshot, current: ReviewSnapshot): boolean {
@@ -1604,6 +1770,7 @@ async function signAndSubmit(
       if (reconcile.validate) {
         await reconcile.validate(hash, signedTransaction);
       }
+      if (reconcile.onSigned) await reconcile.onSigned(hash, signedTransaction);
     }
     progress?.("submitting", hash);
   });
@@ -1745,6 +1912,98 @@ export function settleClaimsOperation(sender: string, ids: readonly bigint[]) {
   );
 }
 
+/** Read-only reconciliation requires the saved settlement call and every original claim identity. */
+export async function resolveClaimSettlementCheckpoint(
+  checkpoint: ClaimSettlementCheckpoint,
+  signal?: AbortSignal,
+): Promise<CheckpointRecoveryResult> {
+  const unknown = (message: string) =>
+    unknownRecovery(message + " The saved settlement is unchanged.");
+  if (!parseClaimSettlementCheckpoint(JSON.stringify(checkpoint)))
+    return unknown("The saved claim identity is invalid.");
+  try {
+    const evidence = await collectTransactionEvidence(checkpoint.txHash, signal);
+    const final = evidence.results.filter((result) => result.transaction.status !== "pending");
+    if (evidence.invalid || !evidence.agreed || final.length === 0)
+      return unknown("Settlement execution has not been independently established.");
+    const identities = claimSettlementIdentities(checkpoint);
+    const firstIdentity = identities[0];
+    if (!firstIdentity) return unknown("No claim identity is available.");
+    const operation =
+      identities.length === 1
+        ? new Contract(checkpoint.router).call(
+            "settle_claim",
+            new Address(checkpoint.account).toScVal(),
+            nativeToScVal(BigInt(firstIdentity.claimId), { type: "u64" }),
+          )
+        : settleClaimsOperation(
+            checkpoint.account,
+            identities.map((claim) => BigInt(claim.claimId)),
+          );
+    for (const item of final) {
+      if (item.response.status === rpc.Api.GetTransactionStatus.NOT_FOUND)
+        return unknown("Settlement history is incomplete.");
+      const transaction = TransactionBuilder.fromXdr(
+        item.response.envelopeXdr.toXdr("base64"),
+        TESTNET.networkPassphrase,
+      );
+      if (
+        "innerTransaction" in transaction ||
+        transaction.source !== checkpoint.account ||
+        transaction.signatures.length === 0 ||
+        !validateEnvelopeOperation(operation, transaction)
+      )
+        return unknown("The source transaction does not match this settlement.");
+      if (item.transaction.status === "confirmed") {
+        const result = item.response.resultXdr.result;
+        if (result.type !== "txSuccess" || result.results.length !== 1)
+          return unknown("Settlement execution results are incomplete.");
+        const executed = result.results[0];
+        if (
+          executed?.type !== "opInner" ||
+          executed.tr.type !== "invokeHostFunction" ||
+          executed.tr.invokeHostFunctionResult.type !== "invokeHostFunctionSuccess"
+        )
+          return unknown("The settlement call did not execute successfully.");
+      }
+    }
+    const deployment = await verifyRouterDeployment();
+    if (checkpoint.deploymentHash && deployment.wasmHash !== checkpoint.deploymentHash)
+      return unknown("The router changed since settlement was reviewed.");
+    const claims = await getClaims(identities.map((claim) => BigInt(claim.claimId)));
+    const status = final[0]?.transaction.status;
+    if (!status || status === "pending") return unknown("Settlement execution is unresolved.");
+    if (
+      claims.length !== identities.length ||
+      claims.some((claim, index) => {
+        const saved = identities[index];
+        if (!saved) return true;
+        return (
+          claim.id.toString() !== saved.claimId ||
+          claim.recipient !== saved.recipient ||
+          claim.token !== saved.token ||
+          claim.amount.toString() !== saved.amount ||
+          claim.deployment.router !== checkpoint.router ||
+          claim.deployment.wasmHash !== deployment.wasmHash ||
+          (status === "confirmed" && !claim.settled)
+        );
+      })
+    )
+      return unknown("The on-chain claims do not establish the saved settlement identities.");
+    return {
+      status: status === "confirmed" ? "confirmed" : "failed",
+      source: "rpc",
+      message:
+        status === "confirmed"
+          ? "The saved settlement executed on Stellar and every matching claim is settled on chain."
+          : "The matching settlement transaction failed on Stellar. Review the refreshed claims before signing again.",
+    };
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    return unknown("The settlement transaction and on-chain claims could not be verified.");
+  }
+}
+
 export async function submitSettleClaim(
   sender: string,
   id: bigint,
@@ -1753,6 +2012,7 @@ export async function submitSettleClaim(
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
   reviewed?: PendingClaim,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
@@ -1785,7 +2045,7 @@ export async function submitSettleClaim(
       nativeToScVal(id, { type: "u64" }),
     ),
     sign,
-    undefined,
+    progress,
     approval,
     reconcile,
     undefined,
@@ -1800,6 +2060,7 @@ export async function submitSettleClaims(
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
 ): Promise<TransactionResult> {
   if (claims.length < 2) throw new Error("Batch settlement requires at least two claims.");
   if (claims.length > MAX_BATCH_CLAIMS)
@@ -1838,7 +2099,7 @@ export async function submitSettleClaims(
       claims.map((claim) => claim.id),
     ),
     sign,
-    undefined,
+    progress,
     approval,
     reconcile,
     undefined,

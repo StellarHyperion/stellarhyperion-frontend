@@ -10,9 +10,10 @@ import {
   rpc,
   type xdr,
 } from "@stellar/stellar-sdk";
-import { toHex } from "@hyperion/protocol";
+import { sorobanErrorCode, toHex } from "@hyperion/protocol";
 import {
   classifySubmissionFailure,
+  describeBindingLimit,
   SubmissionFailure,
   quoteFreshness,
   quoteBreakdown,
@@ -20,12 +21,13 @@ import {
   submitSettleClaim,
   submitOperation,
   simulateOperation,
+  TransferLimitError,
 } from "../src/contracts/stellar";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
 
-import { STELLAR_DEPLOYMENT, TESTNET } from "../src/config/testnet";
+import { STELLAR_DEPLOYMENT, TESTNET, supportedLanes } from "../src/config/testnet";
 import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
 import {
   planMaxUsdcAmount,
@@ -77,6 +79,45 @@ function setup() {
   simulation.mockResolvedValue(success(nativeToScVal(1n)));
   const send = vi.spyOn(rpc.Server.prototype, "sendTransaction");
   return { simulation, send };
+}
+// Unlike setup(), the claim read is answered the same way on every call. Each independent
+// submitSettleClaim call reads the claim before submitting its own operation, so a test that
+// drives the function more than once (a retry, or two overlapping calls) needs that read to stay
+// valid every time rather than only for the very first simulateTransaction call in the test.
+function repeatableSetup() {
+  vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
+    passphrase: TESTNET.networkPassphrase,
+    protocolVersion: "27",
+  });
+  // Each call must see a fresh, unmutated Account: the SDK's TransactionBuilder increments the
+  // sequence number on the very instance it is given, so reusing one Account across getAccount
+  // calls would make the post-construction sequence check see its own earlier mutation as a
+  // real on-chain sequence change. A retry or a second overlapping call must start from "0" too.
+  vi.spyOn(rpc.Server.prototype, "getAccount").mockImplementation(() =>
+    Promise.resolve(new Account(key.publicKey(), "0")),
+  );
+  vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
+    executable: {
+      type: "contractExecutableWasm",
+      wasmHash: Uint8Array.from({ length: 32 }, (_, index) =>
+        parseInt(STELLAR_DEPLOYMENT.wasmHash.slice(index * 2, index * 2 + 2), 16),
+      ),
+    },
+    storage: null,
+  } as never);
+  vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue(
+    success(
+      nativeToScVal({
+        id: 1n,
+        recipient: key.publicKey(),
+        token: TESTNET.token,
+        amount: 10n,
+        settled: false,
+      }),
+    ),
+  );
+  const send = vi.spyOn(rpc.Server.prototype, "sendTransaction");
+  return { send };
 }
 const sign = (value: string) => {
   const tx = TransactionBuilder.fromXdr(value, TESTNET.networkPassphrase);
@@ -895,9 +936,12 @@ describe("Checkpoint staleness guards", () => {
     bridgeAmount: "10000000",
     stage: "bridge",
     txHash: "0".repeat(64),
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
   const sameIntent = {
     account: checkpoint.account,
+    recipient: checkpoint.recipient,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
     destination: checkpoint.destination,
     route: checkpoint.route,
     bridgeAmount: checkpoint.bridgeAmount,
@@ -923,6 +967,12 @@ describe("Checkpoint staleness guards", () => {
   it("rejects a stale confirmation when the amount changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, bridgeAmount: "20000000" })).toBe(false);
   });
+  it("rejects a stale confirmation when recipient or issuer-specific source identity changes", () => {
+    expect(checkpointMatches(checkpoint, { ...sameIntent, recipient: "0x" + "b".repeat(40) })).toBe(
+      false,
+    );
+    expect(checkpointMatches(checkpoint, { ...sameIntent, source: USDC })).toBe(false);
+  });
   it("rejects a stale confirmation when the stage changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, stage: "conversion" })).toBe(false);
   });
@@ -940,6 +990,7 @@ describe("Source identity and explorer access", () => {
     bridgeAmount: "10000000",
     stage: "bridge" as const,
     txHash: realHash,
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
 
   it("preserves the real signed hash exactly in a saved checkpoint", () => {
@@ -973,5 +1024,140 @@ describe("Source identity and explorer access", () => {
     expect(parsed.txHash).toBe(realHash);
     // The checkpoint itself carries no status; confirmation comes only from readTransaction.
     expect(parsed.stage).toBe("bridge");
+  });
+});
+describe("Concurrent and repeated submission boundaries", () => {
+  it("retains the signed public hash without automatically requesting another approval after timeout", async () => {
+    const { send } = repeatableSetup();
+    send.mockRejectedValueOnce(new Error("timeout"));
+    const wallet = vi.fn(sign);
+    const first = await submitSettleClaim(key.publicKey(), 1n, wallet);
+    expect(first.status).toBe("pending");
+    expect(first.txHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(wallet).toHaveBeenCalledTimes(1);
+    // Recovery must inspect this hash before any new approval or submission.
+  });
+  it("keeps two overlapping submissions independent, each with its own explicit wallet approval", async () => {
+    const { send } = repeatableSetup();
+    let attempt = 0;
+    send.mockImplementation((tx) => {
+      attempt += 1;
+      if (attempt === 1) return Promise.reject(new Error("timeout"));
+      return Promise.resolve({
+        status: "ERROR",
+        hash: toHex(tx.hash()).slice(2),
+        latestLedger: 1,
+        latestLedgerCloseTime: 1,
+      });
+    });
+    const walletA = vi.fn(sign);
+    const walletB = vi.fn(sign);
+    const [outcomeA, outcomeB] = await Promise.allSettled([
+      submitSettleClaim(key.publicKey(), 1n, walletA),
+      submitSettleClaim(key.publicKey(), 1n, walletB),
+    ]);
+    const outcomes = [outcomeA, outcomeB];
+    // Exactly one side of the race lands on the ambiguous pending outcome, and the other is
+    // rejected by the network rather than silently merged with, or auto-resubmitted after, it.
+    expect(outcomes.filter((o) => o.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((o) => o.status === "rejected")).toHaveLength(1);
+    const fulfilled = outcomes.find(
+      (o): o is PromiseFulfilledResult<Awaited<ReturnType<typeof submitSettleClaim>>> =>
+        o.status === "fulfilled",
+    );
+    expect(fulfilled?.value.status).toBe("pending");
+    const rejected = outcomes.find((o): o is PromiseRejectedResult => o.status === "rejected");
+    expect((rejected?.reason as Error).message).toMatch("network rejected");
+    expect(walletA).toHaveBeenCalledTimes(1);
+    expect(walletB).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Binding flow-limit diagnostics", () => {
+  it.each([null, -1n, 1n << 127n])(
+    "does not invent current capacity from unavailable or invalid values (%s)",
+    (available) => {
+      const code = sorobanErrorCode("FlowLimitExceeded");
+      const diagnostic = describeBindingLimit(code, 10_000_000n, available, "sepolia", 1);
+      expect(diagnostic.available).toBeNull();
+      expect(diagnostic.summary).toContain("capacity is unavailable");
+      expect(diagnostic.nextStep).not.toContain("Reduce the amount");
+      expect(diagnostic.nextStep).toContain("Refresh the quote");
+    },
+  );
+  it.each([undefined, null, -1, NaN, Infinity, "", "1.1", "-1", "999999999999999999999999"])(
+    "keeps malformed reason %s unclassified",
+    (reason) => {
+      const diagnostic = describeBindingLimit(reason, 10_000_000n, 0n, "sepolia", 1);
+      expect(diagnostic.code).toBeNull();
+      expect(diagnostic.kind).toBe("other");
+    },
+  );
+  it("names the exact flow-window headroom and an exact amount to retry", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 10_000_000n, 2_500_000n, "sepolia", 1);
+    expect(diagnostic.kind).toBe("flow");
+    expect(diagnostic.available).toBe(2_500_000n);
+    expect(diagnostic.requested).toBe(10_000_000n);
+    expect(diagnostic.retryable).toBe(true);
+    expect(diagnostic.summary).toContain("0.25");
+    expect(diagnostic.summary).toContain("Axelar ITS");
+    expect(diagnostic.nextStep).toContain("0.25");
+    // The Sepolia lane also carries Circle CCTP on this deployment, so it is a real next step.
+    expect(diagnostic.alternateLanes.map((lane) => lane.provider)).toEqual(["Circle CCTP"]);
+    expect(diagnostic.nextStep).toContain("Circle CCTP");
+  });
+  it("tells the sender to wait when the flow window has no headroom left at all", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 5_000_000n, 0n, "sepolia", 1);
+    expect(diagnostic.available).toBe(0n);
+    expect(diagnostic.nextStep).toContain("fully used");
+    expect(diagnostic.nextStep).not.toContain("Reduce the amount");
+  });
+  it("never offers a lane this testnet deployment does not independently support", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    // Only Sepolia carries Axelar ITS; the Circle CCTP lane on another destination has no
+    // alternate lane to offer, and the diagnostic must not invent one.
+    const diagnostic = describeBindingLimit(code, 5_000_000n, 1_000_000n, "base-sepolia", 0);
+    expect(diagnostic.alternateLanes).toEqual([]);
+    expect(diagnostic.nextStep).not.toContain("also supports");
+  });
+  it("reports the route's maximum transfer cap as non-retryable without inventing a value", () => {
+    const code = sorobanErrorCode("ExceedsRouteLimit");
+    if (code === null) throw new Error("ExceedsRouteLimit has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 50_000_000n, 0n, "sepolia", 0);
+    expect(diagnostic.kind).toBe("routeMax");
+    expect(diagnostic.available).toBeNull();
+    expect(diagnostic.retryable).toBe(false);
+    expect(diagnostic.nextStep).toContain("Split it into smaller transfers");
+  });
+  it("marks a liquidity shortfall as retryable and suggests a smaller amount or a wait", () => {
+    const code = sorobanErrorCode("InsufficientLiquidity");
+    if (code === null) throw new Error("InsufficientLiquidity has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 50_000_000n, 0n, "sepolia", 0);
+    expect(diagnostic.kind).toBe("liquidity");
+    expect(diagnostic.retryable).toBe(true);
+    expect(diagnostic.nextStep).toContain("liquidity");
+  });
+  it("composes the thrown error message from the same summary and next step", () => {
+    const code = sorobanErrorCode("FlowLimitExceeded");
+    if (code === null) throw new Error("FlowLimitExceeded has no Soroban tag in this build.");
+    const diagnostic = describeBindingLimit(code, 10_000_000n, 2_500_000n, "sepolia", 1);
+    const error = new TransferLimitError(diagnostic);
+    expect(error.diagnostic).toBe(diagnostic);
+    expect(error.message).toBe(`${diagnostic.summary} ${diagnostic.nextStep}`);
+  });
+  it("only ever names testnet lanes this deployment actually carries", () => {
+    expect(supportedLanes("sepolia").map((lane) => lane.provider)).toEqual([
+      "Circle CCTP",
+      "Axelar ITS",
+    ]);
+    for (const destination of ["base-sepolia", "arc-testnet"] as const) {
+      expect(supportedLanes(destination).map((lane) => lane.provider)).toEqual(["Circle CCTP"]);
+    }
   });
 });

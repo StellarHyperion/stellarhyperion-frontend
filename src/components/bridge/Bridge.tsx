@@ -16,6 +16,7 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import { fetchClaims } from "../../api";
+import { useVisibilityPoll } from "../../lib/visibility-poll";
 import {
   TESTNET,
   destinationFor,
@@ -34,13 +35,16 @@ import {
   quoteFreshness,
   readLane,
   resolveCheckpointTransaction,
+  resolveClaimSettlementCheckpoint,
   type CheckpointRecoveryResult,
   simulateBridgeOut,
   submitBridgeOut,
   submitSettleClaim,
   submitSettleClaims,
+  TransferLimitError,
   validateRecipient,
   quoteBreakdown,
+  type FlowLimitDiagnostic,
   type LaneState,
   type LiveQuote,
   type PendingClaim,
@@ -64,6 +68,7 @@ import {
   submitConversion,
   stellarAsset,
   trustlineLabel,
+  xlmShortfall,
   trustlineReserveImpact,
   type Conversion,
   type ConversionPathComparison,
@@ -72,10 +77,18 @@ import {
   type TrustlineReservePreview,
 } from "../../contracts/assets";
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
+import { validateAmount } from "../../lib/amount-validation";
 import {
+  checkpointForAsset,
   acquireOperationOwnership,
   getOperationOwnership,
   saveCheckpoint,
+  getClaimSettlementCheckpoint,
+  saveClaimSettlementCheckpoint,
+  useClaimSettlementCheckpoint,
+  acquireClaimSettlementLease,
+  claimSettlementIdentities,
+  type ClaimSettlementCheckpoint,
   assertCheckpointStorage,
   useTransferCheckpoint,
   getTransferCheckpoint,
@@ -217,14 +230,13 @@ function QuoteDetails({
   const breakdown = quoteBreakdown(quote);
 
   const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => {
+  useVisibilityPoll(
+    () => {
       setNow(Date.now());
-    }, 1000);
-    return () => {
-      clearInterval(timer);
-    };
-  }, []);
+    },
+    1000,
+    60_000,
+  );
   const freshness = quoteFreshness(quote, now);
   return (
     <dl className={styles.summary}>
@@ -658,6 +670,12 @@ function PendingTransferCard({
               ? "Source transaction failed on Stellar. No destination delivery was initiated."
               : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
       </p>
+      {checkpoint.stage === "conversion" && checkpoint.source && (
+        <p className={styles.address}>
+          Original source asset: {checkpoint.source.code}
+          {checkpoint.source.issuer ? `, issuer ${checkpoint.source.issuer}` : " (native XLM)"}
+        </p>
+      )}
       <a
         className={styles.transactionLink}
         href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -758,6 +776,40 @@ function PendingTransferCard({
               setCardSimError(null);
             }
           }}
+          footer={
+            <>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={checking}
+                onClick={() => {
+                  setReview(null);
+                  setCardSimulation(null);
+                  setCardSimError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={
+                  checking || !sameAccount || cardSimulating || !!cardSimError || !cardSimulation
+                }
+                onClick={() => {
+                  void continueBridge();
+                }}
+              >
+                {checking
+                  ? "Confirming in your wallet..."
+                  : cardSimulating
+                    ? "Estimating simulation..."
+                    : cardSimError
+                      ? "Approval blocked"
+                      : "Bridge converted USDC"}
+              </button>
+            </>
+          }
         >
           <p className={styles.reviewNote}>
             Conversion confirmed. This step bridges the USDC already in your wallet.
@@ -782,24 +834,6 @@ function PendingTransferCard({
               Simulation failed: {cardSimError}. Approval blocked.
             </p>
           )}
-          <button
-            type="button"
-            className={styles.primary}
-            disabled={
-              checking || !sameAccount || cardSimulating || !!cardSimError || !cardSimulation
-            }
-            onClick={() => {
-              void continueBridge();
-            }}
-          >
-            {checking
-              ? "Confirming in your wallet..."
-              : cardSimulating
-                ? "Estimating simulation..."
-                : cardSimError
-                  ? "Approval blocked"
-                  : "Bridge converted USDC"}
-          </button>
           {error && <p role="alert">{error}</p>}
         </ReviewDialog>
       )}
@@ -830,6 +864,7 @@ export function Bridge() {
     key: string;
     value: TradeQuote | null;
     error: string | null;
+    diagnostic: FlowLimitDiagnostic | null;
   } | null>(null);
   const [accounts, setAccounts] = useState<{
     account: string;
@@ -854,12 +889,49 @@ export function Bridge() {
   } | null>(null);
   const [reserve, setReserve] = useState<TrustlineReservePreview | null>(null);
   const [reserveError, setReserveError] = useState<string | null>(null);
+  const reviewAction = useRef<HTMLButtonElement>(null);
+  const approvalFocusPending = useRef(false);
+  useEffect(() => {
+    if (busy || !approvalFocusPending.current || checkpoint) return;
+    approvalFocusPending.current = false;
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        active !== document.body &&
+        active.isConnected &&
+        !active.matches(":disabled")
+      )
+        return;
+      if (reviewAction.current && !reviewAction.current.disabled) reviewAction.current.focus();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [busy, checkpoint, error]);
   const laneKey = `${destination}:${route}:${refresh}`;
+  const laneRefreshing = useVisibilityPoll(
+    async (signal) => {
+      try {
+        const value = await readLane(destination, route);
+        if (!signal.aborted) setLaneState({ key: laneKey, value, error: null });
+      } catch (cause) {
+        if (!signal.aborted)
+          setLaneState({ key: laneKey, value: null, error: errorMessage(cause) });
+      }
+    },
+    30_000,
+    60_000,
+    laneKey,
+    0,
+  );
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
   const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
-  const quote = quoted?.key === quoteKey && lane?.available ? quoted.value : null;
+  const quote =
+    quoted?.key === quoteKey && lane?.available && !laneRefreshing ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
+  const quoteDiagnostic = quoted?.key === quoteKey ? quoted.diagnostic : null;
   const simKey = `${quoteKey}:${wallet.address}`;
   const simulation = simulatedState?.key === simKey ? simulatedState.value : null;
   const simulationError = simulatedState?.key === simKey ? simulatedState.error : null;
@@ -922,11 +994,10 @@ export function Bridge() {
   const locked = busy || checkpoint !== null;
   let inputError: string | null = null;
   let valid = false;
+  const amountValidation = validateAmount(amount);
   if (amount.trim() && recipient.trim()) {
     try {
-      const parsed = parseUnits(amount.trim(), 7);
-      if (parsed <= 0n || parsed > (1n << 63n) - 1n)
-        throw new Error("Enter a positive amount within Stellar's asset limit.");
+      if (!amountValidation.valid) throw new Error(amountValidation.message);
       validateRecipient(recipient);
       valid = true;
     } catch (cause) {
@@ -1004,24 +1075,7 @@ export function Bridge() {
     setQuoteVersion((version) => version + 1);
     setQuoted(null);
   };
-  useEffect(() => {
-    let active = true;
-    const load = () => {
-      void readLane(destination, route)
-        .then((value) => {
-          if (active) setLaneState({ key: laneKey, value, error: null });
-        })
-        .catch((cause: unknown) => {
-          if (active) setLaneState({ key: laneKey, value: null, error: errorMessage(cause) });
-        });
-    };
-    load();
-    const timer = setInterval(load, 30000);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, [destination, route, laneKey]);
+
   useEffect(() => {
     if (!wallet.address) return;
     const account = wallet.address;
@@ -1054,10 +1108,16 @@ export function Bridge() {
     const timer = setTimeout(() => {
       void quoteTrade(destination, activeSource, amount, route)
         .then((value) => {
-          if (active) setQuoted({ key: quoteKey, value, error: null });
+          if (active) setQuoted({ key: quoteKey, value, error: null, diagnostic: null });
         })
         .catch((cause: unknown) => {
-          if (active) setQuoted({ key: quoteKey, value: null, error: errorMessage(cause) });
+          if (active)
+            setQuoted({
+              key: quoteKey,
+              value: null,
+              error: errorMessage(cause),
+              diagnostic: cause instanceof TransferLimitError ? cause.diagnostic : null,
+            });
         });
     }, 400);
     return () => {
@@ -1110,6 +1170,24 @@ export function Bridge() {
       return;
     }
     const reviewedQuote = reviewed.quote;
+    const requiredXlm =
+      (reviewedQuote.source.id === XLM.id ? reviewedQuote.sourceAmount : 0n) +
+      (reviewedQuote.bridge.route === 1 ? reviewedQuote.bridge.relayGas : 0n);
+    const nativeStatus = xlmShortfall(
+      balances.find((asset) => asset.id === XLM.id),
+      requiredXlm,
+    );
+    if (nativeStatus !== "ok") {
+      setReviewing(false);
+      setReviewed(null);
+      setReviewApproval(null);
+      setError(
+        nativeStatus === "unknown"
+          ? "Stellar reserve and fee parameters could not be confirmed. Refresh and try again."
+          : "Your spendable XLM no longer covers this transfer plus its reserve.",
+      );
+      return;
+    }
     try {
       assertCheckpointStorage();
     } catch (cause) {
@@ -1121,6 +1199,7 @@ export function Bridge() {
     waitController.current?.abort();
     waitController.current = controller;
     const generation = ++waitGeneration.current;
+    approvalFocusPending.current = true;
     setBusy(true);
     setError(null);
     setResult(null);
@@ -1178,6 +1257,11 @@ export function Bridge() {
       bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
       stage,
       txHash: hash,
+      source: {
+        id: reviewedQuote.source.id,
+        code: reviewedQuote.source.code,
+        issuer: reviewedQuote.source.issuer,
+      },
     });
     const conversionReconcile: SubmissionReconciliation = {
       expectedAccount: sender,
@@ -1275,6 +1359,13 @@ export function Bridge() {
     conservativeMax !== null &&
     quote.sourceAmount > conservativeMax &&
     isUsdcSource;
+  // The sender's XLM must cover any amount drawn directly from it (when XLM is the source) plus
+  // the live relay gas budget Axelar ITS bridging already quotes, on top of its own live reserve.
+  const xlmRequired = quote
+    ? (source.id === XLM.id ? quote.sourceAmount : 0n) +
+      (quote.bridge.route === 1 ? quote.bridge.relayGas : 0n)
+    : 0n;
+  const xlmStatus = quote ? xlmShortfall(xlmAsset, xlmRequired) : "ok";
 
   const needsTrustline = !balances.some((asset) => asset.id === USDC.id);
   // The reserve a new trustline locks, and the network fee and (for an XLM source) the amount
@@ -1337,6 +1428,8 @@ export function Bridge() {
             <input
               id="send-amount"
               aria-label="Amount to send"
+              aria-describedby="send-amount-help"
+              aria-invalid={amount.trim() !== "" && !amountValidation.valid}
               inputMode="decimal"
               autoComplete="off"
               value={amount}
@@ -1373,7 +1466,7 @@ export function Bridge() {
               type="button"
               className={styles.tokenSelector}
               aria-label="Choose source token"
-              disabled={locked}
+              disabled={busy}
               onClick={() => {
                 setPicker("source");
               }}
@@ -1383,13 +1476,22 @@ export function Bridge() {
               <ChevronDown size={15} aria-hidden="true" />
             </button>
           </div>
+          <p id="send-amount-help" className={styles.balance} aria-live="polite">
+            {amountValidation.valid ? "Amount is valid." : amountValidation.message}
+          </p>
           <p className={styles.balance}>
             {wallet.address
               ? sourceBalance !== undefined
-                ? walletAsset?.sellingLiabilities &&
-                  parseUnits(walletAsset.sellingLiabilities, 7) > 0n
-                  ? `Balance: ${sourceBalance} ${source.code} (Spendable: ${spendableBalance(walletAsset)} ${source.code})`
-                  : `Balance: ${sourceBalance} ${source.code}`
+                ? source.id === XLM.id
+                  ? xlmAsset?.nativeMinimumReserve !== undefined
+                    ? `Balance: ${sourceBalance} XLM (${xlmAsset.available} spendable after reserve and fees)`
+                    : "Balance: " +
+                      sourceBalance +
+                      " XLM (spendable amount unconfirmed. Refresh to retry.)"
+                  : walletAsset?.sellingLiabilities &&
+                      parseUnits(walletAsset.sellingLiabilities, 7) > 0n
+                    ? `Balance: ${sourceBalance} ${source.code} (Spendable: ${spendableBalance(walletAsset)} ${source.code})`
+                    : `Balance: ${sourceBalance} ${source.code}`
                 : (accounts?.error ?? "Reading your balance...")
               : "Choose any liquid Stellar asset"}
           </p>
@@ -1630,10 +1732,18 @@ export function Bridge() {
             </p>
           )
         )}
-        {(error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
-          <p role="alert" className={styles.error}>
-            {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
-          </p>
+        {!error && !wallet.error && quoteError && quoteDiagnostic ? (
+          <div role="alert" className={styles.limitDiagnostic}>
+            <strong>{quoteDiagnostic.limitLabel}</strong>
+            <span>{quoteDiagnostic.summary}</span>
+            <span>{quoteDiagnostic.nextStep}</span>
+          </div>
+        ) : (
+          (error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
+            <p role="alert" className={styles.error}>
+              {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
+            </p>
+          )
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>
@@ -1645,6 +1755,19 @@ export function Bridge() {
         {exceedsFlow && (
           <p role="alert" className={styles.error}>
             {`This amount exceeds the available route limit. Maximum bridgeable: ${formatUnits(conservativeMax, 7)} USDC.`}
+          </p>
+        )}
+        {xlmStatus === "insufficient" && (
+          <p role="alert" className={styles.error}>
+            Your spendable XLM will not cover {source.id === XLM.id ? "this amount plus" : ""} the
+            required reserve
+            {quote?.bridge.route === 1 ? " and the Axelar relay gas budget" : ""}.
+          </p>
+        )}
+        {xlmStatus === "unknown" && (
+          <p role="alert" className={styles.error}>
+            Stellar reserve and fee parameters for your account could not be confirmed. Refresh to
+            try again before sending.
           </p>
         )}
         {quote?.conversion && reserveImpact && (
@@ -1723,6 +1846,7 @@ export function Bridge() {
         ) : (
           !checkpoint && (
             <button
+              ref={reviewAction}
               type="button"
               className={styles.primary}
               disabled={
@@ -1730,6 +1854,7 @@ export function Bridge() {
                 (!quote.conversion && !simulation) ||
                 busy ||
                 !!insufficient ||
+                xlmStatus !== "ok" ||
                 sourceBalance === undefined ||
                 activeSource.trustline === "frozen" ||
                 activeSource.trustline === "unauthorized" ||
@@ -1794,10 +1919,17 @@ export function Bridge() {
         <SourceAssetPicker
           selected={source}
           balances={balances}
+          pendingRecovery={checkpoint?.source ?? null}
           onSelect={(asset) => {
+            // Editing the form never removes a signed operation or its original intent.
+            // The pending card keeps its own account, amount and explicit bridge review.
             setSource(asset);
             invalidateQuote();
-            setError(null);
+            setError(
+              checkpoint?.stage === "conversion" && !checkpointForAsset(checkpoint, asset)
+                ? "Your saved conversion belongs to the previous source asset. Check its status and review its bridge separately before starting another transfer."
+                : null,
+            );
           }}
           onClose={() => {
             setPicker(null);
@@ -1825,6 +1957,43 @@ export function Bridge() {
             setReviewing(false);
             setReviewed(null);
           }}
+          footer={
+            <>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={busy}
+                onClick={() => {
+                  setReviewing(false);
+                  setReviewed(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={
+                  busy ||
+                  laneRefreshing ||
+                  !lane?.available ||
+                  reviewedReserveInsufficient ||
+                  (!!reviewed.quote.conversion && !reserve) ||
+                  (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
+                }
+                onClick={() => {
+                  void submit();
+                }}
+              >
+                {simulating
+                  ? "Estimating simulation..."
+                  : simulationError
+                    ? "Approval blocked"
+                    : "Confirm in wallet"}{" "}
+                <ArrowUpRight size={17} aria-hidden="true" />
+              </button>
+            </>
+          }
         >
           <div className={styles.reviewTotal}>
             <span>You send {reviewed.quote.conversion ? "up to" : ""}</span>
@@ -1910,26 +2079,6 @@ export function Bridge() {
               Simulation failed: {simulationError}. Approval blocked.
             </p>
           )}
-          <button
-            type="button"
-            className={styles.primary}
-            disabled={
-              busy ||
-              reviewedReserveInsufficient ||
-              (!!reviewed.quote.conversion && !reserve) ||
-              (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
-            }
-            onClick={() => {
-              void submit();
-            }}
-          >
-            {simulating
-              ? "Estimating simulation..."
-              : simulationError
-                ? "Approval blocked"
-                : "Confirm in wallet"}{" "}
-            <ArrowUpRight size={17} aria-hidden="true" />
-          </button>
         </ReviewDialog>
       )}
     </>
@@ -1948,6 +2097,113 @@ export function ClaimRecovery() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<TransactionResult | null>(null);
+  const [claimPhase, setClaimPhase] = useState<TransactionPhase | null>(null);
+  const { checkpoint, blocked: claimStorageError } = useClaimSettlementCheckpoint();
+  const [recovery, setRecovery] = useState<CheckpointRecoveryResult | null>(null);
+  const settlementController = useRef<AbortController | null>(null);
+  const generation = useRef(0);
+  const mounted = useRef(true);
+  const statusAction = useRef<HTMLButtonElement>(null);
+  const resultAction = useRef<HTMLAnchorElement>(null);
+  const settlementFocusPending = useRef(false);
+  useEffect(() => {
+    if (busy || !settlementFocusPending.current) return;
+    settlementFocusPending.current = false;
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        active !== document.body &&
+        active.isConnected &&
+        !active.matches(":disabled")
+      )
+        return;
+      if (statusAction.current && !statusAction.current.disabled) statusAction.current.focus();
+      else resultAction.current?.focus();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [busy, checkpoint, result]);
+  useEffect(() => {
+    mounted.current = true;
+    const activeGeneration = generation;
+    return () => {
+      mounted.current = false;
+      activeGeneration.current++;
+      settlementController.current?.abort();
+    };
+  }, []);
+  const saveSignedClaims = (account: string, reviewed: readonly PendingClaim[], hash: string) => {
+    const first = reviewed[0];
+    if (!first) throw new Error("No reviewed claim identity is available.");
+    saveClaimSettlementCheckpoint({
+      router: TESTNET.router,
+      account,
+      chain: "stellar-testnet",
+      deploymentHash: first.deployment.wasmHash,
+      claimId: reviewed.map((claim) => claim.id).join(","),
+      recipient: first.recipient,
+      token: first.token,
+      amount: reviewed.reduce((sum, claim) => sum + claim.amount, 0n).toString(),
+      claims: reviewed.map((claim) => ({
+        claimId: claim.id.toString(),
+        recipient: claim.recipient,
+        token: claim.token,
+        amount: claim.amount.toString(),
+      })),
+      txHash: hash,
+    });
+  };
+  const checkSettlement = async (saved: ClaimSettlementCheckpoint, signal?: AbortSignal) => {
+    const active = () => !signal?.aborted && mounted.current;
+    const outcome = await resolveClaimSettlementCheckpoint(saved, signal);
+    if (!active()) return outcome;
+    setRecovery(outcome);
+    if (outcome.status !== "unknown") {
+      const refreshed = await getClaims(
+        claimSettlementIdentities(saved).map((claim) => BigInt(claim.claimId)),
+      );
+      if (!active()) return outcome;
+      const identities = claimSettlementIdentities(saved);
+      if (
+        refreshed.some((claim, index) => {
+          const identity = identities[index];
+          if (!identity) return true;
+          return (
+            claim.id.toString() !== identity.claimId ||
+            claim.recipient !== identity.recipient ||
+            claim.token !== identity.token ||
+            claim.amount.toString() !== identity.amount ||
+            (outcome.status === "confirmed" && !claim.settled)
+          );
+        })
+      )
+        throw new Error(
+          "Claim evidence changed during reconciliation. The saved hash remains unresolved.",
+        );
+      saveClaimSettlementCheckpoint(null, saved);
+      setClaims(refreshed);
+      setResult({ txHash: saved.txHash, status: outcome.status });
+    }
+    return outcome;
+  };
+  const reconcileSettlement = async () => {
+    if (!checkpoint || busy || claimStorageError) return;
+    const saved = checkpoint;
+    const controller = new AbortController();
+    settlementController.current?.abort();
+    settlementController.current = controller;
+    setBusy(true);
+    setError(null);
+    try {
+      await checkSettlement(saved, controller.signal);
+    } catch (cause) {
+      if (!controller.signal.aborted && mounted.current) setError(errorMessage(cause));
+    } finally {
+      if (!controller.signal.aborted && mounted.current) setBusy(false);
+    }
+  };
   const claimApproval: WalletApprovalProvenance | null = wallet.address
     ? {
         account: wallet.address,
@@ -1994,70 +2250,100 @@ export function ClaimRecovery() {
       setBusy(false);
     }
   };
-  const settleOne = async (claim: PendingClaim) => {
-    if (!wallet.address || busy) return;
+  const settleReviewed = async (reviewed: readonly PendingClaim[]) => {
+    if (!wallet.address || busy || checkpoint || claimStorageError || !reviewed.length) return;
+    const account = wallet.address;
+    const controller = new AbortController();
+    settlementController.current?.abort();
+    settlementController.current = controller;
+    const scope = ++generation.current;
+    const active = () =>
+      mounted.current && scope === generation.current && !controller.signal.aborted;
+    settlementFocusPending.current = true;
+    let lease: Awaited<ReturnType<typeof acquireClaimSettlementLease>> | undefined;
     setBusy(true);
     setError(null);
+    setRecovery(null);
+    setClaimPhase("preparing");
     try {
-      const refreshed = (await getClaims([claim.id]))[0];
-      if (!refreshed) throw new Error("The claim could not be refreshed. Review it again.");
-      setClaims((current) => current.map((item) => (item.id === claim.id ? refreshed : item)));
+      lease = await acquireClaimSettlementLease();
+      assertCheckpointStorage();
+      if (controller.signal.aborted || !mounted.current) return;
+      const refreshed = await getClaims(reviewed.map((claim) => claim.id));
+      setClaims(refreshed);
       if (
-        refreshed.settled ||
-        refreshed.recipient !== claim.recipient ||
-        refreshed.token !== claim.token ||
-        refreshed.amount !== claim.amount ||
-        refreshed.deployment.wasmHash !== claim.deployment.wasmHash
-      ) {
-        throw new Error(
-          "The claim changed while it was open. Review the refreshed claim before signing.",
-        );
-      }
-      const transaction = await submitSettleClaim(
-        wallet.address,
-        claim.id,
-        (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "claim" }),
-        claimApproval ?? undefined,
-        { expectedAccount: wallet.address, getCurrentAccount: () => currentAccount.current },
-        undefined,
-        claim,
+        refreshed.some((claim, index) => {
+          const previous = reviewed[index];
+          return (
+            !previous ||
+            claim.settled ||
+            claim.recipient !== previous.recipient ||
+            claim.token !== previous.token ||
+            claim.amount !== previous.amount ||
+            claim.deployment.wasmHash !== previous.deployment.wasmHash
+          );
+        })
+      )
+        throw new Error("The claims changed. Review the refreshed claims before signing.");
+      const reconciliation: SubmissionReconciliation = {
+        expectedAccount: account,
+        getCurrentAccount: () => currentAccount.current,
+        isSuperseded: () =>
+          !mounted.current || scope !== generation.current || controller.signal.aborted,
+        onSigned: (hash) => {
+          saveSignedClaims(account, refreshed, hash);
+        },
+        onAccountSwitch: (hash) => {
+          saveSignedClaims(account, refreshed, hash);
+        },
+      };
+      const progress = (phase: TransactionPhase) => {
+        if (mounted.current && scope === generation.current) setClaimPhase(phase);
+      };
+      const sign = (xdr: string, opts: Parameters<typeof wallet.signTransaction>[1]) =>
+        wallet.signTransaction(xdr, { ...opts, operation: "claim" });
+      const first = refreshed[0];
+      if (!first) throw new Error("No current claim identity is available.");
+      const transaction =
+        refreshed.length === 1
+          ? await submitSettleClaim(
+              account,
+              first.id,
+              sign,
+              claimApproval ?? undefined,
+              reconciliation,
+              controller.signal,
+              first,
+              progress,
+            )
+          : await submitSettleClaims(
+              account,
+              refreshed,
+              sign,
+              claimApproval ?? undefined,
+              reconciliation,
+              controller.signal,
+              progress,
+            );
+      if (!active()) return;
+      setResult(
+        transaction.status === "confirmed" ? { ...transaction, status: "pending" } : transaction,
       );
-      setResult(transaction);
-      if (transaction.status === "confirmed") setClaims(await getClaims([claim.id]));
+      const saved = getClaimSettlementCheckpoint();
+      if (transaction.status === "confirmed" && saved)
+        await checkSettlement(saved, controller.signal);
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (mounted.current && scope === generation.current) setError(errorMessage(cause));
     } finally {
-      setBusy(false);
+      lease?.release();
+      if (mounted.current && scope === generation.current) {
+        setBusy(false);
+        setClaimPhase(null);
+      }
     }
   };
-  const settle = async () => {
-    if (claims.length < 2 || !wallet.address || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const transaction = await submitSettleClaims(
-        wallet.address,
-        claims,
-        wallet.signTransaction,
-        claimApproval ?? undefined,
-        { expectedAccount: wallet.address, getCurrentAccount: () => currentAccount.current },
-      );
-      setResult(transaction);
-      if (transaction.status === "confirmed")
-        setClaims(await getClaims(claims.map((claim) => claim.id)));
-    } catch (cause) {
-      try {
-        setClaims(await getClaims(claims.map((claim) => claim.id)));
-      } catch {
-        // Keep the original contract error when the follow-up read is unavailable.
-      }
-      setError(
-        `Batch settlement was rejected by the router: ${errorMessage(cause)} Review each claim before trying again.`,
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
+  const settleOne = (claim: PendingClaim) => settleReviewed([claim]);
+  const settle = () => settleReviewed(claims);
   return (
     <section
       id="claim-recovery"
@@ -2077,6 +2363,58 @@ export function ClaimRecovery() {
             Review parked claims from the indexer or enter claim numbers. Every recipient and amount
             below is re-read from the deployed Stellar router before signing.
           </p>
+          {claimStorageError && (
+            <p role="alert" className={styles.error}>
+              {claimStorageError}
+            </p>
+          )}
+          {checkpoint && (
+            <div className={styles.claimCheckpoint}>
+              <p role="status" className={styles.reviewNote}>
+                Settlement is unresolved. Check its outcome before requesting another signature.
+              </p>
+              <p className={styles.address}>Signed source hash: {checkpoint.txHash}</p>
+              {claimSettlementIdentities(checkpoint).map((claim) => (
+                <p className={styles.address} key={claim.claimId}>
+                  Claim {claim.claimId}: {claim.amount} base units of {claim.token}, recipient{" "}
+                  {claim.recipient}
+                </p>
+              ))}
+              <button
+                ref={statusAction}
+                type="button"
+                disabled={busy || !!claimStorageError}
+                onClick={() => void reconcileSettlement()}
+              >
+                {busy ? "Checking settlement..." : "Check settlement status"}
+              </button>
+              <a
+                href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Inspect the saved source transaction
+              </a>
+            </div>
+          )}
+          {recovery && (
+            <p role="status" aria-live="polite" className={styles.reviewNote}>
+              {recovery.message}
+            </p>
+          )}
+          {claimPhase && (
+            <p role="status" aria-live="polite" className={styles.reviewNote}>
+              {claimPhase === "signing"
+                ? "Confirm settlement in your wallet."
+                : claimPhase === "submitting"
+                  ? "Broadcasting the signed settlement."
+                  : claimPhase === "pending"
+                    ? "Waiting for settlement confirmation; you may navigate away safely."
+                    : claimPhase === "confirmed"
+                      ? "Settlement confirmed on Stellar."
+                      : "Preparing claim settlement."}
+            </p>
+          )}
           <button type="button" disabled={busy} onClick={() => void loadOpenClaims()}>
             {busy ? "Checking..." : "Load parked claims"}
           </button>
@@ -2134,7 +2472,13 @@ export function ClaimRecovery() {
                           <ApprovalDetails approval={claimApproval} />
                           <button
                             type="button"
-                            disabled={!wallet.address || busy || result?.status === "pending"}
+                            disabled={
+                              !wallet.address ||
+                              busy ||
+                              result?.status === "pending" ||
+                              checkpoint !== null ||
+                              !!claimStorageError
+                            }
                             onClick={() => void settleOne(claim)}
                           >
                             Sign claim settlement
@@ -2154,7 +2498,13 @@ export function ClaimRecovery() {
                   <ApprovalDetails approval={claimApproval} />
                   <button
                     type="button"
-                    disabled={!wallet.address || busy || result?.status === "pending"}
+                    disabled={
+                      !wallet.address ||
+                      busy ||
+                      result?.status === "pending" ||
+                      checkpoint !== null ||
+                      !!claimStorageError
+                    }
                     onClick={() => void settle()}
                   >
                     Sign batch settlement
@@ -2167,7 +2517,7 @@ export function ClaimRecovery() {
             </>
           )}
           {result && (
-            <Link href={`/transfers/${result.txHash}`}>
+            <Link ref={resultAction} href={`/transfers/${result.txHash}`}>
               {result.status === "confirmed"
                 ? "Settlement confirmed"
                 : result.status === "failed"
