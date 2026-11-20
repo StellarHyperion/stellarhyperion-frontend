@@ -38,6 +38,16 @@ Connect Freighter, Albedo, xBull or LOBSTR for Stellar Testnet through the nativ
 
 The checked-in deployment supplies the default router and canonical USDC asset. Public overrides are documented in `.env.example`. The app is testnet only.
 
+Live fee routes require the supported Next.js server deployment with both `/api/relay-fee`
+and `/api/cctp-fee` handlers. Their explicit `HEAD` capability responses make no provider requests
+and expose only fixed public runtime and route markers. Discovery shares a five-second deadline,
+checks each rail independently, and supports cancellation and explicit retry. Missing endpoints,
+HTML fallbacks, failed responses and unrecognized markers cannot admit priced review or approval.
+An available endpoint still requires a fresh validated fee, simulation and explicit wallet approval;
+its capability response never supplies a fee. A static-only host preserves configured read-only
+history, public metadata and saved source-status recovery while priced signing stays unavailable.
+Server credentials remain server-only; public variables cannot enable a missing fee route.
+
 At startup, the public configuration admission check compares the network,
 router and canonical token against the checked-in testnet deployment and
 requires an HTTPS RPC endpoint. A mismatch renders an unavailable state with
@@ -118,3 +128,13 @@ Deterministic checks cover source-only evidence, wrong chains, recipient or toke
 `npm run build` retains the minified Turbopack production build and runs its native analysis, then checks actual emitted client chunks. The budget check joins each emitted JavaScript source map to installed modules and the native sync/async import graph, and uses Next's route first-load manifest. Missing or stale attribution fails the build. Per-route diagnostics identify the responsible chunk, package and import chain; unique chunks are counted once across routes. Optional wallet adapters are capped at 450,000 uncompressed JavaScript bytes and transaction code at 1,200,000 bytes. Wallet adapter chunks must remain asynchronous on the landing route. Client source maps are generated for this measurement.
 
 The complete report is `.next/diagnostics/bundle-attribution.json`; [bundle validation](docs/review/provider-cooldown-budget/README.md) records final measured totals and browser checks.
+
+### Typed transaction copy
+
+`src/lib/messages.ts` defines complete English fallbacks and typed variable arguments for submission,
+source recovery, claim settlement and exact amount labels. `Providers` optionally accepts a partial
+`TranslationCatalog`; missing, empty or failed translations use the English fallback for the same
+state. Amount-label translators receive an already formatted exact decimal string and its immutable
+unit label. They do not receive or replace transaction parsing, asset identity, quote budgets or
+signed intent. Source input remains an exact decimal string with a dot and at most seven decimal
+places; changing translated labels cannot change the underlying integer amount or units.

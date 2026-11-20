@@ -113,6 +113,18 @@ import {
   SourceAssetPicker,
 } from "./AssetPicker";
 import styles from "./Bridge.module.css";
+import {
+  amountLabel,
+  phaseMessage,
+  recoveryMessage,
+  settlementPhaseMessage,
+} from "../../lib/messages";
+import { runtimeSigningAvailable } from "../../lib/runtime-capabilities";
+import {
+  useMessages,
+  useRuntimeCapabilities,
+  useTranslations,
+} from "../../lib/runtime-capabilities-context";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
@@ -265,6 +277,8 @@ function QuoteDetails({
   simulating?: boolean;
   simulationError?: string | null;
 }) {
+  const message = useMessages();
+  const translations = useTranslations();
   const resourceFee = simulation?.resourceFee;
   const networkFee = simulation?.networkFee;
   const breakdown = quoteBreakdown(quote);
@@ -281,8 +295,8 @@ function QuoteDetails({
   return (
     <dl className={styles.summary}>
       <div>
-        <dt>Requested source amount</dt>
-        <dd>{formatUnits(breakdown.requestedSourceAmount, 7)} USDC</dd>
+        <dt>{message("requestedSourceLabel")}</dt>
+        <dd>{amountLabel(breakdown.requestedSourceAmount, 7, "USDC", translations)}</dd>
       </div>
       {quote.observedAt && quote.validUntil && (
         <div>
@@ -297,74 +311,81 @@ function QuoteDetails({
         </div>
       )}
       <div>
-        <dt>Actual source debit</dt>
-        <dd>{formatUnits(breakdown.actualSourceDebit, 7)} USDC</dd>
+        <dt>{message("sourceDebitLabel")}</dt>
+        <dd>{amountLabel(breakdown.actualSourceDebit, 7, "USDC", translations)}</dd>
       </div>
       <div>
-        <dt>Protocol fee</dt>
-        <dd>{formatUnits(breakdown.protocolFee, 7)} USDC</dd>
+        <dt>{message("protocolFeeLabel")}</dt>
+        <dd>{amountLabel(breakdown.protocolFee, 7, "USDC", translations)}</dd>
       </div>
       <div>
-        <dt>Representable bridge amount</dt>
-        <dd>{formatUnits(breakdown.representableBridgeAmount, 7)} USDC</dd>
+        <dt>{message("bridgeAmountLabel")}</dt>
+        <dd>{amountLabel(breakdown.representableBridgeAmount, 7, "USDC", translations)}</dd>
       </div>
       <div>
-        <dt>Retained precision dust</dt>
-        <dd>{formatUnits(breakdown.retainedDust, 7)} USDC</dd>
+        <dt>{message("dustLabel")}</dt>
+        <dd>{amountLabel(breakdown.retainedDust, 7, "USDC", translations)}</dd>
       </div>
       <div>
-        <dt>{quote.route === 0 ? "Circle forwarding estimate" : "Axelar gas estimate"}</dt>
+        <dt>{message(quote.route === 0 ? "circleEstimateLabel" : "axelarEstimateLabel")}</dt>
         <dd>
-          {formatUnits(quote.estimatedRelayGas ?? quote.relayGas, 7)}{" "}
-          {quote.route === 0 ? "USDC" : "XLM"}
+          {amountLabel(
+            quote.estimatedRelayGas ?? quote.relayGas,
+            7,
+            quote.route === 0 ? "USDC" : "XLM",
+            translations,
+          )}
         </dd>
       </div>
       <div>
-        <dt>{quote.route === 0 ? "Approved Circle budget" : "Approved Axelar XLM"}</dt>
-        <dd>
-          {formatUnits(quote.relayGas, 7)} {quote.route === 0 ? "USDC" : "XLM"}
-        </dd>
+        <dt>{message(quote.route === 0 ? "circleBudgetLabel" : "axelarBudgetLabel")}</dt>
+        <dd>{amountLabel(quote.relayGas, 7, quote.route === 0 ? "USDC" : "XLM", translations)}</dd>
       </div>
       <div>
-        <dt>Integer headroom (rounded up)</dt>
+        <dt>{message("headroomLabel")}</dt>
         <dd>
-          {formatUnits(quote.relayGas - (quote.estimatedRelayGas ?? quote.relayGas), 7)}{" "}
-          {quote.route === 0 ? "USDC" : "XLM"}
+          {amountLabel(
+            quote.relayGas - (quote.estimatedRelayGas ?? quote.relayGas),
+            7,
+            quote.route === 0 ? "USDC" : "XLM",
+            translations,
+          )}
         </dd>
       </div>
       {quote.route === 0 && (
         <>
           <div>
-            <dt>Full destination forwarding deduction</dt>
+            <dt>{message("forwardingLabel")}</dt>
             <dd>
-              {formatUnits(
+              {amountLabel(
                 cctpPayoutBreakdown(quote.representableAmount, quote.relayGas).destinationBudget,
                 6,
-              )}{" "}
-              USDC
+                "USDC",
+                translations,
+              )}
             </dd>
           </div>
           <div>
-            <dt>Conservative destination minimum</dt>
-            <dd>{formatUnits(quote.destinationAmount, 6)} USDC</dd>
+            <dt>{message("destinationMinimumLabel")}</dt>
+            <dd>{amountLabel(quote.destinationAmount, 6, "USDC", translations)}</dd>
           </div>
         </>
       )}
       {resourceFee !== undefined && (
         <div>
-          <dt>Assembled resource fee</dt>
-          <dd>{formatUnits(resourceFee, 7)} XLM</dd>
+          <dt>{message("resourceFeeLabel")}</dt>
+          <dd>{amountLabel(resourceFee, 7, "XLM", translations)}</dd>
         </div>
       )}
       {networkFee !== undefined && (
         <div>
-          <dt>Stellar network fee</dt>
-          <dd>{formatUnits(networkFee, 7)} XLM</dd>
+          <dt>{message("networkFeeLabel")}</dt>
+          <dd>{amountLabel(networkFee, 7, "XLM", translations)}</dd>
         </div>
       )}
       {simulating && (
         <div>
-          <dt>Assembled resource fee</dt>
+          <dt>{message("resourceFeeLabel")}</dt>
           <dd>Estimating simulation...</dd>
         </div>
       )}
@@ -375,10 +396,14 @@ function QuoteDetails({
         </div>
       )}
       <div>
-        <dt>Minimum received</dt>
+        <dt>{message("receivedMinimumLabel")}</dt>
         <dd>
-          {formatUnits(quote.destinationAmount, destinationDecimals(quote.route))}{" "}
-          {receiveSymbol(quote.route)}
+          {amountLabel(
+            quote.destinationAmount,
+            destinationDecimals(quote.route),
+            receiveSymbol(quote.route),
+            translations,
+          )}
         </dd>
       </div>
       <div>
@@ -593,6 +618,9 @@ function PendingTransferCard({
   const [cardSimError, setCardSimError] = useState<string | null>(null);
   const [reviewedIntent, setReviewedIntent] = useState<ReviewedIntentSnapshot | null>(null);
   const [cardDiff, setCardDiff] = useState<QuoteDiff | null>(null);
+  const message = useMessages();
+  const translations = useTranslations();
+  const runtime = useRuntimeCapabilities();
   const sameAccount = wallet.address === checkpoint.account;
   const actionRef = useRef<HTMLButtonElement>(null);
   const recoveryMessageRef = useRef<HTMLParagraphElement>(null);
@@ -667,6 +695,8 @@ function PendingTransferCard({
         return;
       }
       if (result.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+        if (!runtimeSigningAvailable(runtime.capabilities, checkpoint.route))
+          throw new Error(message("staticFeeUnavailable"));
         conversionConfirmed = true;
         await requireRecoveredUsdc(
           checkpoint.account,
@@ -713,7 +743,7 @@ function PendingTransferCard({
       if (active())
         setError(
           conversionConfirmed
-            ? `Conversion confirmed on Stellar; its USDC remains in your wallet. Fresh bridge preparation failed: ${errorMessage(cause)}. No new bridge was submitted.`
+            ? message("conversionPreparationFailed", { reason: errorMessage(cause) })
             : errorMessage(cause),
         );
     } finally {
@@ -724,6 +754,10 @@ function PendingTransferCard({
     }
   };
   const continueBridge = async () => {
+    if (!runtimeSigningAvailable(runtime.capabilities, checkpoint.route)) {
+      setError(message("runtimeUnknown"));
+      return;
+    }
     if (
       !review ||
       !reviewedIntent ||
@@ -800,7 +834,12 @@ function PendingTransferCard({
                 status: result.status === "confirmed" ? "confirmed" : "failed",
                 owner,
                 source: "rpc",
-                message: `The transaction is ${result.status} on Stellar Testnet.`,
+                message: recoveryMessage(
+                  "bridge",
+                  result.status === "confirmed" ? "confirmed" : "failed",
+                  false,
+                  translations,
+                ),
               },
         );
         setReview(null);
@@ -813,10 +852,8 @@ function PendingTransferCard({
         setCardDiff(cause.diff);
         setError(null);
       } else if (active()) {
-        const message = errorMessage(cause);
-        setError(
-          `Conversion remains confirmed on Stellar. Fresh bridge attempt failed before submission: ${message}. Its USDC remains in your wallet.`,
-        );
+        const reason = errorMessage(cause);
+        setError(message("conversionAttemptFailed", { reason }));
       }
     } finally {
       if (requestRef.current === controller) requestRef.current = null;
@@ -851,29 +888,11 @@ function PendingTransferCard({
       <div className={styles.pendingTitle}>
         <ShieldCheck size={18} aria-hidden="true" />
         <h2>
-          {visibleCurrent?.status === "failed"
-            ? "Transaction failed on Stellar"
-            : checkpoint.stage === "conversion"
-              ? visibleCurrent?.status === "confirmed"
-                ? "Conversion confirmed"
-                : "Conversion source status unknown"
-              : visibleCurrent?.status === "confirmed"
-                ? "Transfer confirmed on Stellar"
-                : "Transfer source status unknown"}
+          {recoveryMessage(checkpoint.stage, visibleCurrent?.status ?? null, true, translations)}
         </h2>
       </div>
       <p id="pending-recovery-message" ref={recoveryMessageRef} role="status" tabIndex={-1}>
-        {checkpoint.stage === "conversion"
-          ? visibleCurrent?.status === "confirmed"
-            ? "Conversion confirmed on Stellar. Your bridge is a separate transaction and still requires your wallet approval."
-            : visibleCurrent?.status === "failed"
-              ? "Conversion failed on Stellar. No bridge transaction was submitted."
-              : "This saved signed hash does not establish broadcast or confirmation. Check the conversion source status before continuing with USDC."
-          : visibleCurrent?.status === "confirmed"
-            ? "Source transaction confirmed on Stellar. Destination delivery is tracked separately."
-            : visibleCurrent?.status === "failed"
-              ? "Source transaction failed on Stellar. No destination delivery was initiated."
-              : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
+        {recoveryMessage(checkpoint.stage, visibleCurrent?.status ?? null, false, translations)}
       </p>
       {checkpoint.stage === "conversion" && checkpoint.source && (
         <p className={styles.address}>
@@ -929,12 +948,13 @@ function PendingTransferCard({
       )}
       {!sameAccount && (
         <p>
-          Reconnect {checkpoint.account.slice(0, 7)}...{checkpoint.account.slice(-7)} to continue
-          this transfer.
+          {message("recoveryReconnect", {
+            account: `${checkpoint.account.slice(0, 7)}...${checkpoint.account.slice(-7)}`,
+          })}
         </p>
       )}
-      <p className={styles.address}>This recoverable operation belongs to {checkpoint.account}.</p>
-      {checking && <p role="status">Checking Stellar Testnet transaction history...</p>}
+      <p className={styles.address}>{message("recoveryOwner", { account: checkpoint.account })}</p>
+      {checking && <p role="status">{message("recoveryChecking")}</p>}
       {visibleCurrent && visibleCurrent.message !== error && (
         <p role="status">{visibleCurrent.message}</p>
       )}
@@ -957,7 +977,7 @@ function PendingTransferCard({
           }}
           disabled={busy || checking}
         >
-          Start another transfer
+          {message("recoveryStartAnother")}
         </button>
       ) : (
         <button
@@ -973,10 +993,10 @@ function PendingTransferCard({
           disabled={busy || checking}
         >
           {checking
-            ? "Checking transaction..."
+            ? message("recoveryCheckingAction")
             : checkpoint.stage === "conversion" && sameAccount
-              ? "Check and continue"
-              : "Check status"}
+              ? message("recoveryContinue")
+              : message("recoveryCheck")}
         </button>
       )}
       {review && checked?.owner === recoveryOwner && (
@@ -1007,6 +1027,7 @@ function PendingTransferCard({
                 type="button"
                 className={styles.primary}
                 disabled={
+                  !runtimeSigningAvailable(runtime.capabilities, checkpoint.route) ||
                   checking ||
                   !sameAccount ||
                   cardSimulating ||
@@ -1024,14 +1045,12 @@ function PendingTransferCard({
                     ? "Estimating simulation..."
                     : cardSimError
                       ? "Approval blocked"
-                      : "Bridge converted USDC"}
+                      : message("approveBridge")}
               </button>
             </>
           }
         >
-          <p className={styles.reviewNote}>
-            Conversion confirmed. This step bridges the USDC already in your wallet.
-          </p>
+          <p className={styles.reviewNote}>{message("recoveryExistingUSDC")}</p>
           <ApprovalDetails
             approval={{
               account: checkpoint.account,
@@ -1058,8 +1077,8 @@ function PendingTransferCard({
           <p className={styles.address}>Recipient: {checkpoint.recipient}</p>
           {cardSimulation && (
             <p className={styles.address}>
-              Operation: bridge_out_with_gas ({formatUnits(cardSimulation.totalFee, 7)} XLM total
-              envelope fee)
+              Operation: bridge_out_with_gas (
+              {amountLabel(cardSimulation.totalFee, 7, "XLM", translations)} total envelope fee)
             </p>
           )}
           {cardSimError && (
@@ -1075,12 +1094,16 @@ function PendingTransferCard({
 }
 
 export function Bridge() {
+  const message = useMessages();
+  const translations = useTranslations();
+  const runtime = useRuntimeCapabilities();
   const wallet = useStellarWallet();
   const checkpoint = useTransferCheckpoint();
   const checkpointStorageError = useCheckpointStorageError();
   const [source, setSource] = useState<SourceAsset>(USDC);
   const [destination, setDestination] = useState<DestinationKey>("sepolia");
   const [route, setRoute] = useState<BridgeRoute>(1);
+  const runtimeReady = runtimeSigningAvailable(runtime.capabilities, route);
   const [amount, setAmount] = useState("");
   const [recipient, setRecipient] = useState("");
   const [touched, setTouched] = useState(false);
@@ -1271,7 +1294,7 @@ export function Bridge() {
   const locked = busy || checkpoint !== null || checkpointStorageError !== null;
   let inputError: string | null = null;
   let valid = false;
-  const amountValidation = validateAmount(amount);
+  const amountValidation = validateAmount(amount, translations);
   if (amount.trim() && recipient.trim()) {
     try {
       if (!amountValidation.valid) throw new Error(amountValidation.message);
@@ -1282,8 +1305,13 @@ export function Bridge() {
     }
   }
   const fetching =
-    valid && !locked && !laneError && (!lane || (lane.available && quoted?.key !== quoteKey));
+    runtimeReady &&
+    valid &&
+    !locked &&
+    !laneError &&
+    (!lane || (lane.available && quoted?.key !== quoteKey));
   const simulating =
+    runtimeReady &&
     valid &&
     !!wallet.address &&
     !!quote &&
@@ -1384,7 +1412,7 @@ export function Bridge() {
     };
   }, [wallet.address, result, refresh]);
   useEffect(() => {
-    if (!valid || !lane?.available || locked) return;
+    if (!runtimeReady || !valid || !lane?.available || locked) return;
     let active = true;
     const timer = setTimeout(() => {
       void quoteTrade(destination, activeSource, amount, route)
@@ -1411,11 +1439,11 @@ export function Bridge() {
       active = false;
       clearTimeout(timer);
     };
-  }, [valid, lane, locked, destination, activeSource, amount, route, quoteKey]);
+  }, [runtimeReady, valid, lane, locked, destination, activeSource, amount, route, quoteKey]);
   useEffect(() => {
     const sender = wallet.address;
     // Conversion funds the later bridge. Simulate that bridge only after conversion confirms.
-    if (!valid || !quote || quote.conversion || !sender || locked) return;
+    if (!runtimeReady || !valid || !quote || quote.conversion || !sender || locked) return;
     let active = true;
     const timer = setTimeout(() => {
       void simulateBridgeOut(sender, quote.bridge, recipient)
@@ -1430,9 +1458,13 @@ export function Bridge() {
       active = false;
       clearTimeout(timer);
     };
-  }, [valid, quote, wallet.address, locked, recipient, simKey]);
+  }, [runtimeReady, valid, quote, wallet.address, locked, recipient, simKey]);
 
   const submit = async () => {
+    if (!runtimeReady) {
+      setError(message("runtimeUnknown"));
+      return;
+    }
     if (
       !reviewed ||
       !wallet.address ||
@@ -1446,7 +1478,7 @@ export function Bridge() {
       setReviewing(false);
       setReviewApproval(null);
       setReviewed(null);
-      setError("Your wallet account changed. Review the transfer again.");
+      setError(message("walletChanged"));
       return;
     }
     let intentMatches = false;
@@ -1755,7 +1787,11 @@ export function Bridge() {
       trustlineReserveUnknown ||
       trustlineReserveInsufficient);
   const routeReadBlocked =
-    !!laneError || (valid && lane !== null && !lane.available) || !!quoteError || !!simulationError;
+    !runtimeReady ||
+    !!laneError ||
+    (valid && lane !== null && !lane.available) ||
+    !!quoteError ||
+    !!simulationError;
   const validationSummary = [
     amountProblem ? { id: "send-amount", label: "amount" } : null,
     recipientProblem ? { id: "recipient", label: "destination wallet" } : null,
@@ -1771,35 +1807,41 @@ export function Bridge() {
   ].filter((item): item is { id: string; label: string } => item !== null);
   const actionHelp = checkpoint
     ? "Check the saved source transaction before approving another transfer."
-    : refreshing || fetching
-      ? "Wait while the current route and fee estimate are loaded."
-      : simulating
-        ? "Wait while the current transaction simulation is checked."
-        : busy
-          ? "An approval or source transaction check is already in progress."
-          : amountProblem || recipientProblem || !valid
-            ? "Enter a valid amount and destination wallet before reviewing."
-            : !wallet.address
-              ? "Connect your Stellar wallet to check its balance and review this transfer."
-              : laneError || (lane && !lane.available)
-                ? (lane?.reason ?? "Network verification is unavailable. Refresh to try again.")
-                : quoteError
-                  ? "The route or fee read failed. Refresh to retry before reviewing."
-                  : simulationError
-                    ? "The transaction check failed. Refresh to retry before reviewing."
-                    : insufficient || exceedsFlow
-                      ? "Reduce the amount to fit your spendable balance and the available route limit."
-                      : sourceBalance === undefined
-                        ? "Your current source balance has not been confirmed. Refresh to retry."
-                        : !trustlineOk
-                          ? "This source asset is not authorized for spending. Choose an available asset."
-                          : xlmStatus !== "ok" ||
-                              trustlineReserveUnknown ||
-                              trustlineReserveInsufficient
-                            ? "The account reserve and network fee checks must pass before reviewing."
-                            : !quote || (!quote.conversion && !simulation)
-                              ? "Wait for the current route and transaction checks to finish."
-                              : "Quote and balance checks complete. Review the exact amounts to continue. No transaction has been submitted.";
+    : !runtimeReady
+      ? message(
+          runtime.capabilities.routes[route === 0 ? "cctp" : "relay"] === "missing"
+            ? "staticFeeUnavailable"
+            : "runtimeUnknown",
+        )
+      : refreshing || fetching
+        ? "Wait while the current route and fee estimate are loaded."
+        : simulating
+          ? "Wait while the current transaction simulation is checked."
+          : busy
+            ? "An approval or source transaction check is already in progress."
+            : amountProblem || recipientProblem || !valid
+              ? "Enter a valid amount and destination wallet before reviewing."
+              : !wallet.address
+                ? "Connect your Stellar wallet to check its balance and review this transfer."
+                : laneError || (lane && !lane.available)
+                  ? (lane?.reason ?? "Network verification is unavailable. Refresh to try again.")
+                  : quoteError
+                    ? "The route or fee read failed. Refresh to retry before reviewing."
+                    : simulationError
+                      ? "The transaction check failed. Refresh to retry before reviewing."
+                      : insufficient || exceedsFlow
+                        ? "Reduce the amount to fit your spendable balance and the available route limit."
+                        : sourceBalance === undefined
+                          ? "Your current source balance has not been confirmed. Refresh to retry."
+                          : !trustlineOk
+                            ? "This source asset is not authorized for spending. Choose an available asset."
+                            : xlmStatus !== "ok" ||
+                                trustlineReserveUnknown ||
+                                trustlineReserveInsufficient
+                              ? "The account reserve and network fee checks must pass before reviewing."
+                              : !quote || (!quote.conversion && !simulation)
+                                ? "Wait for the current route and transaction checks to finish."
+                                : "Quote and balance checks complete. Review the exact amounts to continue. No transaction has been submitted.";
 
   return (
     <>
@@ -1906,7 +1948,7 @@ export function Bridge() {
             </button>
           </div>
           <p id="send-amount-help" className={styles.balance} aria-live="polite">
-            {amountValidation.valid ? "Amount is valid." : amountValidation.message}
+            {amountValidation.valid ? message("amountValid") : amountValidation.message}
           </p>
           <p className={styles.balance}>
             {wallet.address
@@ -1962,10 +2004,12 @@ export function Bridge() {
               <div className={styles.skeleton} aria-hidden="true" />
             ) : (
               <output aria-label="Minimum received" className={styles.receiveAmount}>
-                {quote ? (
+                {runtimeReady && quote ? (
                   formatUnits(quote.bridge.destinationAmount, destinationDecimals(route))
                 ) : (
-                  <span className={styles.emptyAmount}>{quoteError ? "Unavailable" : "0.00"}</span>
+                  <span className={styles.emptyAmount}>
+                    {quoteError || (valid && !runtimeReady) ? message("amountUnavailable") : "0.00"}
+                  </span>
                 )}
               </output>
             )}
@@ -2112,7 +2156,7 @@ export function Bridge() {
             </span>
             <div>
               <strong>Finding your route</strong>
-              <span>Checking liquidity, bridge fees and the receive amount</span>
+              <span>{message("routeLoading")}</span>
             </div>
             <span className={styles.fetchDots} aria-hidden="true">
               <i />
@@ -2154,12 +2198,18 @@ export function Bridge() {
         ) : (
           !locked && (
             <p className={styles.quotePrompt}>
-              {lane?.available
-                ? "Enter an amount and destination wallet to find your route."
-                : (lane?.reason ??
-                  (laneError
-                    ? "Network verification is unavailable. Refresh to try again."
-                    : "Checking bridge availability..."))}
+              {!runtimeReady && valid
+                ? message(
+                    runtime.capabilities.routes[route === 0 ? "cctp" : "relay"] === "missing"
+                      ? "staticFeeUnavailable"
+                      : "runtimeUnknown",
+                  )
+                : lane?.available
+                  ? "Enter an amount and destination wallet to find your route."
+                  : (lane?.reason ??
+                    (laneError
+                      ? "Network verification is unavailable. Refresh to try again."
+                      : "Checking bridge availability..."))}
             </p>
           )
         )}
@@ -2278,23 +2328,16 @@ export function Bridge() {
         {result?.failure && (
           <p role="status" className={styles.assetNote}>
             {result.failure.stage === "broadcast"
-              ? "The source broadcast outcome is unknown."
-              : "Source confirmation is temporarily unavailable."}{" "}
-            Check the saved source hash before approving another transaction.
+              ? message("sourceBroadcastUnknown")
+              : message("sourceConfirmationUnavailable")}{" "}
+            {message("sourceCheckBeforeApproval")}
           </p>
         )}
         {busy && (
           <p role="status" className={styles.progress}>
             <LoaderCircle className={styles.spinner} size={16} aria-hidden="true" />
-            {step === "conversion" ? "Converting to USDC" : "Preparing your bridge"}:{" "}
-            {phase === "signing"
-              ? "confirm in your wallet"
-              : phase === "submitting"
-                ? "submitting the signed transaction"
-                : phase === "pending"
-                  ? "waiting for Stellar confirmation"
-                  : "checking the current quote"}
-            .
+            {message(step === "conversion" ? "stepConversion" : "stepBridge")}:{" "}
+            {phaseMessage(phase, translations)}.
           </p>
         )}
         {busy && phase === "pending" && (
@@ -2303,7 +2346,7 @@ export function Bridge() {
             className={styles.secondary}
             onClick={() => waitController.current?.abort()}
           >
-            Stop waiting
+            {message("stopWaiting")}
           </button>
         )}
         <button
@@ -2343,6 +2386,7 @@ export function Bridge() {
               type="button"
               className={styles.primary}
               disabled={
+                !runtimeReady ||
                 !quote ||
                 (!quote.conversion && !simulation) ||
                 busy ||
@@ -2355,7 +2399,13 @@ export function Bridge() {
                 trustlineReserveInsufficient
               }
               onClick={() => {
-                if (!wallet.address || !quote || (!quote.conversion && !simulation)) return;
+                if (
+                  !runtimeReady ||
+                  !wallet.address ||
+                  !quote ||
+                  (!quote.conversion && !simulation)
+                )
+                  return;
                 const intent = makeReviewedIntent(
                   wallet.address,
                   quote.source,
@@ -2389,7 +2439,7 @@ export function Bridge() {
                   ? "Estimating bridge fees..."
                   : simulationError
                     ? "Refresh to retry simulation"
-                    : "Review transfer"}
+                    : message("reviewTransfer")}
               <ArrowRight size={18} aria-hidden="true" />
             </button>
           )
@@ -2494,29 +2544,37 @@ export function Bridge() {
                   void submit();
                 }}
               >
-                {simulating
-                  ? "Estimating simulation..."
-                  : simulationError
-                    ? "Approval blocked"
-                    : "Confirm in wallet"}{" "}
+                {message(
+                  simulating
+                    ? "simulationEstimating"
+                    : simulationError
+                      ? "approvalBlocked"
+                      : "confirmInWallet",
+                )}{" "}
                 <ArrowUpRight size={17} aria-hidden="true" />
               </button>
             </>
           }
         >
           <div className={styles.reviewTotal}>
-            <span>You send {reviewed.quote.conversion ? "up to" : ""}</span>
+            <span>{message(reviewed.quote.conversion ? "reviewSendMaximum" : "reviewSend")}</span>
             <strong>
-              {formatUnits(reviewed.quote.sourceAmount, 7)} {reviewed.quote.source.code}
+              {amountLabel(
+                reviewed.quote.sourceAmount,
+                7,
+                reviewed.quote.source.code,
+                translations,
+              )}
             </strong>
             <ArrowDown size={20} aria-hidden="true" />
-            <span>You receive at least</span>
+            <span>{message("reviewReceive")}</span>
             <strong>
-              {formatUnits(
+              {amountLabel(
                 reviewed.quote.bridge.destinationAmount,
                 destinationDecimals(reviewed.quote.bridge.route),
-              )}{" "}
-              {receiveSymbol(reviewed.quote.bridge.route)}
+                receiveSymbol(reviewed.quote.bridge.route),
+                translations,
+              )}
             </strong>
           </div>
           <p className={styles.reviewNote}>
@@ -2600,6 +2658,8 @@ export function Bridge() {
 }
 
 export function ClaimRecovery() {
+  const message = useMessages();
+  const translations = useTranslations();
   const wallet = useStellarWallet();
   const currentAccount = useRef(wallet.address);
   useLayoutEffect(() => {
@@ -2900,7 +2960,7 @@ export function ClaimRecovery() {
                 disabled={busy || !!claimStorageError}
                 onClick={() => void reconcileSettlement()}
               >
-                {busy ? "Checking settlement..." : "Check settlement status"}
+                {message(busy ? "settlementChecking" : "settlementCheck")}
               </button>
               <a
                 href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -2918,15 +2978,7 @@ export function ClaimRecovery() {
           )}
           {claimPhase && (
             <p role="status" aria-live="polite" className={styles.reviewNote}>
-              {claimPhase === "signing"
-                ? "Confirm settlement in your wallet."
-                : claimPhase === "submitting"
-                  ? "Broadcasting the signed settlement."
-                  : claimPhase === "pending"
-                    ? "Waiting for settlement confirmation; you may navigate away safely."
-                    : claimPhase === "confirmed"
-                      ? "Settlement confirmed on Stellar."
-                      : "Preparing claim settlement."}
+              {settlementPhaseMessage(claimPhase, translations)}
             </p>
           )}
           <button type="button" disabled={busy} onClick={() => void loadOpenClaims()}>
