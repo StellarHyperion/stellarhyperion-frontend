@@ -118,6 +118,54 @@ describe("browser account signing ownership and durable preconditions", () => {
     expect(values.get(key)).toBe(JSON.stringify(conversion));
     owner.release();
   });
+  it("uses secure random bytes when UUID generation is unavailable", async () => {
+    const getRandomValues = vi.fn((bytes: Uint8Array) => {
+      bytes.fill(7);
+      return bytes;
+    });
+    vi.stubGlobal("crypto", { getRandomValues });
+    const owner = await acquireOperationOwnership(intent);
+    expect(owner.id).toBe("07".repeat(16));
+    expect(getRandomValues).toHaveBeenCalledOnce();
+    expect(values.get("hyperion.testnet.operation-ownership")).toContain(owner.id);
+    owner.release();
+    await vi.waitFor(() => {
+      expect(held.size).toBe(0);
+    });
+  });
+  it("refuses unavailable secure randomness and releases both locks without changing signed recovery", async () => {
+    const conversion = {
+      ...pending,
+      stage: "conversion" as const,
+      schemaVersion: 1 as const,
+      revision: 7,
+    };
+    values.set(key, JSON.stringify(conversion));
+    const original = [...values];
+    vi.stubGlobal("crypto", undefined);
+    await expect(acquireOperationOwnership(intent, conversion)).rejects.toThrow(
+      "Secure browser randomness is unavailable",
+    );
+    await vi.waitFor(() => {
+      expect(held.size).toBe(0);
+    });
+    expect([...values]).toEqual(original);
+  });
+  it("does not downgrade a failed secure generator to a weaker ownership ID", async () => {
+    const getRandomValues = vi.fn();
+    vi.stubGlobal("crypto", {
+      randomUUID: () => {
+        throw new Error("Secure generator failed");
+      },
+      getRandomValues,
+    });
+    await expect(acquireOperationOwnership(intent)).rejects.toThrow("Secure generator failed");
+    await vi.waitFor(() => {
+      expect(held.size).toBe(0);
+    });
+    expect(getRandomValues).not.toHaveBeenCalled();
+    expect(values.size).toBe(0);
+  });
   it("blocks missing lock support and silently discarded ownership storage", async () => {
     vi.stubGlobal("navigator", {});
     await expect(acquireOperationOwnership(intent)).rejects.toThrow("supported browser");

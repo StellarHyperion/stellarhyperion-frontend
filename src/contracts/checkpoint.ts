@@ -724,6 +724,17 @@ export function getOperationOwnership(): OperationOwnership | null {
   }
 }
 
+function createOperationOwnershipId(): string {
+  if (typeof crypto !== "undefined") {
+    if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    if (typeof crypto.getRandomValues === "function") {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
+  }
+  throw new Error("Secure browser randomness is unavailable. No transaction will be signed.");
+}
+
 export function claimOperationOwnership(
   ownership: Omit<OperationOwnership, "id" | "timestamp"> & {
     id?: string;
@@ -732,11 +743,7 @@ export function claimOperationOwnership(
 ): OperationOwnership {
   if (typeof window !== "undefined" && typeof localStorage === "undefined")
     throw new Error("Browser storage is unavailable. Review the transfer again before signing.");
-  const id =
-    ownership.id ??
-    (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
+  const id = ownership.id ?? createOperationOwnershipId();
   const record: OperationOwnership = {
     account: ownership.account,
     recipient: ownership.recipient,
