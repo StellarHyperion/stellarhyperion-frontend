@@ -5,8 +5,12 @@
   background: var(--surface-raised);
   color: var(--text-primary);
   width: min(440px, calc(100vw - 24px));
-  max-height: 85dvh;
+  max-height: min(85dvh, calc(100dvh - 24px));
   margin: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 .dialog::backdrop {
   background: color-mix(in srgb, var(--surface-page) 65%, transparent);
@@ -14,24 +18,61 @@
 }
 .content {
   padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+/*
+ * Only the body scrolls. The heading and the footer actions are siblings of this box, so a
+ * review of a long conversion intent never pushes Cancel or Confirm out of reach on a phone or
+ * at 200 percent zoom.
+ */
+.body {
   display: grid;
   gap: 16px;
+  align-content: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 16px 24px;
+  padding-block-end: calc(16px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--edge-color);
+  background: var(--surface-raised);
+}
+.footer > button {
+  flex: 1 1 10rem;
+  min-block-size: var(--tap-target);
 }
 .heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex-shrink: 0;
 }
 .heading h2 {
   font-size: 1.125rem;
   font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .heading button {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: var(--tap-target);
+  height: var(--tap-target);
+  flex-shrink: 0;
   border: 0;
   border-radius: 50%;
   background: var(--surface-panel);
@@ -163,6 +204,9 @@
   font-size: 0.6875rem;
 }
 .issuerDetails summary {
+  min-block-size: var(--tap-target);
+  display: flex;
+  align-items: center;
   cursor: pointer;
   width: fit-content;
 }
@@ -220,7 +264,7 @@
 }
 .networks {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
   gap: 8px;
 }
 .network {
@@ -246,6 +290,21 @@
   font-size: 0.625rem;
   color: var(--text-secondary);
   margin-top: 4px;
+}
+@media (width <= 30rem) {
+  .dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+  .content {
+    padding: 16px;
+  }
+  .footer {
+    padding-inline: 16px;
+  }
+  .footer > button {
+    flex-basis: 100%;
+  }
 }
 @media (prefers-reduced-motion: no-preference) {
   .dialog[open] {
