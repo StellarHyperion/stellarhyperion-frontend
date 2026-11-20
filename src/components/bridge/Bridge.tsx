@@ -2068,10 +2068,12 @@ export function Bridge() {
               <div className={styles.skeleton} aria-hidden="true" />
             ) : (
               <output aria-label="Minimum received" className={styles.receiveAmount}>
-                {quote ? (
+                {runtimeReady && quote ? (
                   formatUnits(quote.bridge.destinationAmount, destinationDecimals(route))
                 ) : (
-                  <span className={styles.emptyAmount}>{quoteError ? "Unavailable" : "0.00"}</span>
+                  <span className={styles.emptyAmount}>
+                    {quoteError || (valid && !runtimeReady) ? message("amountUnavailable") : "0.00"}
+                  </span>
                 )}
               </output>
             )}
@@ -2260,12 +2262,18 @@ export function Bridge() {
         ) : (
           !locked && (
             <p className={styles.quotePrompt}>
-              {lane?.available
-                ? "Enter an amount and destination wallet to find your route."
-                : (lane?.reason ??
-                  (laneError
-                    ? "Network verification is unavailable. Refresh to try again."
-                    : "Checking bridge availability..."))}
+              {!runtimeReady && valid
+                ? message(
+                    runtime.capabilities.routes[route === 0 ? "cctp" : "relay"] === "missing"
+                      ? "staticFeeUnavailable"
+                      : "runtimeUnknown",
+                  )
+                : lane?.available
+                  ? "Enter an amount and destination wallet to find your route."
+                  : (lane?.reason ??
+                    (laneError
+                      ? "Network verification is unavailable. Refresh to try again."
+                      : "Checking bridge availability..."))}
             </p>
           )
         )}
@@ -2600,29 +2608,37 @@ export function Bridge() {
                   void submit();
                 }}
               >
-                {simulating
-                  ? "Estimating simulation..."
-                  : simulationError
-                    ? "Approval blocked"
-                    : "Confirm in wallet"}{" "}
+                {message(
+                  simulating
+                    ? "simulationEstimating"
+                    : simulationError
+                      ? "approvalBlocked"
+                      : "confirmInWallet",
+                )}{" "}
                 <ArrowUpRight size={17} aria-hidden="true" />
               </button>
             </>
           }
         >
           <div className={styles.reviewTotal}>
-            <span>You send {reviewed.quote.conversion ? "up to" : ""}</span>
+            <span>{message(reviewed.quote.conversion ? "reviewSendMaximum" : "reviewSend")}</span>
             <strong>
-              {formatUnits(reviewed.quote.sourceAmount, 7)} {reviewed.quote.source.code}
+              {amountLabel(
+                reviewed.quote.sourceAmount,
+                7,
+                reviewed.quote.source.code,
+                translations,
+              )}
             </strong>
             <ArrowDown size={20} aria-hidden="true" />
-            <span>You receive at least</span>
+            <span>{message("reviewReceive")}</span>
             <strong>
-              {formatUnits(
+              {amountLabel(
                 reviewed.quote.bridge.destinationAmount,
                 destinationDecimals(reviewed.quote.bridge.route),
-              )}{" "}
-              {receiveSymbol(reviewed.quote.bridge.route)}
+                receiveSymbol(reviewed.quote.bridge.route),
+                translations,
+              )}
             </strong>
           </div>
           <p className={styles.reviewNote}>
