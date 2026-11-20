@@ -14,6 +14,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { sorobanErrorCode, toHex } from "@hyperion/protocol";
 import {
+  QuoteChangedError,
   createReviewedIntentSnapshot,
   reviewedBridgeMatches,
   reviewedIntentMatches,
@@ -31,6 +32,7 @@ import {
   simulateOperation,
   TransferLimitError,
 } from "../src/contracts/stellar";
+import { compareQuotes } from "../src/lib/quote-diff";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint } from "../src/contracts/checkpoint";
@@ -286,6 +288,108 @@ describe("Immutable reviewed transfer intent", () => {
       ["base-sepolia", [0]],
       ["arc-testnet", [0]],
     ]);
+  });
+});
+
+describe("Refreshed quote field-level diff", () => {
+  const reviewedQuote = {
+    route: 1 as 0 | 1,
+    destination: "sepolia",
+    adapter: "axelar-its",
+    requestedAmount: 9007199254740993n,
+    grossAmount: 9007199254740993n,
+    fee: 1_000_000n,
+    destinationAmount: 9007199254740001n,
+    relayGas: 123_450n,
+    estimatedRelayGas: 112_230n,
+    ledger: 100,
+  };
+  const refreshedQuote = (overrides: Partial<typeof reviewedQuote> = {}) => ({
+    ...reviewedQuote,
+    ledger: 101,
+    ...overrides,
+  });
+
+  it("drives materiality from exact base units even when display rounding hides the change", () => {
+    const diff = compareQuotes(
+      { ...reviewedQuote, fee: 1_000_000n },
+      refreshedQuote({ fee: 1_000_001n }),
+      { displayDecimals: 2 },
+    );
+    const fee = diff.fields.find((field) => field.key === "fee");
+    expect(fee?.reviewedDisplay).toBe("0.1 USDC");
+    expect(fee?.refreshedDisplay).toBe("0.1 USDC");
+    expect(fee?.delta).toBe(1n);
+    expect(fee?.direction).toBe("worse");
+    expect(diff.materialWorsening).toBe(true);
+  });
+
+  it("reports a single-unit minimum worsening and provider budget increase exactly", () => {
+    const diff = compareQuotes(
+      reviewedQuote,
+      refreshedQuote({
+        destinationAmount: reviewedQuote.destinationAmount - 1n,
+        relayGas: reviewedQuote.relayGas + 1n,
+      }),
+    );
+    const minimum = diff.fields.find((field) => field.key === "minimum");
+    const budget = diff.fields.find((field) => field.key === "providerBudget");
+    expect(minimum?.delta).toBe(-1n);
+    expect(minimum?.direction).toBe("worse");
+    expect(budget?.delta).toBe(1n);
+    expect(budget?.direction).toBe("worse");
+    expect(minimum?.unit).toBe("USDC (ITS)");
+    expect(budget?.unit).toBe("XLM");
+    expect(diff.materialWorsening).toBe(true);
+  });
+
+  it("shows improvements without changing any reviewed intent value", () => {
+    const diff = compareQuotes(
+      reviewedQuote,
+      refreshedQuote({
+        fee: reviewedQuote.fee - 1n,
+        destinationAmount: reviewedQuote.destinationAmount + 1n,
+        relayGas: reviewedQuote.relayGas - 1n,
+        estimatedRelayGas: reviewedQuote.estimatedRelayGas - 1n,
+      }),
+    );
+    expect(diff.improved).toBe(true);
+    expect(diff.materialWorsening).toBe(false);
+    for (const field of diff.fields.filter((entry) => entry.delta !== null)) {
+      expect(field.direction).toBe("better");
+    }
+    const fee = diff.fields.find((field) => field.key === "fee");
+    expect(fee?.reviewed).toBe(reviewedQuote.fee);
+    expect(fee?.refreshed).toBe(reviewedQuote.fee - 1n);
+  });
+
+  it("treats route configuration changes as a material review trigger", () => {
+    const diff = compareQuotes(reviewedQuote, refreshedQuote({ route: 0, adapter: "circle-cctp" }));
+    const route = diff.fields.find((field) => field.key === "route");
+    expect(route?.direction).toBe("changed");
+    expect(route?.material).toBe(true);
+    expect(diff.fields.some((field) => field.key === "adapter" && field.material)).toBe(true);
+    expect(diff.materialWorsening).toBe(true);
+  });
+
+  it("keeps a new ledger informational and reports an unchanged quote as no diff", () => {
+    expect(compareQuotes(reviewedQuote, { ...reviewedQuote }).changed).toBe(false);
+    const diff = compareQuotes(reviewedQuote, refreshedQuote());
+    expect(diff.changed).toBe(true);
+    expect(diff.materialWorsening).toBe(false);
+    expect(diff.fields).toHaveLength(1);
+    expect(diff.fields[0]?.key).toBe("ledger");
+    expect(diff.fields[0]?.material).toBe(false);
+  });
+
+  it("carries the field diff on the pre-signing review error", () => {
+    const diff = compareQuotes(
+      reviewedQuote,
+      refreshedQuote({ destinationAmount: reviewedQuote.destinationAmount - 1n }),
+    );
+    const error = new QuoteChangedError(diff);
+    expect(error.diff).toBe(diff);
+    expect(error.message).toMatch(/reviewed quote/);
   });
 });
 

@@ -906,6 +906,49 @@
     gap: 10px;
   }
 }
+
+.quoteDiff {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 14px;
+  background: var(--surface-well);
+}
+.quoteDiff h3 {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.quoteDiff .summary > div,
+.quoteDiff .summary dd {
+  font-size: 0.875rem;
+}
+.quoteDiff .summary dt {
+  flex-shrink: 0;
+  max-width: 45%;
+}
+.diffWorse dt,
+.diffWorse dd {
+  color: var(--state-failed);
+}
+.diffBetter dt,
+.diffBetter dd {
+  color: var(--leg-origin);
+}
+.diffKind {
+  display: block;
+  font-family: var(--face-mono);
+  font-size: 0.875rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.diffDelta {
+  display: block;
+  font-family: var(--face-mono);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
 /*
  * 30rem and below covers a small phone and a 640 pixel window at 200 percent zoom. The amount
  * gets its own line so a long figure never sits on top of Max or the token selector, and the
