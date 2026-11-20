@@ -1,3 +1,5 @@
+import { TESTNET, destinationFor } from "../config/testnet";
+import type { LocalTransferReference } from "../lib/local-transfers";
 /**
  * Backend REST API client for Hyperion transfer tracking and claims.
  *
@@ -279,4 +281,82 @@ export function fetchTransferByTx(
   if (!/^[0-9a-f]{64}$/i.test(hash))
     return Promise.reject(new Error("Enter a 64-character Stellar transaction hash."));
   return request<FormattedTransfer>(`/v1/transfers/by-tx/${hash.toLowerCase()}`, true, signal);
+}
+
+export interface ReconciliationResult {
+  readonly reference: LocalTransferReference;
+  readonly transfer: FormattedTransfer | null;
+  readonly error: string | null;
+}
+
+export function localTransferMatches(
+  reference: LocalTransferReference,
+  record: FormattedTransfer,
+): boolean {
+  const checkpoint = reference.checkpoint;
+  return (
+    record.origin.chain === "stellar-testnet" &&
+    record.origin.sender === checkpoint.account &&
+    record.origin.txHash.toLowerCase() === checkpoint.txHash &&
+    record.origin.token === (checkpoint.token ?? TESTNET.token) &&
+    record.origin.router === checkpoint.router &&
+    record.route === checkpoint.route &&
+    record.destination.recipient.toLowerCase() === checkpoint.recipient.toLowerCase() &&
+    record.destination.chain === destinationFor(checkpoint.destination).key
+  );
+}
+
+/** Compatibility fallback: the current backend has by-tx reads, no bulk endpoint. */
+export async function reconcileTransfers(
+  account: string,
+  references: readonly LocalTransferReference[],
+  signal?: AbortSignal,
+): Promise<ReconciliationResult[]> {
+  const selected = references
+    .filter(
+      (ref) =>
+        ref.checkpoint.account === account &&
+        ref.checkpoint.stage === "bridge" &&
+        /^[0-9a-f]{64}$/.test(ref.checkpoint.txHash),
+    )
+    .filter(
+      (ref, index, all) =>
+        all.findIndex((other) => other.checkpoint.txHash === ref.checkpoint.txHash) === index,
+    )
+    .slice(0, 20);
+  const results: ReconciliationResult[] = selected.map((reference) => ({
+    reference,
+    transfer: null,
+    error: "Lookup pending.",
+  }));
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(4, selected.length) }, async () => {
+      while (next < selected.length) {
+        const index = next++;
+        const reference = selected[index];
+        if (!reference) continue;
+        try {
+          if (signal?.aborted) throw new Error("Local source lookup cancelled.");
+          const record = await fetchTransferByTx(reference.checkpoint.txHash, signal);
+          const matches = record !== null && localTransferMatches(reference, record);
+          results[index] = {
+            reference,
+            transfer: matches ? record : null,
+            error:
+              record && !matches
+                ? "Indexer identity does not match this local source reference."
+                : null,
+          };
+        } catch (cause) {
+          results[index] = {
+            reference,
+            transfer: null,
+            error: cause instanceof Error ? cause.message : "Lookup failed.",
+          };
+        }
+      }
+    }),
+  );
+  return results;
 }

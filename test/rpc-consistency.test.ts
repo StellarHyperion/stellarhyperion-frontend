@@ -263,15 +263,17 @@ describe("Checkpoint reset compares the complete saved intent", () => {
     expect(storage.removeItem).not.toHaveBeenCalled();
   });
   it("clears only the exact reviewed checkpoint", () => {
-    let value: string | null = JSON.stringify(checkpoint);
+    const values = new Map([["hyperion.testnet.pending-transfer", JSON.stringify(checkpoint)]]);
     vi.stubGlobal("localStorage", {
-      getItem: () => value,
-      setItem: vi.fn(),
-      removeItem: () => {
-        value = null;
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: (key: string) => {
+        values.delete(key);
       },
     });
     saveCheckpoint(null, checkpoint);
-    expect(value).toBeNull();
+    expect(values.has("hyperion.testnet.pending-transfer")).toBe(false);
   });
 });

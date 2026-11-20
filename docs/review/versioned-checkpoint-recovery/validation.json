@@ -1,0 +1,34 @@
+{
+  "source": "dde9959b1b6a9077caf765b2409185dccfbae315",
+  "commands": [
+    {
+      "command": ["npm", "run", "fmt:check"],
+      "exit_code": 0
+    },
+    {
+      "command": ["npm", "run", "house"],
+      "exit_code": 0
+    },
+    {
+      "command": ["npm", "run", "contrast"],
+      "exit_code": 0
+    },
+    {
+      "command": ["npm", "run", "test", "--", "--maxWorkers=4"],
+      "exit_code": 0
+    },
+    {
+      "command": ["npm", "run", "lint"],
+      "exit_code": 0
+    },
+    {
+      "command": ["npm", "run", "typecheck"],
+      "exit_code": 0
+    },
+    {
+      "command": ["npm", "run", "build"],
+      "exit_code": 0
+    }
+  ],
+  "complete": true
+}
