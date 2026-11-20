@@ -873,6 +873,7 @@ function PendingTransferCard({
           this transfer.
         </p>
       )}
+      <p className={styles.address}>This recoverable operation belongs to {checkpoint.account}.</p>
       {checking && <p role="status">Checking Stellar Testnet transaction history...</p>}
       {visibleCurrent && visibleCurrent.message !== error && (
         <p role="status">{visibleCurrent.message}</p>
