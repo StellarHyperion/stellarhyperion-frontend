@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, Check, ChevronRight, Search } from "lucide-react";
+import { ArrowUpRight, Check, ChevronRight, Copy, Search } from "lucide-react";
 import { parseUnits } from "@hyperion/protocol";
 import { DESTINATIONS, type BridgeRoute, type DestinationKey } from "../../config/testnet";
 import {
   issuerVerificationLabel,
+  MAX_CONVERSION_PATHS,
   trustlineLabel,
   USDC,
   XLM,
@@ -19,6 +20,37 @@ export function AssetIcon({ code, network = false }: { code: string; network?: b
   return (
     <span className={styles.assetIcon} data-asset={code} data-network={network} aria-hidden="true">
       {code === "USDC" ? "$" : code === "XLM" ? "S" : code.slice(0, 2)}
+    </span>
+  );
+}
+export function CopyableAddress({ value, label }: { value: string; label: string }) {
+  const [copyStatus, setCopyStatus] = useState<{
+    value: string;
+    state: "copied" | "failed";
+  } | null>(null);
+  const copy = async () => {
+    setCopyStatus(null);
+    try {
+      const clipboard = navigator.clipboard as Partial<Clipboard> | undefined;
+      if (!clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
+      await clipboard.writeText(value);
+      setCopyStatus({ value, state: "copied" });
+    } catch {
+      setCopyStatus({ value, state: "failed" });
+    }
+  };
+  return (
+    <span className={styles.copyAddress}>
+      <code>{value}</code>
+      <button type="button" aria-label={`Copy ${label}`} onClick={() => void copy()}>
+        <Copy size={13} aria-hidden="true" />
+      </button>
+      {copyStatus?.value === value && copyStatus.state === "copied" && (
+        <span role="status">Copied</span>
+      )}
+      {copyStatus?.value === value && copyStatus.state === "failed" && (
+        <span role="alert">Copy failed; select the address to copy it.</span>
+      )}
     </span>
   );
 }
@@ -87,7 +119,8 @@ export function SourceAssetPicker({
         />
       </label>
       <p className={styles.note}>
-        Stellar Testnet. Assets bridge through USDC when a liquid conversion path exists.
+        Stellar Testnet. Non-USDC quotes compare up to {MAX_CONVERSION_PATHS} Horizon paths by exact
+        USDC output. Only paths matching the asset identity and requested source amount qualify.
       </p>
       <div className={styles.list} aria-busy={loading}>
         {loading && <p role="status">Searching Stellar assets...</p>}
@@ -102,6 +135,9 @@ export function SourceAssetPicker({
           const currentAsset = walletAsset ?? asset;
           const hasLiabilities =
             walletAsset?.sellingLiabilities && parseUnits(walletAsset.sellingLiabilities, 7) > 0n;
+          // Native XLM always carries a live protocol reserve, independent of selling
+          // liabilities, so its spendable figure is shown whenever it is known.
+          const showSpendable = asset.id === XLM.id || hasLiabilities;
           return (
             <div className={styles.assetChoice} key={asset.id}>
               <button
@@ -126,7 +162,7 @@ export function SourceAssetPicker({
                 </span>
                 <span className={styles.balance}>
                   {walletAsset
-                    ? hasLiabilities
+                    ? showSpendable
                       ? (walletAsset.available ?? walletAsset.balance)
                       : walletAsset.balance
                     : undefined}
@@ -140,7 +176,13 @@ export function SourceAssetPicker({
                 <dl>
                   <div>
                     <dt>Issuer</dt>
-                    <dd>{currentAsset.issuer ?? "None. This is native XLM."}</dd>
+                    <dd>
+                      {currentAsset.issuer ? (
+                        <CopyableAddress value={currentAsset.issuer} label="asset issuer" />
+                      ) : (
+                        "None. This is native XLM."
+                      )}
+                    </dd>
                   </div>
                   <div>
                     <dt>Issuer source</dt>
@@ -162,7 +204,13 @@ export function SourceAssetPicker({
                       <dd>{walletAsset.sellingLiabilities}</dd>
                     </div>
                   )}
-                  {hasLiabilities && walletAsset.available && (
+                  {asset.id === XLM.id && walletAsset?.nativeMinimumReserve && (
+                    <div>
+                      <dt>Minimum reserve</dt>
+                      <dd>{walletAsset.nativeMinimumReserve}</dd>
+                    </div>
+                  )}
+                  {showSpendable && walletAsset?.available && (
                     <div>
                       <dt>Spendable balance</dt>
                       <dd>{walletAsset.available}</dd>
@@ -233,7 +281,7 @@ export function DestinationPicker({
         <AssetIcon code="USDC" />
         <span>
           <strong>USDC</strong>
-          <small>Native USDC via Circle CCTP</small>
+          <small>Circle CCTP delivers native USDC, distinct from ITS</small>
         </span>
         <ArrowUpRight size={18} aria-hidden="true" />
       </button>
@@ -252,7 +300,7 @@ export function DestinationPicker({
           <strong>USDC (ITS)</strong>
           <small>
             {chain === "sepolia"
-              ? "Stellar USDC representation via Axelar ITS"
+              ? "Axelar ITS representation, distinct from native Circle USDC"
               : "Axelar ITS is configured for Sepolia"}
           </small>
         </span>

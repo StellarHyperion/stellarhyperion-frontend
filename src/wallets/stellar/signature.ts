@@ -13,7 +13,17 @@ export function assertWalletApproval(approval: WalletApprovalProvenance, account
     );
 }
 
+// Re-exported here, next to the signature check it governs, so a reader of this file sees the
+// conservative-timeout type that applies to a signing response. Defined in "./timeout" (not here)
+// so that importing it never pulls in this file's "@stellar/stellar-sdk" dependency: sdk.ts needs
+// the error type at module load, but must keep loading the Stellar SDK itself fully lazy.
+export { WalletSigningUncertainError } from "./timeout";
+
 export function verifyWalletSignature(original: string, signed: string, account: string): string {
+  if (!signed)
+    throw new Error(
+      "The wallet did not return a signed transaction (unreadable). Review the transfer again.",
+    );
   let requested: Transaction | FeeBumpTransaction;
   let result: Transaction | FeeBumpTransaction;
   try {
