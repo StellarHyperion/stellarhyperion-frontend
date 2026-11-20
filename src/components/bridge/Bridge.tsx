@@ -78,9 +78,8 @@ import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import { validateAmount } from "../../lib/amount-validation";
 import {
   checkpointForAsset,
-  claimOperationOwnership,
+  acquireOperationOwnership,
   getOperationOwnership,
-  releaseOperationOwnership,
   saveCheckpoint,
   getClaimSettlementCheckpoint,
   saveClaimSettlementCheckpoint,
@@ -1207,9 +1206,9 @@ export function Bridge() {
     const initialSourceId = source.id;
     const initialDestination = destination;
     const initialRoute = route;
-    let ownership: ReturnType<typeof claimOperationOwnership>;
+    let ownership: Awaited<ReturnType<typeof acquireOperationOwnership>>;
     try {
-      ownership = claimOperationOwnership({
+      ownership = await acquireOperationOwnership({
         account: sender,
         recipient: validateRecipient(recipient),
         destination,
@@ -1217,6 +1216,12 @@ export function Bridge() {
         bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
         stage: reviewedQuote.conversion ? "conversion" : "bridge",
       });
+      if (controller.signal.aborted || generation !== waitGeneration.current) {
+        ownership.release();
+        setBusy(false);
+        setPhase(null);
+        return;
+      }
     } catch (cause) {
       setError(errorMessage(cause));
       setBusy(false);
@@ -1323,7 +1328,7 @@ export function Bridge() {
       if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(converted);
       setError(message);
     } finally {
-      releaseOperationOwnership(ownership.id);
+      ownership.release();
       setBusy(false);
       setPhase(null);
     }
@@ -2140,6 +2145,20 @@ export function ClaimRecovery() {
     setBusy(true);
     setError(null);
     try {
+      const refreshed = (await getClaims([claim.id]))[0];
+      if (!refreshed) throw new Error("The claim could not be refreshed. Review it again.");
+      setClaims((current) => current.map((item) => (item.id === claim.id ? refreshed : item)));
+      if (
+        refreshed.settled ||
+        refreshed.recipient !== claim.recipient ||
+        refreshed.token !== claim.token ||
+        refreshed.amount !== claim.amount ||
+        refreshed.deployment.wasmHash !== claim.deployment.wasmHash
+      ) {
+        throw new Error(
+          "The claim changed while it was open. Review the refreshed claim before signing.",
+        );
+      }
       const transaction = await submitSettleClaim(
         account,
         claim.id,
@@ -2161,6 +2180,7 @@ export function ClaimRecovery() {
           },
         },
         undefined,
+        claim,
         (phase, hash) => {
           setClaimPhase(phase);
           if (hash) setCheckpoint(getClaimSettlementCheckpoint());
@@ -2322,6 +2342,7 @@ export function ClaimRecovery() {
                     <p className={styles.address}>Router WASM: {claim.deployment.wasmHash}</p>
                     {(claims.length === 1 || batchSupported === false) &&
                       !claim.settled &&
+                      claim.eligibility.status !== "unknown" &&
                       claimApproval && (
                         <>
                           <ApprovalDetails approval={claimApproval} />
