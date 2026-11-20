@@ -1,8 +1,8 @@
 {
   "sources": {
-    "src/components/bridge/Bridge.tsx": "f21fd74345f1983335db1dd6a9725372b818dd378bf18e0071eaf85d7d542509",
+    "src/components/bridge/Bridge.tsx": "2b4b42991782489cb76f3f19a3a890151c0bdd4a863f3f1ecabe845bc6520b45",
     "src/components/bridge/Bridge.module.css": "97bd7d446488b602f5e785160522eaa6313db2214d6a113c3959da761ff4258b",
-    "src/contracts/stellar.ts": "e704e473dc0e4c77480ec6c12dadd4646ee74fd86d8e8f02d5435e8a8dc159b5",
+    "src/contracts/stellar.ts": "f02082e637011b0da8a2008540791abbf29931dc7d71e092e66e5f2405d893b5",
     "src/contracts/assets.ts": "e51dc4c5f0f049342151b5065730718014100a3468d5ad1b0848821b2b7dca14",
     "src/contracts/checkpoint.ts": "ff2255d4b2b00c82e2810ff568376c1fc1c4d96205655bb36dec548f69c781bb",
     "src/config/testnet.ts": "66f0b7bcf73c30ec00ce360388f634331529eeda7d0018d9ac81d7a4391b4fbb",

@@ -8,4 +8,4 @@ The current production Bridge, Providers and wallet SDK browser passed exact inv
 - [Mobile quote failure summary](summary-mobile.png)
 - [Mobile saved recovery](recovery-mobile.png)
 
-[source-evidence.json](source-evidence.json) records current production-source fingerprints. Scoped strict lint passed. Full cumulative validation is pending integration of the preceding provider-retry and bundle-analysis work.
+[source-evidence.json](source-evidence.json) records current production-source fingerprints. All seven supported Node 22 commands passed on cumulative sourced4ac343f: formatting, house rules, contrast, 509 deterministic tests/four funded skips, strict lint, typecheck and the production Turbopack build. Actual emitted client bundle checks passed with wallet119262/450000 and transaction1098386/1200000 bytes. The refreshed browser includes the final preceding cooldown implementation and waits for its explicit retry boundary.
