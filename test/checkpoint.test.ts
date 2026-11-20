@@ -141,6 +141,30 @@ describe("pending transfer checkpoints", () => {
     expect(parseCheckpoint(JSON.stringify({ ...checkpoint, token: "different-token" }))).toBeNull();
   });
 
+  it("preserves a pending hash's original router and token across deployment revisions", () => {
+    const original = {
+      ...checkpoint,
+      router: TESTNET.token,
+      token: TESTNET.router,
+    };
+    const parsed = required(parseCheckpoint(JSON.stringify(original)));
+    expect(parsed.router).toBe(original.router);
+    expect(parsed.token).toBe(original.token);
+    expect(parsed.txHash).toBe(original.txHash);
+    expect(JSON.parse(checkpointIdentity(parsed)).slice(0, 2)).toEqual([
+      original.router,
+      original.token,
+    ]);
+  });
+
+  it("does not assign the new token to a legacy checkpoint from another router", () => {
+    const legacy = { ...checkpoint, router: TESTNET.token, token: undefined };
+    const parsed = required(parseCheckpoint(JSON.stringify(legacy)));
+    expect(parsed.router).toBe(legacy.router);
+    expect(parsed.token).toBeUndefined();
+    expect(parsed.txHash).toBe(legacy.txHash);
+  });
+
   it("preserves source transaction identity when promoting conversion recovery to bridge recovery", () => {
     const storage = createStorage();
     vi.stubGlobal("localStorage", storage);

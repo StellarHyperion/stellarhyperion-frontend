@@ -53,6 +53,16 @@ router and canonical token against the checked-in testnet deployment and
 requires an HTTPS RPC endpoint. A mismatch renders an unavailable state with
 safe diagnostic labels; it never prints environment values or server secrets.
 
+The client also checks the no-store `/api/deployment` identity at startup, on
+focus and visibility changes, and every 30 seconds. If the active server has a
+different deployment record, unsigned quotes and open reviews are invalidated
+and signing is paused until the user reloads. The notice never requests wallet
+access or signs a transaction. Reloading does not clear pending hashes: each
+checkpoint retains its original router and token, and recovery remains
+read-only when that deployment is not supported by the active app. Check a
+saved source hash before another approval; source confirmation is not
+destination delivery.
+
 `NEXT_PUBLIC_STELLAR_READ_RPC_URLS` may list up to two additional, independently operated Stellar Testnet RPC origins, comma-separated. RPC transaction status is accepted only when every configured source identifies as Stellar Testnet and agrees on the signed hash, outcome, encoded result and return value. Reads share a five-second deadline and support cancellation. Disagreement or an unavailable source alongside final evidence leaves the saved transaction unknown; historical fallback cannot override conflicting RPC evidence. When RPC history is absent, the independently network-checked Horizon recovery path remains available. Reset compares the complete saved checkpoint so a change in another tab cannot discard a different intent.
 
 `NEXT_PUBLIC_HYPERION_API_URL` supplies transfer activity and destination verification. The backend must run its indexer and rail pollers regularly. The public testnet uses a five-minute GitHub Actions schedule, subject to runner queueing; destination Activity can take several minutes to update. Unreachable history is shown explicitly. A confirmed Stellar transaction proves source execution; destination delivery requires matching confirmed bridge and token-payment events.

@@ -36,12 +36,14 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(() => {
     window.freighter = true;
+    window.__hyperionWalletRequests = [];
     window.addEventListener("message", (event) => {
       if (
         typeof event.data === "object" &&
         event.data !== null &&
         event.data.source === "FREIGHTER_EXTERNAL_MSG_REQUEST"
       ) {
+        window.__hyperionWalletRequests.push(event.data.type);
         if (event.data.type === "REQUEST_CONNECTION_STATUS") {
           window.postMessage(
             {
@@ -66,6 +68,25 @@ try {
           );
         }
       }
+    });
+  });
+  await page.route("**/api/deployment", async (route) => {
+    const active = deployment.networks["stellar-testnet"];
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Cache-Control": "no-store" },
+      body: JSON.stringify({
+        identity: {
+          recordedAt: deployment.generatedAt,
+          chain: "stellar-testnet",
+          router: active.adapters.cctp,
+          token: active.tokens.USDC.sacId,
+          wasmHash: active.wasmHashes.router,
+          commit: active.commit,
+          deployedLedger: active.deployedAt.ledger,
+        },
+      }),
     });
   });
   // This smoke check only reads and never signs. Catch any accidental live submission network
@@ -95,6 +116,20 @@ try {
   });
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+  await page
+    .getByRole("alert", { name: "Deployment revision" })
+    .getByRole("button", { name: "Reload active deployment" })
+    .waitFor();
+  assert.deepEqual(
+    await page.evaluate(() => window.__hyperionWalletRequests.filter((type) =>
+      ["REQUEST_ACCESS", "REQUEST_PUBLIC_KEY", "SIGN_TRANSACTION"].includes(type),
+    )),
+    [],
+  );
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
+    "unresolved-checkpoint",
+  );
   const identityDetails = page
     .locator("details")
     .filter({ hasText: "Inspect canonical USDC identity" });

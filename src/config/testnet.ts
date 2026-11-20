@@ -4,6 +4,67 @@ import { StrKey } from "@stellar/stellar-sdk";
 const configured = (value: string | undefined, fallback: string) =>
   value?.trim() ? value.trim() : fallback;
 const stellar = deployment.networks["stellar-testnet"];
+export interface PublicDeploymentIdentity {
+  readonly recordedAt: string;
+  readonly chain: "stellar-testnet";
+  readonly router: string;
+  readonly token: string;
+  readonly wasmHash: string;
+  readonly commit: string;
+  readonly deployedLedger: number;
+}
+export const DEPLOYMENT_IDENTITY: PublicDeploymentIdentity = {
+  recordedAt: deployment.generatedAt,
+  chain: "stellar-testnet",
+  router: stellar.router,
+  token: stellar.tokens.USDC.sacId,
+  wasmHash: stellar.wasmHashes.router,
+  commit: stellar.commit,
+  deployedLedger: stellar.deployedAt.ledger,
+};
+export function parsePublicDeploymentIdentity(value: unknown): PublicDeploymentIdentity | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const identity = value as Record<string, unknown>;
+  if (
+    typeof identity.recordedAt !== "string" ||
+    !Number.isFinite(Date.parse(identity.recordedAt)) ||
+    identity.chain !== "stellar-testnet" ||
+    typeof identity.router !== "string" ||
+    !StrKey.isValidContract(identity.router) ||
+    typeof identity.token !== "string" ||
+    !StrKey.isValidContract(identity.token) ||
+    typeof identity.wasmHash !== "string" ||
+    !/^[0-9a-f]{64}$/i.test(identity.wasmHash) ||
+    typeof identity.commit !== "string" ||
+    !/^[0-9a-f]{7,40}$/i.test(identity.commit) ||
+    typeof identity.deployedLedger !== "number" ||
+    !Number.isSafeInteger(identity.deployedLedger) ||
+    identity.deployedLedger < 0
+  )
+    return null;
+  return {
+    recordedAt: identity.recordedAt,
+    chain: identity.chain,
+    router: identity.router,
+    token: identity.token,
+    wasmHash: identity.wasmHash,
+    commit: identity.commit,
+    deployedLedger: identity.deployedLedger,
+  };
+}
+export function deploymentIdentityMatches(value: unknown): boolean {
+  const observed = parsePublicDeploymentIdentity(value);
+  return (
+    observed !== null &&
+    observed.recordedAt === DEPLOYMENT_IDENTITY.recordedAt &&
+    observed.chain === DEPLOYMENT_IDENTITY.chain &&
+    observed.router === DEPLOYMENT_IDENTITY.router &&
+    observed.token === DEPLOYMENT_IDENTITY.token &&
+    observed.wasmHash === DEPLOYMENT_IDENTITY.wasmHash &&
+    observed.commit === DEPLOYMENT_IDENTITY.commit &&
+    observed.deployedLedger === DEPLOYMENT_IDENTITY.deployedLedger
+  );
+}
 export interface PublicAssetMetadata {
   readonly key: string;
   readonly network: string;
