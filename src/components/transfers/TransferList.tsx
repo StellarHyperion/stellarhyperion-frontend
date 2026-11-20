@@ -1,10 +1,17 @@
 "use client";
+import { transferRowIdentity } from "../../lib/transfer-filters";
 
 import Link from "next/link";
 import { type ReactElement } from "react";
 import { ExternalLink } from "lucide-react";
 import { getRouteName, type FormattedTransfer, type TransferLifecycleStage } from "../../api";
-import { formatTokenAmount, getExplorerUrl, shortenAddress, shortenTxHash } from "../../lib/format";
+import {
+  formatTokenAmount,
+  formatTokenIdentity,
+  getExplorerUrl,
+  shortenAddress,
+  shortenTxHash,
+} from "../../lib/format";
 import { getEvidenceAwareStage, hasVerifiedDestinationEvidence } from "../../lib/evidence";
 import { EvidenceTimeline } from "./EvidenceTimeline";
 import styles from "./TransferList.module.css";
@@ -38,7 +45,7 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
   return (
     <div className={styles.transferList} role="feed" aria-label="Transfers list">
       {transfers.map((t) => (
-        <article key={t.id} className={styles.transferCard}>
+        <article key={transferRowIdentity(t)} className={styles.transferCard}>
           <div className={styles.cardTop}>
             <div className={styles.routeAndStage}>
               <span className={styles.routeBadge}>{getRouteName(t.route)}</span>
@@ -88,6 +95,23 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
             <div className={styles.legBlock}>
               <span className={styles.legLabel}>destination</span>
               <span className={styles.chainName}>{t.destination.chain}</span>
+              <span
+                className={styles.addressMono}
+                title={formatTokenIdentity(
+                  t.destination.token,
+                  t.destination.symbol,
+                  t.destination.decimals,
+                  t.destination.representation,
+                )}
+              >
+                token:{" "}
+                {formatTokenIdentity(
+                  t.destination.token,
+                  t.destination.symbol,
+                  t.destination.decimals,
+                  t.destination.representation,
+                )}
+              </span>
               <span className={styles.addressMono}>
                 <span>to {shortenAddress(t.destination.recipient)}</span>
                 <a
@@ -143,17 +167,11 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
             <div className={styles.amountGroup}>
               <span className={styles.netAmount}>
                 <small className={styles.amountLabel}>
-                  {hasVerifiedDestinationEvidence(t) &&
-                  t.destination.amount &&
-                  t.destination.decimals !== undefined &&
-                  t.destination.decimals !== null
-                    ? "Received"
+                  {hasVerifiedDestinationEvidence(t) && t.destination.amount
+                    ? "Actual received"
                     : "Bridged before relay fees"}
                 </small>
-                {hasVerifiedDestinationEvidence(t) &&
-                t.destination.amount &&
-                t.destination.decimals !== undefined &&
-                t.destination.decimals !== null ? (
+                {hasVerifiedDestinationEvidence(t) && t.destination.amount ? (
                   <>
                     {formatTokenAmount(t.destination.amount, t.destination.decimals)}{" "}
                     {t.destination.symbol ?? "token"}

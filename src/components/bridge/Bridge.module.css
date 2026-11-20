@@ -63,6 +63,7 @@
 }
 .fieldHeading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -83,6 +84,7 @@
 }
 .amountRow {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   min-width: 0;
@@ -110,6 +112,8 @@
 .maxSpend {
   border: 1px solid var(--edge-color-strong);
   border-radius: 999px;
+  min-block-size: var(--tap-target);
+  min-inline-size: var(--tap-target);
   padding: 4px 10px;
   background: var(--surface-raised);
   color: var(--text-secondary);
@@ -239,6 +243,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-block-size: var(--tap-target);
   border: 0;
   padding: 0;
   background: transparent;
@@ -557,6 +562,9 @@
   padding-top: 12px;
   border-top: 1px solid var(--edge-color);
 }
+.summary > div:last-child dt {
+  flex-shrink: 0;
+}
 .summary > div:last-child dd {
   color: var(--text-primary);
   font-weight: 500;
@@ -566,6 +574,18 @@
   line-height: 1.6;
   color: var(--state-failed);
   overflow-wrap: anywhere;
+}
+.limitDiagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--state-failed);
+  overflow-wrap: anywhere;
+}
+.limitDiagnostic strong {
+  color: var(--text-primary);
 }
 .progress {
   display: flex;
@@ -621,6 +641,9 @@
   background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
   border-color: var(--edge-color);
 }
+.recovery > details {
+  min-width: 0;
+}
 .recovery summary {
   display: flex;
   align-items: center;
@@ -648,10 +671,26 @@
 }
 .recoveryBody {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 12px;
   padding: 0 20px 20px;
   font-size: 0.8125rem;
   line-height: 1.6;
+}
+.recoveryBody > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.claimCheckpoint {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  padding-block: var(--space-3);
+  border-block: 1px solid var(--edge-color);
+}
+.claimCheckpoint p {
+  margin: 0;
 }
 .recoveryBody label {
   font-size: 0.75rem;
@@ -664,12 +703,14 @@
   background: var(--surface-page);
   color: var(--text-primary);
   font: inherit;
+  font-size: 1rem;
   width: 100%;
 }
 .secondary,
 .recoveryBody button {
   border: 1px solid var(--edge-color-strong);
   border-radius: 12px;
+  min-block-size: var(--tap-target);
   padding: 12px 14px;
   font: inherit;
   font-size: 0.8125rem;
@@ -730,6 +771,7 @@
 }
 .transactionIdentityValue {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -754,6 +796,8 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
+  min-block-size: var(--tap-target);
+  min-inline-size: var(--tap-target);
   border: 1px solid var(--edge-color-strong);
   border-radius: 10px;
   padding: 6px 10px;
@@ -860,5 +904,84 @@
   }
   .summary > div {
     gap: 10px;
+  }
+}
+
+.quoteDiff {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 14px;
+  background: var(--surface-well);
+}
+.quoteDiff h3 {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.quoteDiff .summary > div,
+.quoteDiff .summary dd {
+  font-size: 0.875rem;
+}
+.quoteDiff .summary dt {
+  flex-shrink: 0;
+  max-width: 45%;
+}
+.diffWorse dt,
+.diffWorse dd {
+  color: var(--state-failed);
+}
+.diffBetter dt,
+.diffBetter dd {
+  color: var(--leg-origin);
+}
+.diffKind {
+  display: block;
+  font-family: var(--face-mono);
+  font-size: 0.875rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.diffDelta {
+  display: block;
+  font-family: var(--face-mono);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+/*
+ * 30rem and below covers a small phone and a 640 pixel window at 200 percent zoom. The amount
+ * gets its own line so a long figure never sits on top of Max or the token selector, and the
+ * identity rows stack instead of squeezing the copy control.
+ */
+@media (width<=30rem) {
+  .amountRow input,
+  .receiveAmount {
+    flex: 1 1 100%;
+  }
+  .receiveAmount {
+    font-size: 1.75rem;
+  }
+  .fieldHeading {
+    align-items: flex-start;
+  }
+  .fieldHeading > span:last-child {
+    flex-wrap: wrap;
+  }
+  .summary > div {
+    flex-wrap: wrap;
+  }
+  .summary dd {
+    text-align: start;
+  }
+  .conversionStep .address {
+    max-width: 100%;
+  }
+  .primary {
+    padding-inline: 12px;
+    text-align: center;
+  }
+  .reviewTotal strong {
+    font-size: 1.5rem;
   }
 }

@@ -16,6 +16,7 @@ import {
   type TransferCheckpoint,
 } from "../src/contracts/checkpoint";
 import { TESTNET } from "../src/config/testnet";
+import { XLM } from "../src/contracts/assets";
 
 const pair = Keypair.random();
 const transaction = new TransactionBuilder(new Account(pair.publicKey(), "1"), {
@@ -45,6 +46,7 @@ const checkpoint: TransferCheckpoint = {
   bridgeAmount: "10000000",
   stage: "conversion",
   txHash: hash,
+  source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
 };
 const successful = new xdr.TransactionResult({
   feeCharged: 100n,

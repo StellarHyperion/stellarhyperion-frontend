@@ -1,18 +1,25 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { Column } from "../../components/chrome";
 import {
   fetchIndexerMetrics,
   fetchTransfers,
   cursorFreshness,
+  filterTransfers,
   type IndexerMetrics,
   type TransfersResponse,
 } from "../../api";
 import { TransferList } from "../../components/transfers";
 import { errorMessage } from "../../contracts";
+import { useVisibilityPoll } from "../../lib/visibility-poll";
 import { ActivityRequestGuard } from "../../lib/activity-request";
 import { useStellarWallet } from "../../wallets";
 import styles from "./page.module.css";
+import {
+  readTransferFilters,
+  validateTransferFilters,
+  filterSupportError,
+} from "../../lib/transfer-filters";
 
 function ActivityCoverage({
   response,
@@ -69,25 +76,18 @@ export default function TransfersPage() {
   const { address } = useStellarWallet();
   return <TransfersPageContent key={address ?? "public"} address={address} />;
 }
-
-function mergeTransfers(
-  current: TransfersResponse["transfers"],
-  incoming: TransfersResponse["transfers"],
-) {
-  const merged = new Map(current.map((transfer) => [transfer.id, transfer]));
-  for (const transfer of incoming) merged.set(transfer.id, transfer);
-  return [...merged.values()];
-}
-
 function TransfersPageContent({ address }: { address?: string | null }) {
   const [search, setSearch] = useState("");
+  const [asset, setAsset] = useState("");
+  const [deployment, setDeployment] = useState("");
   const [offset, setOffset] = useState(0);
   const [cursor, setCursor] = useState<string | null>(null);
   const [cursorHistory, setCursorHistory] = useState<(string | null)[]>([]);
-  const [loadedTransfers, setLoadedTransfers] = useState<TransfersResponse["transfers"]>([]);
-  const [hasMore, setHasMore] = useState(true);
+  const [ready, setReady] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   const [loading, setLoading] = useState(true);
-  const scope = JSON.stringify([address ?? null, search, cursor, offset]);
+  const scope = JSON.stringify([address ?? null, search, offset, cursor, retry]);
   const [snapshot, setSnapshot] = useState<{
     scope: string;
     response: TransfersResponse | null;
@@ -97,29 +97,63 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   } | null>(null);
   const current = snapshot?.scope === scope ? snapshot : null;
   const response = current?.response ?? null;
-  const transfers = loadedTransfers;
+  const validated = validateTransferFilters({ asset, deployment });
+  const filterError =
+    urlError ?? validated.error ?? filterSupportError(response?.transfers ?? [], validated.filters);
+  const transfers = filterError
+    ? []
+    : filterTransfers(response?.transfers ?? [], validated.filters);
   const metrics = current?.metrics ?? null;
   const metricsError = current?.metricsError ?? null;
   const error = current?.error ?? null;
-  const pending = loading || current === null;
   const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
+    const readUrl = () => {
+      const result = readTransferFilters(window.location.search);
+      startTransition(() => {
+        setAsset(result.filters.asset ?? "");
+        setDeployment(result.filters.deployment ?? "");
+        setUrlError(result.error);
+        setOffset(0);
+        setCursor(null);
+        setCursorHistory([]);
+        setReady(true);
+      });
+    };
+    readUrl();
+    window.addEventListener("popstate", readUrl);
+    return () => {
+      window.removeEventListener("popstate", readUrl);
+    };
+  }, []);
+  useEffect(() => {
     const guard = requestGuard.current;
-    guard.setIdentity(address ?? null);
+    guard.setIdentity(scope);
     guard.invalidate();
-    const load = async () => {
+    return () => {
+      guard.invalidate();
+    };
+  }, [scope]);
+  const refreshing = useVisibilityPoll(
+    async (signal) => {
+      if (!ready) return;
+      const guard = requestGuard.current;
       const token = guard.begin();
+      setLoading(true);
       try {
         const [historyResult, metricsResult] = await Promise.allSettled([
-          fetchTransfers({
-            ...(address ? { sender: address } : {}),
-            search,
-            limit: "20",
-            ...(cursor ? { cursor } : { offset: String(offset) }),
-          }),
-          fetchIndexerMetrics(),
+          fetchTransfers(
+            {
+              ...(address ? { sender: address } : {}),
+              search,
+              limit: "20",
+              ...(cursor ? { cursor } : { offset: String(offset) }),
+            },
+            signal,
+          ),
+          fetchIndexerMetrics(signal),
         ]);
-        if (!guard.isCurrent(token)) return;
+        if (signal.aborted || !guard.isCurrent(token)) return;
         setSnapshot({
           scope,
           response: historyResult.status === "fulfilled" ? historyResult.value : null,
@@ -128,29 +162,42 @@ function TransfersPageContent({ address }: { address?: string | null }) {
           metricsError:
             metricsResult.status === "rejected" ? errorMessage(metricsResult.reason) : null,
         });
-        if (historyResult.status === "fulfilled") {
-          setLoadedTransfers((existing) => mergeTransfers(existing, historyResult.value.transfers));
-          const next = historyResult.value.nextCursor ?? null;
-          setHasMore(
-            (historyResult.value.hasMore ?? Boolean(next)) ||
-              historyResult.value.transfers.length >= historyResult.value.limit,
-          );
-        }
       } finally {
-        if (guard.isCurrent(token)) setLoading(false);
+        if (!signal.aborted && guard.isCurrent(token)) setLoading(false);
       }
-    };
-    const delay = setTimeout(() => {
-      setLoading(true);
-      void load();
-    }, 300);
-    const timer = setInterval(() => void load(), 10_000);
-    return () => {
-      guard.invalidate();
-      clearTimeout(delay);
-      clearInterval(timer);
-    };
-  }, [address, cursor, offset, search, scope]);
+    },
+    10_000,
+    60_000,
+    scope,
+    300,
+  );
+  const pending = loading || refreshing || current === null;
+
+  const updateFilter = (name: "asset" | "deployment", value: string) => {
+    if (name === "asset") setAsset(value);
+    else setDeployment(value);
+    setUrlError(null);
+    const result = validateTransferFilters({ asset, deployment, [name]: value });
+    if (result.error) return;
+    const params = new URLSearchParams(window.location.search);
+    for (const key of ["asset", "deployment"] as const) {
+      const identity = result.filters[key];
+      if (identity) params.set(key, identity);
+      else params.delete(key);
+    }
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  };
+  const clearFilters = () => {
+    setAsset("");
+    setDeployment("");
+    setUrlError(null);
+    const params = new URLSearchParams(window.location.search);
+    params.delete("asset");
+    params.delete("deployment");
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  };
   return (
     <Column>
       <h1 className="display">Transfer history</h1>
@@ -176,13 +223,68 @@ function TransfersPageContent({ address }: { address?: string | null }) {
           setOffset(0);
           setCursor(null);
           setCursorHistory([]);
-          setLoadedTransfers([]);
-          setHasMore(true);
-          setSnapshot(null);
         }}
       />
-      {error && <p role="alert">{error}</p>}
-      {pending && transfers.length === 0 ? (
+      <div className={styles.identityFilters} role="group" aria-label="Transfer identity filters">
+        <label>
+          Asset identity
+          <input
+            className={styles.searchInput}
+            aria-label="Filter by exact asset identity"
+            placeholder="Issuer or token address"
+            value={asset}
+            onChange={(event) => {
+              updateFilter("asset", event.target.value);
+            }}
+          />
+        </label>
+        <label>
+          Deployment revision
+          <input
+            className={styles.searchInput}
+            aria-label="Filter by deployment revision"
+            placeholder="Router or revision"
+            value={deployment}
+            onChange={(event) => {
+              updateFilter("deployment", event.target.value);
+            }}
+          />
+        </label>
+      </div>
+      <p className={styles.claimNote}>
+        Identity filters apply to the loaded page. Filtering the full history by token or revision
+        is unavailable from this indexer. Continue through the pages to inspect more records.
+      </p>
+      {(asset || deployment || filterError) && (
+        <button type="button" className={styles.readAction} onClick={clearFilters}>
+          Clear identity filters
+        </button>
+      )}
+      {filterError && <p role="alert">{filterError}</p>}
+      {error && (
+        <>
+          <p role="alert">{error}</p>
+          <button
+            type="button"
+            className={styles.readAction}
+            onClick={() => {
+              setRetry((value) => value + 1);
+            }}
+          >
+            Retry history lookup
+          </button>
+        </>
+      )}
+      {!error && !filterError && response && (asset || deployment) && transfers.length === 0 && (
+        <p role="alert">
+          No record on this loaded page matches the selected identity. Later pages and incomplete
+          history may contain more records.
+        </p>
+      )}
+      {refreshing && transfers.length > 0 && (
+        <p role="status">Refreshing indexed history before changing pages...</p>
+      )}
+      {filterError ? null : pending && transfers.length === 0 ? (
         <p role="status">Loading indexed transfers...</p>
       ) : (
         <TransferList transfers={transfers} />
@@ -190,11 +292,11 @@ function TransfersPageContent({ address }: { address?: string | null }) {
       <div className={styles.filterControls}>
         <button
           type="button"
-          disabled={pending || (cursor === null && offset === 0 && cursorHistory.length === 0)}
+          disabled={(offset === 0 && cursorHistory.length === 0) || pending}
           onClick={() => {
             if (cursorHistory.length > 0) {
+              setCursor(cursorHistory[cursorHistory.length - 1]);
               setCursorHistory((history) => history.slice(0, -1));
-              setCursor(cursorHistory[cursorHistory.length - 1] ?? null);
             } else {
               setOffset((value) => Math.max(0, value - 20));
             }
@@ -202,10 +304,10 @@ function TransfersPageContent({ address }: { address?: string | null }) {
         >
           Previous
         </button>
-        <span>{cursor !== null ? "Keyset page" : `Page ${offset / 20 + 1}`}</span>
+        <span>Page {offset / 20 + cursorHistory.length + 1}</span>
         <button
           type="button"
-          disabled={!hasMore || pending}
+          disabled={(response?.hasMore ?? ((response?.transfers.length ?? 0) >= 20)) === false || pending}
           onClick={() => {
             if (response?.nextCursor) {
               setCursorHistory((history) => [...history, cursor]);
