@@ -1038,13 +1038,17 @@ export function Bridge() {
   const [feeClock, setFeeClock] = useState(() => Date.now());
   useEffect(() => {
     if (!feeCooldown) return;
-    const update = () => setFeeClock(Date.now());
+    const update = () => {
+      setFeeClock(Date.now());
+    };
     update();
     const timer = window.setInterval(() => {
       update();
       if (Date.now() >= feeCooldown.until) window.clearInterval(timer);
     }, 1000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+    };
   }, [feeCooldown]);
   const [laneState, setLaneState] = useState<{
     key: string;
