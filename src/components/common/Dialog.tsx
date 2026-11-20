@@ -22,7 +22,7 @@ export function Dialog({
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialog?.showModal();
 
-    // Native modal focus isolation handles nested dialogs and hidden controls.
+    // Native modality isolates the background and handles nested dialogs.
     // Start at the review heading unless a child has explicitly requested focus.
     if (!dialog?.querySelector("[autofocus]")) heading.current?.focus();
 
@@ -44,7 +44,48 @@ export function Dialog({
       aria-label={title}
       onCancel={(event) => {
         event.preventDefault();
+        event.stopPropagation();
         onClose();
+      }}
+      onKeyDown={(event) => {
+        const dialog = event.currentTarget;
+        if (
+          event.key !== "Tab" ||
+          !(event.target instanceof Element) ||
+          event.target.closest("dialog") !== dialog
+        )
+          return;
+        // Keep Tab at the active dialog's edges instead of entering browser chrome.
+        // Parent handlers must never redirect a nested modal's keyboard navigation.
+        const controls = Array.from(
+          dialog.querySelectorAll<HTMLElement>(
+            'button, a[href], input, select, textarea, [tabindex], [contenteditable="true"]',
+          ),
+        ).filter(
+          (control) =>
+            control.closest("dialog") === dialog &&
+            control.tabIndex >= 0 &&
+            !control.matches(":disabled") &&
+            !control.closest("[inert]") &&
+            control.getClientRects().length > 0 &&
+            getComputedStyle(control).visibility === "visible",
+        );
+        const first = controls[0];
+        const last = controls.at(-1);
+        const active = document.activeElement;
+        if (!first || !last) {
+          event.preventDefault();
+          heading.current?.focus();
+        } else if (
+          event.shiftKey &&
+          (active === first || !controls.includes(active as HTMLElement))
+        ) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault();
+          first.focus();
+        }
       }}
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();

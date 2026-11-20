@@ -898,7 +898,9 @@ export function Bridge() {
         return;
       if (reviewAction.current && !reviewAction.current.disabled) reviewAction.current.focus();
     });
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+    };
   }, [busy, checkpoint, error]);
   const laneKey = `${destination}:${route}:${refresh}`;
   const lane = laneState?.key === laneKey ? laneState.value : null;
