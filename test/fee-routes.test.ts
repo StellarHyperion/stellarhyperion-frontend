@@ -109,8 +109,10 @@ describe("fee route contracts", () => {
       let time = Date.UTC(2026, 10, 20);
       vi.spyOn(Date, "now").mockImplementation(() => time);
       const cooldown = createFeeCooldown(() => time);
-      vi.mocked(providerFeeCooldown.remaining).mockImplementation((key) => cooldown.remaining(key));
-      vi.mocked(providerFeeCooldown.block).mockImplementation((key, header) =>
+      vi.spyOn(providerFeeCooldown, "remaining").mockImplementation((key) =>
+        cooldown.remaining(key),
+      );
+      vi.spyOn(providerFeeCooldown, "block").mockImplementation((key, header) =>
         cooldown.block(key, header),
       );
       const fetcher = vi
