@@ -112,6 +112,38 @@ export function deploymentIdentityMismatch(router: string, token: string): strin
   return null;
 }
 
+export interface ObservedDeploymentRevision {
+  readonly commit?: string;
+  readonly deploymentCommit?: string;
+  readonly router?: string;
+}
+
+function observedCommit(value: string | ObservedDeploymentRevision): string {
+  if (typeof value === "string") return value.trim();
+  return (value.commit ?? value.deploymentCommit ?? "").trim();
+}
+
+export function deploymentRevisionMismatch(
+  observed: string | ObservedDeploymentRevision,
+): string | null {
+  const commit = observedCommit(observed);
+  if (!commit) return null;
+  if (commit !== STELLAR_DEPLOYMENT.commit)
+    return "The app deployment revision differs from the active configuration. Refresh to use the current deployment.";
+  const router = typeof observed === "string" ? undefined : observed.router?.trim();
+  if (router && router !== STELLAR_DEPLOYMENT.router)
+    return "The active Stellar router differs from this app deployment. Refresh to use the current deployment.";
+  return null;
+}
+
+export const deploymentRevisionChanged = (observed: string | ObservedDeploymentRevision): boolean =>
+  deploymentRevisionMismatch(observed) !== null;
+
+export const hasDeploymentRevisionChanged = deploymentRevisionChanged;
+export const isDeploymentRevisionChanged = deploymentRevisionChanged;
+export const deploymentRevisionNotice = deploymentRevisionMismatch;
+export const deploymentNotice = deploymentRevisionMismatch;
+
 export function getPublicAssetMetadata(
   code: string,
   issuer: string,
