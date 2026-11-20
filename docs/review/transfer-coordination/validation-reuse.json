@@ -1,0 +1,8 @@
+{
+  "current_source_head": "e32d1e69358098b01a65afcbee127de917d1f6c4",
+  "full_validation_head": "01ae2d8cc8edd5c58d15ee60e7d53b72159a930f",
+  "full_pipeline": "PASS allseven,433tests/four opt-in live skips",
+  "production_src_package_lock_identical": true,
+  "original_ancestor": "381a7e0d1d895c4564120b3f4fdce45cffd96c13",
+  "current_browser": "PASS actual production WebLock/checkpoint/signature/submission across two real tabs plus actual TransferList destination identity/precision. Transport-only RPC/generated synthetic signer; no external broadcast. Captures inspected."
+}

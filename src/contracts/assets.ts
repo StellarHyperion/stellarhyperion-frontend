@@ -123,7 +123,7 @@ export function suggestSourceSpend(asset: SourceAsset): string {
   return spendableBalance(asset);
 }
 
-export function stellarAsset(asset: SourceAsset): Asset {
+export function stellarAsset(asset: Pick<SourceAsset, "id" | "code" | "issuer">): Asset {
   if (asset.id === "native" && asset.issuer === null && asset.code === "XLM") return Asset.native();
   if (
     !asset.issuer ||
@@ -866,20 +866,43 @@ export async function submitConversion(
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
 ): Promise<TransactionResult> {
+  const reviewedConversion: Conversion = {
+    ...conversion,
+    source: { ...conversion.source },
+    path: conversion.path.map((asset) => ({ ...asset })),
+  };
+  const intent = reconcile?.reviewedIntent;
+  if (
+    intent &&
+    (intent.network !== TESTNET.networkPassphrase ||
+      intent.router !== TESTNET.router ||
+      intent.token !== TESTNET.token ||
+      intent.account !== sender ||
+      intent.stage !== "conversion" ||
+      intent.asset.id !== reviewedConversion.source.id ||
+      intent.asset.code !== reviewedConversion.source.code ||
+      intent.asset.issuer !== reviewedConversion.source.issuer ||
+      intent.sourceAmount !== reviewedConversion.sourceMax ||
+      intent.sourceMaximum !== reviewedConversion.sourceMax ||
+      intent.amount !== reviewedConversion.usdcAmount)
+  )
+    throw new Error("The reviewed conversion intent changed. Review it again before signing.");
   const assets = await accountAssets(sender);
-  const sourceAsset = assets.find((asset) => asset.id === conversion.source.id);
+  const sourceAsset = assets.find((asset) => asset.id === reviewedConversion.source.id);
   if (!sourceAsset)
-    throw new Error(`Trustline for ${conversion.source.code} not found on your account.`);
+    throw new Error(`Trustline for ${reviewedConversion.source.code} not found on your account.`);
   if (sourceAsset.trustline === "frozen")
-    throw new Error(`Trustline for ${conversion.source.code} is frozen by the issuer.`);
+    throw new Error(`Trustline for ${reviewedConversion.source.code} is frozen by the issuer.`);
   if (sourceAsset.trustline === "unauthorized")
-    throw new Error(`Trustline for ${conversion.source.code} is not authorized by the issuer.`);
+    throw new Error(
+      `Trustline for ${reviewedConversion.source.code} is not authorized by the issuer.`,
+    );
   const spendable = parseUnits(spendableBalance(sourceAsset), 7);
-  if (spendable < conversion.sourceMax)
+  if (spendable < reviewedConversion.sourceMax)
     throw new Error(
       sourceAsset.sellingLiabilities && parseUnits(sourceAsset.sellingLiabilities, 7) > 0n
-        ? `Insufficient available ${conversion.source.code} balance. Selling liabilities reduce your spendable balance to ${spendableBalance(sourceAsset)} ${conversion.source.code}.`
-        : `Insufficient ${conversion.source.code} balance.`,
+        ? `Insufficient available ${reviewedConversion.source.code} balance. Selling liabilities reduce your spendable balance to ${spendableBalance(sourceAsset)} ${reviewedConversion.source.code}.`
+        : `Insufficient ${reviewedConversion.source.code} balance.`,
     );
   const addTrustline = !assets.some((asset) => asset.id === USDC.id);
   // Re-read the reserve right before building the transaction (never trust UI-cached state) and
@@ -887,17 +910,17 @@ export async function submitConversion(
   // account below its minimum balance. This is the one place every caller of submitConversion
   // passes through, so it holds even if a stale quote slipped past the review screen's own check.
   const reserve = await accountTrustlineReserve(sender);
-  const impact = trustlineReserveImpact(reserve, conversion, addTrustline);
+  const impact = trustlineReserveImpact(reserve, reviewedConversion, addTrustline);
   if (impact.projectedSpendable < 0n)
     throw new Error(
       addTrustline
-        ? `Adding the USDC trustline locks ${formatUnits(reserve.trustlineReserve, 7)} XLM in reserve. Your balance cannot cover that reserve, the network fee and this conversion.`
+        ? `Adding the USDC trustline locks ${formatUnits(reserve.trustlineReserve, 7)} XLM in reserve. Your balance cannot cover that reserve, the network fee and this reviewedConversion.`
         : "Your XLM balance cannot cover this conversion and its network fee.",
     );
   return submitClassicOperations(
     sender,
     async () => {
-      const current = await revalidateConversion(conversion);
+      const current = await revalidateConversion(reviewedConversion);
       return conversionOperations(sender, current, addTrustline);
     },
     sign,

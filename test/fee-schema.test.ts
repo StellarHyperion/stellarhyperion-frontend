@@ -56,7 +56,7 @@ describe("live provider endpoint schema boundaries", () => {
   });
   it("rejects an oversized Axelar scalar with a bounded public error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('"' + "9".repeat(100000) + '"')));
-    const response = await relayFee();
+    const response = await relayFee(new Request("http://localhost/api/relay-fee"));
     expect(response.status).toBe(503);
     const body = (await response.json()) as { error: string };
     expect(body.error.length).toBeLessThan(120);
@@ -84,6 +84,10 @@ describe("live provider endpoint schema boundaries", () => {
       decimals: 7,
       destination: "base-sepolia",
       finality: 2000,
+      provider: "Circle CCTP",
+      lane: { source: "stellar-testnet", destination: "base-sepolia", route: 0 },
+      observedAt: expect.any(String) as string,
+      validUntil: expect.any(String) as string,
     });
   });
   it("requires finalized Circle metadata and rejects incompatible forwarding shapes", async () => {

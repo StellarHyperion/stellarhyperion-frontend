@@ -166,6 +166,23 @@
   color: var(--text-primary);
 }
 
+.proofDrawer {
+  border-block: 1px solid var(--edge-color);
+  padding-block: var(--space-2);
+}
+
+.proofDrawer summary {
+  cursor: pointer;
+  color: var(--leg-origin);
+  font-family: var(--face-mono);
+  font-size: var(--type-mono-sm-size);
+}
+
+.proofDrawer summary:focus-visible {
+  outline: 2px solid var(--leg-origin);
+  outline-offset: 3px;
+}
+
 .amountGroup {
   display: flex;
   align-items: baseline;
@@ -223,6 +240,23 @@
     opacity: 1;
     transform: translateY(0);
   }
+}
+.identityDetails {
+  margin-top: 12px;
+  border: 1px solid var(--edge-color);
+  border-radius: 6px;
+  padding: 8px;
+}
+.identityDetails summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.identityList {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
 }
 @media (width <= 40rem) {
   .amountGroup {

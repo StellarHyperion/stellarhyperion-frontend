@@ -28,6 +28,7 @@ export function CopyableAddress({ value, label }: { value: string; label: string
     value: string;
     state: "copied" | "failed";
   } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const copy = async () => {
     setCopyStatus(null);
     try {
@@ -37,19 +38,42 @@ export function CopyableAddress({ value, label }: { value: string; label: string
       setCopyStatus({ value, state: "copied" });
     } catch {
       setCopyStatus({ value, state: "failed" });
+      // Move focus to the fallback field so keyboard users can select and copy
+      // the exact identifier when the Clipboard API is unavailable.
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      });
     }
   };
+  const failed = copyStatus?.value === value && copyStatus.state === "failed";
   return (
     <span className={styles.copyAddress}>
-      <code>{value}</code>
+      <code tabIndex={0} aria-label={`Full ${label}`}>
+        {value}
+      </code>
       <button type="button" aria-label={`Copy ${label}`} onClick={() => void copy()}>
         <Copy size={13} aria-hidden="true" />
       </button>
       {copyStatus?.value === value && copyStatus.state === "copied" && (
-        <span role="status">Copied</span>
+        <span role="status" aria-live="polite">
+          Copied
+        </span>
       )}
-      {copyStatus?.value === value && copyStatus.state === "failed" && (
-        <span role="alert">Copy failed; select the address to copy it.</span>
+      {failed && (
+        <>
+          <span role="alert">Copy failed; select the address to copy it.</span>
+          <input
+            ref={inputRef}
+            type="text"
+            readOnly
+            value={value}
+            aria-label={`Full ${label} (fallback)`}
+            onFocus={(event) => {
+              event.currentTarget.select();
+            }}
+          />
+        </>
       )}
     </span>
   );
@@ -57,11 +81,14 @@ export function CopyableAddress({ value, label }: { value: string; label: string
 export function SourceAssetPicker({
   selected,
   balances,
+  pendingRecovery,
   onSelect,
   onClose,
 }: {
   selected: SourceAsset;
   balances: SourceAsset[];
+  /** The source asset bound to any unresolved converted-USDC recovery data, if one exists. */
+  pendingRecovery?: Pick<SourceAsset, "id" | "code"> | null;
   onSelect: (asset: SourceAsset) => void;
   onClose: () => void;
 }) {
@@ -122,6 +149,12 @@ export function SourceAssetPicker({
         Stellar Testnet. Non-USDC quotes compare up to {MAX_CONVERSION_PATHS} Horizon paths by exact
         USDC output. Only paths matching the asset identity and requested source amount qualify.
       </p>
+      {pendingRecovery && pendingRecovery.id !== selected.id && (
+        <p className={styles.note} role="note">
+          Your pending {pendingRecovery.code} conversion keeps its original account and amount.
+          Choosing another token does not change its recovery record or start another conversion.
+        </p>
+      )}
       <div className={styles.list} aria-busy={loading}>
         {loading && <p role="status">Searching Stellar assets...</p>}
         {remote?.key === query && remote.version === queryVersion && remote.error && (
@@ -313,9 +346,17 @@ export function DestinationPicker({
     </Dialog>
   );
 }
-export function ReviewDialog({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+export function ReviewDialog({
+  children,
+  footer,
+  onClose,
+}: {
+  children: ReactNode;
+  footer?: ReactNode;
+  onClose: () => void;
+}) {
   return (
-    <Dialog title="Review your transfer" onClose={onClose}>
+    <Dialog title="Review your transfer" footer={footer} onClose={onClose}>
       {children}
     </Dialog>
   );

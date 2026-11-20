@@ -280,3 +280,157 @@
   outline: 2px solid var(--bad);
   outline-offset: 1px;
 }
+
+.dotReadOnly {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--instr);
+  display: inline-block;
+}
+
+.readOnlyBadge {
+  font-size: 0.625rem;
+  color: var(--instr);
+  font-family: var(--face-mono);
+  text-transform: lowercase;
+}
+
+.readOnlyNote {
+  font-size: 0.6875rem;
+  color: var(--fg-2);
+  margin-top: 0.25rem;
+}
+
+.reconciliationSection {
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  padding: 0.5rem;
+  background-color: var(--ink-3);
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.reconcileTitle {
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+  color: var(--warn);
+  text-transform: lowercase;
+}
+
+.reconcileDesc {
+  font-size: 0.6875rem;
+  color: var(--fg-2);
+}
+
+.reconcileButtons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.reconcileBtn {
+  flex: 1;
+  padding: 0.25rem 0.5rem;
+  background-color: var(--ink-4);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--fg);
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+  cursor: pointer;
+  text-align: center;
+}
+
+.reconcileBtn:hover {
+  border-color: var(--copper);
+}
+
+.reconcileBtn:focus-visible {
+  outline: 2px solid var(--copper);
+  outline-offset: 1px;
+}
+
+.readOnlyErrorBox {
+  padding: 0.375rem 0.5rem;
+  background-color: var(--ink-4);
+  border: 1px solid var(--bad);
+  border-radius: 2px;
+  color: var(--bad);
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+}
+
+.inspectSection {
+  border-top: 1px solid var(--rule);
+  padding-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.inspectInputRow {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.inspectInput {
+  flex: 1;
+  background-color: var(--ink-3);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--fg);
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+  padding: 0.25rem 0.375rem;
+}
+
+.inspectInput:focus-visible {
+  outline: 2px solid var(--copper);
+  outline-offset: 1px;
+}
+
+.inspectBtn {
+  padding: 0.25rem 0.5rem;
+  background-color: var(--ink-3);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--fg);
+  font-family: var(--face-mono);
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.inspectBtn:hover {
+  border-color: var(--copper);
+}
+
+.inspectBtn:focus-visible {
+  outline: 2px solid var(--copper);
+  outline-offset: 1px;
+}
+
+.connectWalletBtn {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  background-color: var(--ink-3);
+  border: 1px solid var(--copper);
+  border-radius: 999px;
+  color: var(--copper);
+  font-family: var(--face-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-align: center;
+  transition:
+    background-color var(--motion-state) var(--ease-enter),
+    border-color var(--motion-state) var(--ease-enter);
+}
+
+.connectWalletBtn:hover {
+  background-color: var(--ink-4);
+}
+
+.connectWalletBtn:focus-visible {
+  outline: 2px solid var(--copper);
+  outline-offset: 1px;
+}

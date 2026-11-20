@@ -13,16 +13,34 @@ export interface EvidenceStage {
   readonly observedAt?: string | null;
 }
 
-function publicReference(reference: string | null | undefined): string | undefined {
-  if (!reference) return undefined;
+export function publicReference(reference: string | null | undefined): string | undefined {
+  if (!reference || reference.length > 256) return undefined;
   try {
-    const url = new URL(reference.trim());
-    return (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
-      ? url.href
-      : undefined;
+    const url = new URL(reference);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.port ||
+      url.search ||
+      url.hash
+    )
+      return undefined;
+    const paths: Record<string, RegExp> = {
+      "testnet.axelarscan.io": /^\/gmp\/(?:0x)?[0-9a-f]{64}$/i,
+      "sepolia.etherscan.io": /^\/tx\/0x[0-9a-f]{64}$/i,
+      "sepolia.basescan.org": /^\/tx\/0x[0-9a-f]{64}$/i,
+    };
+    return paths[url.hostname]?.test(url.pathname) ? url.href : undefined;
   } catch {
     return undefined;
   }
+}
+
+export function publicIdentifier(value: unknown): string | null {
+  return typeof value === "string" && value.length <= 66 && /^(?:0x)?[0-9a-f]{64}$/i.test(value)
+    ? value
+    : null;
 }
 
 export function hasVerifiedDestinationEvidence(transfer: FormattedTransfer): boolean {
