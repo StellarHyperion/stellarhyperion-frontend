@@ -11,9 +11,11 @@ import {
   retainRecoveryAudit,
   type RecoveryAudit,
 } from "../../lib/checkpoint-reconciliation";
+import { useMessages } from "../../lib/runtime-capabilities-context";
 import styles from "./Bridge.module.css";
 
 export function CheckpointRecoveryInspector({ checkpoint }: { checkpoint: TransferCheckpoint }) {
+  const message = useMessages();
   const [raw, setRaw] = useState("");
   const [audit, setAudit] = useState<{ identity: string; value: RecoveryAudit } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,18 +52,11 @@ export function CheckpointRecoveryInspector({ checkpoint }: { checkpoint: Transf
       try {
         await retainRecoveryAudit(result);
       } catch {
-        if (active())
-          setError(
-            "The public audit could not be saved. Download this checked summary. Your pending checkpoint is unchanged.",
-          );
+        if (active()) setError(message("recoveryAuditSaveFailed"));
       }
     } catch (cause) {
       if (active())
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : "Recovery comparison failed. Your pending checkpoint is unchanged.",
-        );
+        setError(cause instanceof Error ? cause.message : message("recoveryCompareFailed"));
     } finally {
       if (request.current === controller) {
         request.current = null;
@@ -71,12 +66,9 @@ export function CheckpointRecoveryInspector({ checkpoint }: { checkpoint: Transf
   };
   return (
     <details className={styles.recoveryInspector}>
-      <summary>Compare a recovery export</summary>
-      <p id="recovery-import-help">
-        Paste public recovery metadata to check every signed hash against Stellar Testnet. This read
-        cannot sign, resubmit, or replace your saved transaction.
-      </p>
-      <label htmlFor="recovery-import">Recovery metadata</label>
+      <summary>{message("recoveryCompare")}</summary>
+      <p id="recovery-import-help">{message("recoveryCompareHelp")}</p>
+      <label htmlFor="recovery-import">{message("recoveryMetadata")}</label>
       <textarea
         id="recovery-import"
         aria-describedby="recovery-import-help"
@@ -100,7 +92,7 @@ export function CheckpointRecoveryInspector({ checkpoint }: { checkpoint: Transf
           void check();
         }}
       >
-        {checking ? "Checking both records..." : "Check recovery evidence"}
+        {checking ? message("recoveryBothChecking") : message("recoveryEvidenceCheck")}
       </button>
       {checking && (
         <button
@@ -112,23 +104,30 @@ export function CheckpointRecoveryInspector({ checkpoint }: { checkpoint: Transf
             setChecking(false);
           }}
         >
-          Cancel comparison
+          {message("recoveryCompareCancel")}
         </button>
       )}
       {activeAudit && (
         <div role="status">
           <p>
             {activeAudit.unresolved
-              ? "At least one signed hash remains unresolved. Preserve both records and retry their reads."
-              : "Every source outcome was independently checked. The signed hashes remain separate; destination delivery is tracked separately."}
+              ? message("recoveryUnresolvedAudit")
+              : message("recoveryTerminalAudit")}
           </p>
           <p>
-            Checked {activeAudit.checkedAt}. Comparison: {activeAudit.comparison}.
+            {message("recoveryAuditChecked", {
+              time: activeAudit.checkedAt,
+              comparison: activeAudit.comparison,
+            })}
           </p>
           {activeAudit.records.map((record, index) => (
             <p key={index}>
-              Record {index + 1}: {importCheckpoint(record.metadata)?.txHash} ({record.status},{" "}
-              {record.source}).
+              {message("recoveryAuditRecord", {
+                number: String(index + 1),
+                hash: importCheckpoint(record.metadata)?.txHash ?? "",
+                status: record.status,
+                source: record.source,
+              })}
             </p>
           ))}
           <a
@@ -136,7 +135,7 @@ export function CheckpointRecoveryInspector({ checkpoint }: { checkpoint: Transf
             download="hyperion-recovery-audit.json"
             href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(activeAudit))}`}
           >
-            Download public audit
+            {message("recoveryAuditDownload")}
           </a>
         </div>
       )}
