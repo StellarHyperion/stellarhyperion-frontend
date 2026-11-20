@@ -907,6 +907,26 @@ export function Bridge() {
   } | null>(null);
   const [reserve, setReserve] = useState<TrustlineReservePreview | null>(null);
   const [reserveError, setReserveError] = useState<string | null>(null);
+  const reviewAction = useRef<HTMLButtonElement>(null);
+  const approvalFocusPending = useRef(false);
+  useEffect(() => {
+    if (busy || !approvalFocusPending.current || checkpoint) return;
+    approvalFocusPending.current = false;
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        active !== document.body &&
+        active.isConnected &&
+        !active.matches(":disabled")
+      )
+        return;
+      if (reviewAction.current && !reviewAction.current.disabled) reviewAction.current.focus();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [busy, checkpoint, error]);
   const laneKey = `${destination}:${route}:${refresh}`;
   const laneRefreshing = useVisibilityPoll(
     async (signal) => {
@@ -1198,6 +1218,7 @@ export function Bridge() {
     waitController.current?.abort();
     waitController.current = controller;
     const generation = ++waitGeneration.current;
+    approvalFocusPending.current = true;
     setBusy(true);
     setError(null);
     setResult(null);
@@ -1839,6 +1860,7 @@ export function Bridge() {
         ) : (
           !checkpoint && (
             <button
+              ref={reviewAction}
               type="button"
               className={styles.primary}
               disabled={
