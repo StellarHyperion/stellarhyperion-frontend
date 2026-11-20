@@ -1,0 +1,13 @@
+[extend]
+useDefault = true
+
+# This is the public Sepolia ITS token address recorded by the protocol deployment.
+# Only generic-api-key findings for this exact value in this exact test file qualify.
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "Public Sepolia ITS ERC20 identifier in acceptance proof tests"
+condition = "AND"
+paths = ['^test/backend-api\.test\.ts$']
+regexTarget = "secret"
+regexes = ['^0xFd5a146686d16060ef9c595B37C30b248402304c$']
