@@ -40,7 +40,7 @@ import {
   STELLAR_DEPLOYMENT,
   TESTNET,
 } from "../src/config/testnet";
-import { relayBudget } from "../src/lib/relay-budget";
+import { boundedRetryAfter, cctpMinimumReceived, relayBudget } from "../src/lib/relay-budget";
 import { createReviewedIntentSnapshot } from "../src/contracts/stellar";
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -1089,6 +1089,17 @@ describe("Live relay fee headroom", () => {
     expect(relayBudget(842780n, 10n)).toBe(927060n);
     expect(relayBudget(9007199254740993n)).toBe(9907919180215093n);
     expect(() => relayBudget(0n)).toThrow();
+  });
+
+  it("bounds provider cooldown metadata", () => {
+    expect(boundedRetryAfter("15", 0)).toBe(15);
+    expect(boundedRetryAfter("3600", 0)).toBe(60);
+    expect(boundedRetryAfter("invalid", 0)).toBeNull();
+  });
+
+  it("keeps Circle forwarding units separate from the destination minimum", () => {
+    expect(cctpMinimumReceived(100_000_000n, 11_000_000n)).toBe(98_900_000n);
+    expect(() => cctpMinimumReceived(100n, 101n)).toThrow("invalid precision");
   });
 });
 

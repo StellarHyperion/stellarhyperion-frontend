@@ -47,8 +47,9 @@ export type { QuoteDiff } from "../lib/quote-diff";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
 import { CapabilityCache } from "../lib/capability-cache";
 import { validateProviderFee } from "../lib/fee-schema";
-import { cctpPayoutBreakdown } from "../lib/relay-budget";
+import { cctpPayoutBreakdown, createFeeCooldown, FeeUnavailableError } from "../lib/relay-budget";
 
+const clientFeeCooldown = createFeeCooldown();
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
 export const TRANSACTION_TIMEOUT_SECONDS = 180;
@@ -516,6 +517,7 @@ async function readWithRetry<T>(read: () => Promise<T>): Promise<T> {
   try {
     return await read();
   } catch (error) {
+    if (error instanceof FeeUnavailableError) throw error;
     if (!/fetch failed|timeout|timed out|429|502|503|504|ECONN/i.test(String(error))) throw error;
     await new Promise((resolve) => setTimeout(resolve, 300));
     return read();
@@ -907,7 +909,12 @@ export async function quoteTransfer(
       ),
     );
   }
+  const providerKey = route === 0 ? "cctp" : "relay";
+  const cooldown = clientFeeCooldown.remaining(providerKey);
+  if (cooldown > 0) throw new FeeUnavailableError(cooldown);
   const feeResponse = await readWithRetry(async () => {
+    const pendingCooldown = clientFeeCooldown.remaining(providerKey);
+    if (pendingCooldown > 0) throw new FeeUnavailableError(pendingCooldown);
     const response = await fetch(
       route === 0 ? `/api/cctp-fee?destination=${destinationKey}` : "/api/relay-fee",
       {
@@ -915,8 +922,10 @@ export async function quoteTransfer(
         cache: "no-store",
       },
     );
-    if (response.status === 503)
-      throw new Error("503: Live bridge pricing is temporarily unavailable. Try again.");
+    if (response.status === 429 || response.status === 503)
+      throw new FeeUnavailableError(
+        clientFeeCooldown.block(providerKey, response.headers.get("retry-after")),
+      );
     return response;
   });
   if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");

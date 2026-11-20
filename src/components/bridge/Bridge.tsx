@@ -1,6 +1,6 @@
 "use client";
 import { rememberLocalTransfer } from "../../lib/local-transfers";
-import { cctpPayoutBreakdown } from "../../lib/relay-budget";
+import { cctpPayoutBreakdown, FeeUnavailableError } from "../../lib/relay-budget";
 
 import Link from "next/link";
 import {
@@ -301,15 +301,22 @@ function QuoteDetails({
         <dd>{formatUnits(breakdown.retainedDust, 7)} USDC</dd>
       </div>
       <div>
-        <dt>{quote.route === 0 ? "Circle forwarding budget" : "Axelar relay gas budget"}</dt>
+        <dt>{quote.route === 0 ? "Circle forwarding estimate" : "Axelar gas estimate"}</dt>
+        <dd>
+          {formatUnits(quote.estimatedRelayGas ?? quote.relayGas, 7)}{" "}
+          {quote.route === 0 ? "USDC" : "XLM"}
+        </dd>
+      </div>
+      <div>
+        <dt>{quote.route === 0 ? "Approved Circle budget" : "Approved Axelar XLM"}</dt>
         <dd>
           {formatUnits(quote.relayGas, 7)} {quote.route === 0 ? "USDC" : "XLM"}
         </dd>
       </div>
       <div>
-        <dt>Provider estimate</dt>
+        <dt>Integer headroom (rounded up)</dt>
         <dd>
-          {formatUnits(quote.estimatedRelayGas ?? quote.relayGas, 7)}{" "}
+          {formatUnits(quote.relayGas - (quote.estimatedRelayGas ?? quote.relayGas), 7)}{" "}
           {quote.route === 0 ? "USDC" : "XLM"}
         </dd>
       </div>
@@ -361,6 +368,10 @@ function QuoteDetails({
           {formatUnits(quote.destinationAmount, destinationDecimals(quote.route))}{" "}
           {receiveSymbol(quote.route)}
         </dd>
+      </div>
+      <div>
+        <dt>Refund disclosure</dt>
+        <dd>{quote.route === 0 ? "Provider-dependent" : "Provider-dependent; not guaranteed"}</dd>
       </div>
       <div>
         <dt>Provider observation</dt>
@@ -1049,6 +1060,22 @@ export function Bridge() {
   const refreshGate = useRef<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [quoteVersion, setQuoteVersion] = useState(0);
+  const [feeCooldown, setFeeCooldown] = useState<{ key: string; until: number } | null>(null);
+  const [feeClock, setFeeClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (!feeCooldown) return;
+    const update = () => {
+      setFeeClock(Date.now());
+    };
+    update();
+    const timer = window.setInterval(() => {
+      update();
+      if (Date.now() >= feeCooldown.until) window.clearInterval(timer);
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [feeCooldown]);
   const [laneState, setLaneState] = useState<{
     key: string;
     value: LaneState | null;
@@ -1133,6 +1160,10 @@ export function Bridge() {
     quoted?.key === quoteKey && lane?.available && !laneRefreshing ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
   const quoteDiagnostic = quoted?.key === quoteKey ? quoted.diagnostic : null;
+  const retryFeeSeconds =
+    feeCooldown?.key === quoteKey
+      ? Math.max(0, Math.ceil((feeCooldown.until - feeClock) / 1000))
+      : 0;
   const simKey = `${quoteKey}:${wallet.address}`;
   const simulation = simulatedState?.key === simKey ? simulatedState.value : null;
   const simulationError = simulatedState?.key === simKey ? simulatedState.error : null;
@@ -1326,16 +1357,22 @@ export function Bridge() {
     const timer = setTimeout(() => {
       void quoteTrade(destination, activeSource, amount, route)
         .then((value) => {
-          if (active) setQuoted({ key: quoteKey, value, error: null, diagnostic: null });
+          if (active) {
+            setFeeCooldown(null);
+            setQuoted({ key: quoteKey, value, error: null, diagnostic: null });
+          }
         })
         .catch((cause: unknown) => {
-          if (active)
+          if (active) {
+            if (cause instanceof FeeUnavailableError)
+              setFeeCooldown({ key: quoteKey, until: Date.now() + cause.retryAfterSeconds * 1000 });
             setQuoted({
               key: quoteKey,
               value: null,
               error: errorMessage(cause),
               diagnostic: cause instanceof TransferLimitError ? cause.diagnostic : null,
             });
+          }
         });
     }, 400);
     return () => {
@@ -1898,7 +1935,7 @@ export function Bridge() {
                 {quote ? (
                   formatUnits(quote.bridge.destinationAmount, destinationDecimals(route))
                 ) : (
-                  <span className={styles.emptyAmount}>0.00</span>
+                  <span className={styles.emptyAmount}>{quoteError ? "Unavailable" : "0.00"}</span>
                 )}
               </output>
             )}
@@ -2080,8 +2117,8 @@ export function Bridge() {
               Quoted at Stellar ledger {quote.bridge.ledger}. Fees are checked again before signing.
             </p>
             <p className={styles.assetNote}>
-              Relay budgets include 10% headroom. The Axelar XLM budget is paid in full; the Circle
-              receive minimum accounts for its full USDC budget.
+              Estimates and approved budgets are separate. Axelar gas is approved in XLM, Circle
+              forwarding is approved in USDC, and any refund depends on provider behavior.
             </p>
           </details>
         ) : (
@@ -2139,6 +2176,19 @@ export function Bridge() {
               {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
             </p>
           )
+        )}
+        {quoteError && feeCooldown?.key === quoteKey && (
+          <button
+            type="button"
+            className={styles.secondary}
+            disabled={locked || retryFeeSeconds > 0}
+            onClick={() => {
+              setFeeCooldown(null);
+              setQuoteVersion((version) => version + 1);
+            }}
+          >
+            {retryFeeSeconds > 0 ? `Retry quote in ${retryFeeSeconds} seconds` : "Retry fee quote"}
+          </button>
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>
