@@ -8,8 +8,8 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   typedRoutes: true,
   agentRules: false,
-  // Keep cached clients on a consistent deployment revision during rolling updates.
-  deploymentId: stellarDeployment.commit,
+  // Budget attribution uses the modules in the emitted, mangled client chunks.
+  productionBrowserSourceMaps: true,
   // The protocol tarball is installed inside this package.
   turbopack: { root: import.meta.dirname },
 };

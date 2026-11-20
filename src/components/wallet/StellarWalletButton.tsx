@@ -7,25 +7,36 @@ import {
   walletCapabilities,
   walletAvailabilityLabel,
 } from "../../wallets/stellar";
+import { CopyableAddress } from "../bridge/AssetPicker";
 import styles from "./StellarWalletButton.module.css";
 
 export function StellarWalletButton() {
   const {
     isConnected,
     isConnecting,
+    isReadOnly,
+    reconciliationRequired,
     shortAddress,
     address,
+    connectedAddress,
     walletId,
     error,
+    readOnlyError,
+    networkMismatch,
     pendingSigningRequest,
     rememberedWallet,
     preferenceError,
     clearRememberedWallet,
     connect,
     disconnect,
+    inspectAddress,
+    clearReadOnly,
+    reconcileToConnected,
+    reconcileToViewed,
     cancelSignature,
   } = useStellarWallet();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [inspectInput, setInspectInput] = useState("");
   const menuId = useId();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const activeCapabilities = isWalletId(walletId) ? walletCapabilities(walletId) : null;
@@ -72,7 +83,7 @@ export function StellarWalletButton() {
     }
   }, [menuOpen]);
 
-  if (!isConnected) {
+  if (!isConnected && !isReadOnly) {
     return (
       <div className={styles.disconnected}>
         <button
@@ -92,6 +103,7 @@ export function StellarWalletButton() {
             {error}
           </p>
         )}
+        {readOnlyError && <span role="alert">{readOnlyError}</span>}
         {preference}
       </div>
     );
@@ -113,12 +125,25 @@ export function StellarWalletButton() {
         aria-controls={menuId}
         aria-expanded={menuOpen}
       >
-        <span className={styles.dot} />
+        <span className={isReadOnly ? styles.dotReadOnly : styles.dot} />
         <span>{shortAddress}</span>
-        <span className={styles.network}>{pendingSigningRequest ? "signing..." : "(testnet)"}</span>
+        <span className={styles.network}>
+          {isReadOnly
+            ? "(read-only)"
+            : pendingSigningRequest
+              ? "signing..."
+              : networkMismatch
+                ? "(wrong network)"
+                : "(testnet)"}
+        </span>
       </button>
 
-      {preferenceError && !menuOpen && (
+      {networkMismatch && !menuOpen && (
+        <p role="alert" className={styles.preferenceNotice}>
+          {networkMismatch}
+        </p>
+      )}
+      {preferenceError && !menuOpen && !networkMismatch && (
         <p role="alert" className={styles.preferenceNotice}>
           {preferenceError}
         </p>
@@ -128,28 +153,85 @@ export function StellarWalletButton() {
           <div className={styles.addressRow}>
             <span className={styles.addressLabel}>stellar account</span>
             <span className={styles.fullAddress}>{address}</span>
+            {isReadOnly && (
+              <>
+                <span className={styles.readOnlyBadge}>read-only inspection</span>
+                <p className={styles.readOnlyNote}>
+                  Viewed in read-only mode. Transactions cannot be signed.
+                </p>
+              </>
+            )}
+            {address && <CopyableAddress value={address} label="stellar account" />}
           </div>
 
+          {reconciliationRequired && (
+            <div
+              className={styles.reconciliationSection}
+              role="region"
+              aria-label="Mode reconciliation"
+            >
+              <span className={styles.reconcileTitle}>Mode reconciliation required</span>
+              <p className={styles.reconcileDesc}>
+                Connected wallet (
+                {connectedAddress
+                  ? `${connectedAddress.slice(0, 6)}...${connectedAddress.slice(-6)}`
+                  : ""}
+                ) differs from viewed address.
+              </p>
+              <div className={styles.reconcileButtons}>
+                <button
+                  type="button"
+                  className={styles.reconcileBtn}
+                  onClick={() => {
+                    reconcileToConnected();
+                  }}
+                >
+                  Use connected wallet
+                </button>
+                <button
+                  type="button"
+                  className={styles.reconcileBtn}
+                  onClick={() => {
+                    reconcileToViewed();
+                  }}
+                >
+                  Keep read-only
+                </button>
+              </div>
+            </div>
+          )}
+
+          {networkMismatch && (
+            <p role="alert" className={styles.preferenceError}>
+              {networkMismatch}
+            </p>
+          )}
           {preference}
           <div className={styles.diagnosticsSection}>
             <span className={styles.diagTitle}>adapter diagnostics</span>
 
             <div className={styles.diagRow}>
               <span className={styles.diagKey}>wallet</span>
-              <span className={styles.diagVal}>{walletDisplayName}</span>
+              <span className={styles.diagVal}>
+                {isReadOnly ? "Read-only inspection" : walletDisplayName}
+              </span>
             </div>
 
             <div className={styles.diagRow}>
               <span className={styles.diagKey}>availability</span>
-              <span className={styles.diagVal}>{walletAvailabilityLabel("available")}</span>
+              <span className={styles.diagVal}>
+                {isReadOnly ? "read-only" : walletAvailabilityLabel("available")}
+              </span>
             </div>
 
             <div className={styles.diagRow}>
               <span className={styles.diagKey}>tx signing</span>
               <span className={styles.diagVal}>
-                {activeCapabilities?.signingLimitations.canSignTransaction
-                  ? "supported"
-                  : "unsupported"}
+                {isReadOnly
+                  ? "disabled (read-only)"
+                  : activeCapabilities?.signingLimitations.canSignTransaction
+                    ? "supported"
+                    : "unsupported"}
               </span>
             </div>
 
@@ -169,33 +251,100 @@ export function StellarWalletButton() {
             </div>
           </div>
 
-          {pendingSigningRequest && (
+          <div className={styles.inspectSection}>
+            <span className={styles.diagTitle}>inspect address</span>
+            <form
+              className={styles.inspectInputRow}
+              onSubmit={(e) => {
+                e.preventDefault();
+                void (async () => {
+                  const ok = await inspectAddress(inspectInput);
+                  if (ok) setInspectInput("");
+                })();
+              }}
+            >
+              <input
+                type="text"
+                className={styles.inspectInput}
+                placeholder="Address (G...)"
+                aria-label="Stellar address to inspect"
+                value={inspectInput}
+                onChange={(e) => {
+                  setInspectInput(e.target.value);
+                }}
+              />
+              <button type="submit" className={styles.inspectBtn}>
+                Inspect
+              </button>
+            </form>
+          </div>
+
+          {readOnlyError && (
+            <div role="alert" className={styles.readOnlyErrorBox}>
+              {readOnlyError}
+            </div>
+          )}
+
+          {error && (
+            <div role="alert" className={styles.errorBox}>
+              {error}
+            </div>
+          )}
+
+          {isReadOnly ? (
             <>
-              <p role="status" className={styles.addressLabel}>
-                Waiting on your wallet to approve the request. If it closed, was removed, or stopped
-                responding, stop waiting, close the wallet prompt and review before trying again.
-              </p>
+              <button
+                type="button"
+                className={styles.connectWalletBtn}
+                onClick={() => {
+                  void connect();
+                }}
+              >
+                Connect a wallet
+              </button>
               <button
                 type="button"
                 className={styles.disconnectBtn}
                 onClick={() => {
-                  cancelSignature();
+                  clearReadOnly();
+                  setMenuOpen(false);
                 }}
               >
-                stop waiting for signature
+                Exit inspection
+              </button>
+            </>
+          ) : (
+            <>
+              {pendingSigningRequest && (
+                <>
+                  <p role="status" className={styles.addressLabel}>
+                    Waiting on your wallet to approve the request. If it closed, was removed, or
+                    stopped responding, stop waiting, close the wallet prompt and review before
+                    trying again.
+                  </p>
+                  <button
+                    type="button"
+                    className={styles.disconnectBtn}
+                    onClick={() => {
+                      cancelSignature();
+                    }}
+                  >
+                    stop waiting for signature
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className={styles.disconnectBtn}
+                onClick={() => {
+                  void disconnect();
+                  setMenuOpen(false);
+                }}
+              >
+                disconnect
               </button>
             </>
           )}
-          <button
-            type="button"
-            className={styles.disconnectBtn}
-            onClick={() => {
-              void disconnect();
-              setMenuOpen(false);
-            }}
-          >
-            disconnect
-          </button>
         </div>
       )}
       {signingLabel && (

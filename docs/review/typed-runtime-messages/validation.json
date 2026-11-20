@@ -1,0 +1,41 @@
+{
+  "source": "0d10a57b3a03103355c1cec332fc52e67fc02637",
+  "commands": [
+    {
+      "command": ["npm", "run", "fmt:check"],
+      "exit_code": 0,
+      "seconds": 12.36
+    },
+    {
+      "command": ["npm", "run", "house"],
+      "exit_code": 0,
+      "seconds": 0.46
+    },
+    {
+      "command": ["npm", "run", "contrast"],
+      "exit_code": 0,
+      "seconds": 0.36
+    },
+    {
+      "command": ["npm", "run", "test", "--", "--maxWorkers=4"],
+      "exit_code": 0,
+      "seconds": 23.62
+    },
+    {
+      "command": ["npm", "run", "lint"],
+      "exit_code": 0,
+      "seconds": 71.21
+    },
+    {
+      "command": ["npm", "run", "typecheck"],
+      "exit_code": 0,
+      "seconds": 7.51
+    },
+    {
+      "command": ["npm", "run", "build"],
+      "exit_code": 0,
+      "seconds": 38.38
+    }
+  ],
+  "complete": true
+}

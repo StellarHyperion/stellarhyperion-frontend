@@ -1,10 +1,11 @@
 "use client";
+import { rememberLocalTransfer } from "../../lib/local-transfers";
+import { cctpPayoutBreakdown, FeeUnavailableError } from "../../lib/relay-budget";
 
 import Link from "next/link";
 import {
   ArrowDown,
   ArrowRight,
-  Copy,
   ArrowUpRight,
   ChevronDown,
   LoaderCircle,
@@ -16,6 +17,7 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import { fetchClaims } from "../../api";
+import { useVisibilityPoll } from "../../lib/visibility-poll";
 import {
   TESTNET,
   destinationFor,
@@ -28,26 +30,34 @@ import {
 import {
   errorMessage,
   batchClaimSettlementSupport,
+  createReviewedIntentSnapshot,
   getClaims,
   quoteTransfer,
   TRANSACTION_TIMEOUT_SECONDS,
   quoteFreshness,
   readLane,
   resolveCheckpointTransaction,
+  resolveClaimSettlementCheckpoint,
   type CheckpointRecoveryResult,
   simulateBridgeOut,
   submitBridgeOut,
   submitSettleClaim,
   submitSettleClaims,
+  TransferLimitError,
   validateRecipient,
+  QuoteChangedError,
   quoteBreakdown,
+  type FlowLimitDiagnostic,
   type LaneState,
   type LiveQuote,
   type PendingClaim,
+  type QuoteDiff,
+  type ReviewedIntentSnapshot,
   type SimulatedOperation,
   type SubmissionReconciliation,
   type TransactionPhase,
   type TransactionResult,
+  reviewedIntentMatches,
 } from "../../contracts";
 import {
   USDC,
@@ -73,11 +83,19 @@ import {
   type TrustlineReservePreview,
 } from "../../contracts/assets";
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
+import { validateAmount } from "../../lib/amount-validation";
 import {
-  claimOperationOwnership,
+  checkpointForAsset,
+  acquireOperationOwnership,
   getOperationOwnership,
-  releaseOperationOwnership,
-  saveCheckpoint,
+  commitCheckpoint,
+  useCheckpointStorageError,
+  getClaimSettlementCheckpoint,
+  saveClaimSettlementCheckpoint,
+  useClaimSettlementCheckpoint,
+  acquireClaimSettlementLease,
+  claimSettlementIdentities,
+  type ClaimSettlementCheckpoint,
   assertCheckpointStorage,
   useTransferCheckpoint,
   getTransferCheckpoint,
@@ -94,9 +112,53 @@ import {
   SourceAssetPicker,
 } from "./AssetPicker";
 import styles from "./Bridge.module.css";
+import {
+  amountLabel,
+  phaseMessage,
+  recoveryMessage,
+  settlementPhaseMessage,
+} from "../../lib/messages";
+import { runtimeSigningAvailable } from "../../lib/runtime-capabilities";
+import {
+  useMessages,
+  useRuntimeCapabilities,
+  useTranslations,
+} from "../../lib/runtime-capabilities-context";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
+
+function makeReviewedIntent(
+  account: string,
+  asset: Pick<SourceAsset, "id" | "code" | "issuer">,
+  recipient: string,
+  bridge: LiveQuote,
+  sourceAmount: bigint,
+  sourceMaximum: bigint | null,
+  stage: "conversion" | "bridge",
+  destination: DestinationKey = bridge.destination,
+  route: BridgeRoute = bridge.route,
+): ReviewedIntentSnapshot {
+  return createReviewedIntentSnapshot({
+    account,
+    asset: { id: asset.id, code: asset.code, issuer: asset.issuer },
+    destination,
+    route,
+    recipient: validateRecipient(recipient),
+    amount: bridge.requestedAmount,
+    sourceDebit: bridge.grossAmount,
+    protocolFee: bridge.fee,
+    netAmount: bridge.netAmount,
+    representableAmount: bridge.representableAmount,
+    adapter: bridge.adapter,
+    minimum: bridge.destinationAmount,
+    providerBudget: bridge.relayGas,
+    estimatedProviderBudget: bridge.estimatedRelayGas ?? bridge.relayGas,
+    sourceAmount,
+    sourceMaximum,
+    stage,
+  });
+}
 
 export interface BridgeFormParams {
   amount: string;
@@ -214,63 +276,115 @@ function QuoteDetails({
   simulating?: boolean;
   simulationError?: string | null;
 }) {
+  const message = useMessages();
+  const translations = useTranslations();
   const resourceFee = simulation?.resourceFee;
   const networkFee = simulation?.networkFee;
   const breakdown = quoteBreakdown(quote);
 
   const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => {
+  useVisibilityPoll(
+    () => {
       setNow(Date.now());
-    }, 1000);
-    return () => {
-      clearInterval(timer);
-    };
-  }, []);
+    },
+    1000,
+    60_000,
+  );
   const freshness = quoteFreshness(quote, now);
   return (
     <dl className={styles.summary}>
       <div>
-        <dt>Requested source amount</dt>
-        <dd>{formatUnits(breakdown.requestedSourceAmount, 7)} USDC</dd>
+        <dt>{message("requestedSourceLabel")}</dt>
+        <dd>{amountLabel(breakdown.requestedSourceAmount, 7, "USDC", translations)}</dd>
+      </div>
+      {quote.observedAt && quote.validUntil && (
+        <div>
+          <dt>Estimate validity</dt>
+          <dd>
+            {quote.provider ?? (quote.route === 0 ? "Circle CCTP" : "Axelar ITS")} observed at{" "}
+            {new Date(quote.observedAt).toLocaleTimeString()}; expires at{" "}
+            {new Date(quote.validUntil).toLocaleTimeString()}. Fees in{" "}
+            {quote.route === 0 ? "USDC" : "XLM"}. A five-second clock allowance shortens this review
+            window.
+          </dd>
+        </div>
+      )}
+      <div>
+        <dt>{message("sourceDebitLabel")}</dt>
+        <dd>{amountLabel(breakdown.actualSourceDebit, 7, "USDC", translations)}</dd>
       </div>
       <div>
-        <dt>Actual source debit</dt>
-        <dd>{formatUnits(breakdown.actualSourceDebit, 7)} USDC</dd>
+        <dt>{message("protocolFeeLabel")}</dt>
+        <dd>{amountLabel(breakdown.protocolFee, 7, "USDC", translations)}</dd>
       </div>
       <div>
-        <dt>Protocol fee</dt>
-        <dd>{formatUnits(breakdown.protocolFee, 7)} USDC</dd>
+        <dt>{message("bridgeAmountLabel")}</dt>
+        <dd>{amountLabel(breakdown.representableBridgeAmount, 7, "USDC", translations)}</dd>
       </div>
       <div>
-        <dt>Representable bridge amount</dt>
-        <dd>{formatUnits(breakdown.representableBridgeAmount, 7)} USDC</dd>
+        <dt>{message("dustLabel")}</dt>
+        <dd>{amountLabel(breakdown.retainedDust, 7, "USDC", translations)}</dd>
       </div>
       <div>
-        <dt>Retained precision dust</dt>
-        <dd>{formatUnits(breakdown.retainedDust, 7)} USDC</dd>
-      </div>
-      <div>
-        <dt>{quote.route === 0 ? "Circle forwarding budget" : "Axelar relay gas budget"}</dt>
+        <dt>{message(quote.route === 0 ? "circleEstimateLabel" : "axelarEstimateLabel")}</dt>
         <dd>
-          {formatUnits(quote.relayGas, 7)} {quote.route === 0 ? "USDC" : "XLM"}
+          {amountLabel(
+            quote.estimatedRelayGas ?? quote.relayGas,
+            7,
+            quote.route === 0 ? "USDC" : "XLM",
+            translations,
+          )}
         </dd>
       </div>
+      <div>
+        <dt>{message(quote.route === 0 ? "circleBudgetLabel" : "axelarBudgetLabel")}</dt>
+        <dd>{amountLabel(quote.relayGas, 7, quote.route === 0 ? "USDC" : "XLM", translations)}</dd>
+      </div>
+      <div>
+        <dt>{message("headroomLabel")}</dt>
+        <dd>
+          {amountLabel(
+            quote.relayGas - (quote.estimatedRelayGas ?? quote.relayGas),
+            7,
+            quote.route === 0 ? "USDC" : "XLM",
+            translations,
+          )}
+        </dd>
+      </div>
+      {quote.route === 0 && (
+        <>
+          <div>
+            <dt>{message("forwardingLabel")}</dt>
+            <dd>
+              {amountLabel(
+                cctpPayoutBreakdown(quote.representableAmount, quote.relayGas).destinationBudget,
+                6,
+                "USDC",
+                translations,
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt>{message("destinationMinimumLabel")}</dt>
+            <dd>{amountLabel(quote.destinationAmount, 6, "USDC", translations)}</dd>
+          </div>
+        </>
+      )}
       {resourceFee !== undefined && (
         <div>
-          <dt>Assembled resource fee</dt>
-          <dd>{formatUnits(resourceFee, 7)} XLM</dd>
+          <dt>{message("resourceFeeLabel")}</dt>
+          <dd>{amountLabel(resourceFee, 7, "XLM", translations)}</dd>
         </div>
       )}
       {networkFee !== undefined && (
         <div>
-          <dt>Stellar network fee</dt>
-          <dd>{formatUnits(networkFee, 7)} XLM</dd>
+          <dt>{message("networkFeeLabel")}</dt>
+          <dd>{amountLabel(networkFee, 7, "XLM", translations)}</dd>
         </div>
       )}
       {simulating && (
         <div>
-          <dt>Assembled resource fee</dt>
+          <dt>{message("resourceFeeLabel")}</dt>
           <dd>Estimating simulation...</dd>
         </div>
       )}
@@ -281,11 +395,19 @@ function QuoteDetails({
         </div>
       )}
       <div>
-        <dt>Minimum received</dt>
+        <dt>{message("receivedMinimumLabel")}</dt>
         <dd>
-          {formatUnits(quote.destinationAmount, destinationDecimals(quote.route))}{" "}
-          {receiveSymbol(quote.route)}
+          {amountLabel(
+            quote.destinationAmount,
+            destinationDecimals(quote.route),
+            receiveSymbol(quote.route),
+            translations,
+          )}
         </dd>
+      </div>
+      <div>
+        <dt>Refund disclosure</dt>
+        <dd>{quote.route === 0 ? "Provider-dependent" : "Provider-dependent; not guaranteed"}</dd>
       </div>
       <div>
         <dt>Provider observation</dt>
@@ -312,6 +434,58 @@ function QuoteDetails({
         </dd>
       </div>
     </dl>
+  );
+}
+
+function QuoteDiffDetails({ diff }: { diff: QuoteDiff }) {
+  return (
+    <>
+      <h3>
+        {diff.materialWorsening
+          ? "Refreshed quote changed: review required"
+          : "Refreshed quote changed"}
+      </h3>
+      <p className={styles.reviewNote}>
+        Compare fees, the receive minimum and provider budgets with the quote you reviewed.
+      </p>
+      <dl className={styles.summary} aria-label="Quote field differences">
+        {diff.fields.map((field) => (
+          <div
+            key={field.key}
+            className={
+              field.direction === "worse"
+                ? styles.diffWorse
+                : field.direction === "better"
+                  ? styles.diffBetter
+                  : undefined
+            }
+          >
+            <dt>{field.label}</dt>
+            <dd>
+              {field.reviewedDisplay} <ArrowRight size={11} aria-hidden="true" />{" "}
+              {field.refreshedDisplay}
+              <span className={styles.diffKind}>
+                {field.direction === "worse"
+                  ? "Worse"
+                  : field.direction === "better"
+                    ? "Better"
+                    : "Changed"}
+              </span>
+              {field.delta !== null && (
+                <span className={styles.diffDelta}>
+                  {field.delta > 0n ? "+" : ""}
+                  {field.delta.toString()}{" "}
+                  {field.delta === 1n || field.delta === -1n ? "base unit" : "base units"}
+                </span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className={styles.reviewNote}>
+        Your reviewed minimum and provider budget stay fixed in the signed transaction.
+      </p>
+    </>
   );
 }
 
@@ -424,10 +598,9 @@ function PendingTransferCard({
 }: {
   checkpoint: TransferCheckpoint;
   busy: boolean;
-  onReset: () => void;
+  onReset: () => Promise<void>;
 }) {
   const wallet = useStellarWallet();
-  const [copied, setCopied] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState<
     (CheckpointRecoveryResult & { txHash: string; owner: string }) | null
@@ -441,6 +614,11 @@ function PendingTransferCard({
   const [cardSimulation, setCardSimulation] = useState<SimulatedOperation | null>(null);
   const [cardSimulating, setCardSimulating] = useState(false);
   const [cardSimError, setCardSimError] = useState<string | null>(null);
+  const [reviewedIntent, setReviewedIntent] = useState<ReviewedIntentSnapshot | null>(null);
+  const [cardDiff, setCardDiff] = useState<QuoteDiff | null>(null);
+  const message = useMessages();
+  const translations = useTranslations();
+  const runtime = useRuntimeCapabilities();
   const sameAccount = wallet.address === checkpoint.account;
   const actionRef = useRef<HTMLButtonElement>(null);
   const recoveryMessageRef = useRef<HTMLParagraphElement>(null);
@@ -489,22 +667,35 @@ function PendingTransferCard({
         !controller.signal.aborted &&
         ownerRef.current === owner &&
         saved !== null &&
-        checkpointIdentity(saved) === checkpointIdentity(checkpoint)
+        checkpointIdentity(saved) === checkpointIdentity(checkpoint) &&
+        (saved.revision ?? 0) === (checkpoint.revision ?? 0)
       );
     };
     setChecking(true);
     setError(null);
+    let conversionConfirmed = false;
     try {
       const result = await resolveCheckpointTransaction(checkpoint, controller.signal);
       if (!active()) return;
       setReview(null);
+      setReviewedIntent(null);
       setCardSimulation(null);
+      setCardDiff(null);
       setChecked({ ...result, txHash: checkpoint.txHash, owner });
+      if (checkpoint.stage === "bridge")
+        await rememberLocalTransfer({
+          checkpoint,
+          sourceStatus:
+            result.status === "confirmed" || result.status === "failed" ? result.status : "unknown",
+        });
       if (result.status === "unknown") {
         setError(result.message);
         return;
       }
       if (result.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+        if (!runtimeSigningAvailable(runtime.capabilities, checkpoint.route))
+          throw new Error(message("staticFeeUnavailable"));
+        conversionConfirmed = true;
         await requireRecoveredUsdc(
           checkpoint.account,
           BigInt(checkpoint.bridgeAmount),
@@ -518,6 +709,19 @@ function PendingTransferCard({
         );
         if (!active()) return;
         setReview(nextQuote);
+        setReviewedIntent(
+          makeReviewedIntent(
+            checkpoint.account,
+            USDC,
+            checkpoint.recipient,
+            nextQuote,
+            nextQuote.requestedAmount,
+            null,
+            "bridge",
+            checkpoint.destination,
+            checkpoint.route,
+          ),
+        );
         setCardSimulating(true);
         setCardSimError(null);
         try {
@@ -534,7 +738,12 @@ function PendingTransferCard({
         }
       }
     } catch (cause) {
-      if (active()) setError(errorMessage(cause));
+      if (active())
+        setError(
+          conversionConfirmed
+            ? message("conversionPreparationFailed", { reason: errorMessage(cause) })
+            : errorMessage(cause),
+        );
     } finally {
       if (requestRef.current === controller) requestRef.current = null;
       // Busy UI state is safe to release even when identity invalidated this read.
@@ -543,8 +752,13 @@ function PendingTransferCard({
     }
   };
   const continueBridge = async () => {
+    if (!runtimeSigningAvailable(runtime.capabilities, checkpoint.route)) {
+      setError(message("runtimeUnknown"));
+      return;
+    }
     if (
       !review ||
+      !reviewedIntent ||
       checked?.owner !== recoveryOwner ||
       checked.status !== "confirmed" ||
       !sameAccount ||
@@ -570,7 +784,8 @@ function PendingTransferCard({
         !controller.signal.aborted &&
         ownerRef.current === owner &&
         saved !== null &&
-        checkpointIdentity(saved) === checkpointIdentity(checkpoint)
+        checkpointIdentity(saved) === checkpointIdentity(checkpoint) &&
+        (saved.revision ?? 0) === (checkpoint.revision ?? 0)
       );
     };
     setChecking(true);
@@ -587,17 +802,26 @@ function PendingTransferCard({
         review,
         checkpoint.recipient,
         (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "bridge" }),
-        (_phase, hash) => {
-          if (hash) saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
-        },
+        undefined,
         { account: checkpoint.account, network: TESTNET.networkPassphrase, operation: "bridge" },
         {
           expectedAccount: checkpoint.account,
+          reviewedIntent,
           getCurrentAccount: () => currentAccount.current,
           isSuperseded: () => !active(),
+          onSigned: async (hash) => {
+            const saved = await commitCheckpoint(
+              { ...checkpoint, stage: "bridge", txHash: hash },
+              checkpoint,
+            );
+            if (saved) await rememberLocalTransfer({ checkpoint: saved, sourceStatus: "unknown" });
+          },
         },
         cardSimulation,
         controller.signal,
+        (diff) => {
+          if (active()) setCardDiff(diff);
+        },
       );
       if (active()) {
         setChecked(
@@ -608,20 +832,46 @@ function PendingTransferCard({
                 status: result.status === "confirmed" ? "confirmed" : "failed",
                 owner,
                 source: "rpc",
-                message: `The transaction is ${result.status} on Stellar Testnet.`,
+                message: recoveryMessage(
+                  "bridge",
+                  result.status === "confirmed" ? "confirmed" : "failed",
+                  false,
+                  translations,
+                ),
               },
         );
         setReview(null);
+        setReviewedIntent(null);
         setCardSimulation(null);
+        setCardDiff(null);
       }
     } catch (cause) {
-      if (active()) {
-        const message = errorMessage(cause);
-        if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
-        setError(message);
+      if (active() && cause instanceof QuoteChangedError) {
+        setCardDiff(cause.diff);
+        setError(null);
+      } else if (active()) {
+        const reason = errorMessage(cause);
+        setError(message("conversionAttemptFailed", { reason }));
       }
     } finally {
       if (requestRef.current === controller) requestRef.current = null;
+      setChecking(false);
+    }
+  };
+  const resetRecovered = async () => {
+    if (checking || busy || requestRef.current) return;
+    setChecking(true);
+    try {
+      if (
+        checkpoint.stage === "bridge" &&
+        visibleCurrent &&
+        (visibleCurrent.status === "confirmed" || visibleCurrent.status === "failed")
+      )
+        await rememberLocalTransfer({ checkpoint, sourceStatus: visibleCurrent.status });
+      await onReset();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
       setChecking(false);
     }
   };
@@ -636,30 +886,18 @@ function PendingTransferCard({
       <div className={styles.pendingTitle}>
         <ShieldCheck size={18} aria-hidden="true" />
         <h2>
-          {visibleCurrent?.status === "failed"
-            ? "Transaction failed on Stellar"
-            : checkpoint.stage === "conversion"
-              ? visibleCurrent?.status === "confirmed"
-                ? "Conversion confirmed"
-                : "Conversion source status unknown"
-              : visibleCurrent?.status === "confirmed"
-                ? "Transfer confirmed on Stellar"
-                : "Transfer source status unknown"}
+          {recoveryMessage(checkpoint.stage, visibleCurrent?.status ?? null, true, translations)}
         </h2>
       </div>
       <p id="pending-recovery-message" ref={recoveryMessageRef} role="status" tabIndex={-1}>
-        {checkpoint.stage === "conversion"
-          ? visibleCurrent?.status === "confirmed"
-            ? "Conversion confirmed on Stellar. Your bridge is a separate transaction and still requires your wallet approval."
-            : visibleCurrent?.status === "failed"
-              ? "Conversion failed on Stellar. No bridge transaction was submitted."
-              : "This saved signed hash does not establish broadcast or confirmation. Check the conversion source status before continuing with USDC."
-          : visibleCurrent?.status === "confirmed"
-            ? "Source transaction confirmed on Stellar. Destination delivery is tracked separately."
-            : visibleCurrent?.status === "failed"
-              ? "Source transaction failed on Stellar. No destination delivery was initiated."
-              : "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer."}
+        {recoveryMessage(checkpoint.stage, visibleCurrent?.status ?? null, false, translations)}
       </p>
+      {checkpoint.stage === "conversion" && checkpoint.source && (
+        <p className={styles.address}>
+          Original source asset: {checkpoint.source.code}
+          {checkpoint.source.issuer ? `, issuer ${checkpoint.source.issuer}` : " (native XLM)"}
+        </p>
+      )}
       <a
         className={styles.transactionLink}
         href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -672,26 +910,8 @@ function PendingTransferCard({
       <div className={styles.transactionIdentity}>
         <span>Source transaction on Stellar Testnet</span>
         <div className={styles.transactionIdentityValue}>
-          <code className={styles.transactionHash}>{checkpoint.txHash}</code>
-          <button
-            type="button"
-            className={styles.copyHash}
-            aria-label="Copy transaction hash"
-            onClick={() => {
-              void navigator.clipboard
-                .writeText(checkpoint.txHash)
-                .then(() => {
-                  setCopied(true);
-                })
-                .catch(() => {
-                  setCopied(false);
-                });
-            }}
-          >
-            <Copy size={14} aria-hidden="true" />
-          </button>
+          <CopyableAddress value={checkpoint.txHash} label="transaction hash" />
         </div>
-        {copied && <span role="status">Transaction hash copied.</span>}
         <a
           className={styles.transactionLink}
           href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -708,11 +928,13 @@ function PendingTransferCard({
       )}
       {!sameAccount && (
         <p>
-          Reconnect {checkpoint.account.slice(0, 7)}...{checkpoint.account.slice(-7)} to continue
-          this transfer.
+          {message("recoveryReconnect", {
+            account: `${checkpoint.account.slice(0, 7)}...${checkpoint.account.slice(-7)}`,
+          })}
         </p>
       )}
-      {checking && <p role="status">Checking Stellar Testnet transaction history...</p>}
+      <p className={styles.address}>{message("recoveryOwner", { account: checkpoint.account })}</p>
+      {checking && <p role="status">{message("recoveryChecking")}</p>}
       {visibleCurrent && visibleCurrent.message !== error && (
         <p role="status">{visibleCurrent.message}</p>
       )}
@@ -725,17 +947,23 @@ function PendingTransferCard({
       (checkpoint.stage === "bridge" && visibleCurrent?.status === "confirmed") ? (
         <button
           id="pending-recovery-action"
+          aria-describedby="pending-recovery-message"
+          aria-busy={checking}
           ref={actionRef}
           type="button"
           className={styles.secondary}
-          onClick={onReset}
+          onClick={() => {
+            void resetRecovered();
+          }}
           disabled={busy || checking}
         >
-          Start another transfer
+          {message("recoveryStartAnother")}
         </button>
       ) : (
         <button
           id="pending-recovery-action"
+          aria-describedby="pending-recovery-message"
+          aria-busy={checking}
           ref={actionRef}
           type="button"
           className={styles.secondary}
@@ -745,10 +973,10 @@ function PendingTransferCard({
           disabled={busy || checking}
         >
           {checking
-            ? "Checking transaction..."
+            ? message("recoveryCheckingAction")
             : checkpoint.stage === "conversion" && sameAccount
-              ? "Check and continue"
-              : "Check status"}
+              ? message("recoveryContinue")
+              : message("recoveryCheck")}
         </button>
       )}
       {review && checked?.owner === recoveryOwner && (
@@ -756,14 +984,53 @@ function PendingTransferCard({
           onClose={() => {
             if (!checking) {
               setReview(null);
+              setReviewedIntent(null);
               setCardSimulation(null);
               setCardSimError(null);
             }
           }}
+          footer={
+            <>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={checking}
+                onClick={() => {
+                  setReview(null);
+                  setCardSimulation(null);
+                  setCardSimError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={
+                  !runtimeSigningAvailable(runtime.capabilities, checkpoint.route) ||
+                  checking ||
+                  !sameAccount ||
+                  cardSimulating ||
+                  !!cardSimError ||
+                  !cardSimulation ||
+                  !!cardDiff?.materialWorsening
+                }
+                onClick={() => {
+                  void continueBridge();
+                }}
+              >
+                {checking
+                  ? "Confirming in your wallet..."
+                  : cardSimulating
+                    ? "Estimating simulation..."
+                    : cardSimError
+                      ? "Approval blocked"
+                      : message("approveBridge")}
+              </button>
+            </>
+          }
         >
-          <p className={styles.reviewNote}>
-            Conversion confirmed. This step bridges the USDC already in your wallet.
-          </p>
+          <p className={styles.reviewNote}>{message("recoveryExistingUSDC")}</p>
           <ApprovalDetails
             approval={{
               account: checkpoint.account,
@@ -772,11 +1039,26 @@ function PendingTransferCard({
             }}
           />
           <QuoteDetails quote={review} simulation={cardSimulation} />
+          {cardDiff && (
+            <section className={styles.quoteDiff} aria-label="Refreshed quote comparison">
+              <QuoteDiffDetails diff={cardDiff} />
+              <button
+                type="button"
+                className={styles.secondary}
+                onClick={() => {
+                  setCardDiff(null);
+                  void check();
+                }}
+              >
+                Check refreshed quote
+              </button>
+            </section>
+          )}
           <p className={styles.address}>Recipient: {checkpoint.recipient}</p>
           {cardSimulation && (
             <p className={styles.address}>
-              Operation: bridge_out_with_gas ({formatUnits(cardSimulation.totalFee, 7)} XLM total
-              envelope fee)
+              Operation: bridge_out_with_gas (
+              {amountLabel(cardSimulation.totalFee, 7, "XLM", translations)} total envelope fee)
             </p>
           )}
           {cardSimError && (
@@ -784,24 +1066,6 @@ function PendingTransferCard({
               Simulation failed: {cardSimError}. Approval blocked.
             </p>
           )}
-          <button
-            type="button"
-            className={styles.primary}
-            disabled={
-              checking || !sameAccount || cardSimulating || !!cardSimError || !cardSimulation
-            }
-            onClick={() => {
-              void continueBridge();
-            }}
-          >
-            {checking
-              ? "Confirming in your wallet..."
-              : cardSimulating
-                ? "Estimating simulation..."
-                : cardSimError
-                  ? "Approval blocked"
-                  : "Bridge converted USDC"}
-          </button>
           {error && <p role="alert">{error}</p>}
         </ReviewDialog>
       )}
@@ -810,19 +1074,43 @@ function PendingTransferCard({
 }
 
 export function Bridge() {
+  const message = useMessages();
+  const translations = useTranslations();
+  const runtime = useRuntimeCapabilities();
   const wallet = useStellarWallet();
   const checkpoint = useTransferCheckpoint();
+  const checkpointStorageError = useCheckpointStorageError();
   const [source, setSource] = useState<SourceAsset>(USDC);
   const [destination, setDestination] = useState<DestinationKey>("sepolia");
   const [route, setRoute] = useState<BridgeRoute>(1);
+  const runtimeReady = runtimeSigningAvailable(runtime.capabilities, route);
   const [amount, setAmount] = useState("");
   const [recipient, setRecipient] = useState("");
   const [touched, setTouched] = useState(false);
   const [picker, setPicker] = useState<"source" | "destination" | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [reviewApproval, setReviewApproval] = useState<WalletApprovalProvenance | null>(null);
+  const [quoteDiff, setQuoteDiff] = useState<QuoteDiff | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const refreshGate = useRef<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [quoteVersion, setQuoteVersion] = useState(0);
+  const [feeCooldown, setFeeCooldown] = useState<{ key: string; until: number } | null>(null);
+  const [feeClock, setFeeClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (!feeCooldown) return;
+    const update = () => {
+      setFeeClock(Date.now());
+    };
+    update();
+    const timer = window.setInterval(() => {
+      update();
+      if (Date.now() >= feeCooldown.until) window.clearInterval(timer);
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [feeCooldown]);
   const [laneState, setLaneState] = useState<{
     key: string;
     value: LaneState | null;
@@ -832,6 +1120,7 @@ export function Bridge() {
     key: string;
     value: TradeQuote | null;
     error: string | null;
+    diagnostic: FlowLimitDiagnostic | null;
   } | null>(null);
   const [accounts, setAccounts] = useState<{
     account: string;
@@ -851,17 +1140,65 @@ export function Bridge() {
   const [reviewed, setReviewed] = useState<{
     key: string;
     quote: TradeQuote;
+    intent: ReviewedIntentSnapshot;
     addTrustline: boolean;
     simulation: SimulatedOperation | null;
   } | null>(null);
   const [reserve, setReserve] = useState<TrustlineReservePreview | null>(null);
   const [reserveError, setReserveError] = useState<string | null>(null);
+  const reviewAction = useRef<HTMLButtonElement>(null);
+  const approvalFocusPending = useRef(false);
+  useEffect(() => {
+    if (busy || !approvalFocusPending.current || checkpoint) return;
+    approvalFocusPending.current = false;
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        active !== document.body &&
+        active.isConnected &&
+        !active.matches(":disabled")
+      )
+        return;
+      if (reviewAction.current && !reviewAction.current.disabled) reviewAction.current.focus();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [busy, checkpoint, error]);
   const laneKey = `${destination}:${route}:${refresh}`;
+  const laneRefreshing = useVisibilityPoll(
+    async (signal) => {
+      if (refreshGate.current !== null) refreshGate.current = laneKey;
+      try {
+        const value = await readLane(destination, route);
+        if (!signal.aborted) setLaneState({ key: laneKey, value, error: null });
+      } catch (cause) {
+        if (!signal.aborted)
+          setLaneState({ key: laneKey, value: null, error: errorMessage(cause) });
+      } finally {
+        if (!signal.aborted && refreshGate.current === laneKey) {
+          refreshGate.current = null;
+          setRefreshing(false);
+        }
+      }
+    },
+    30_000,
+    60_000,
+    laneKey,
+    0,
+  );
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
   const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
-  const quote = quoted?.key === quoteKey && lane?.available ? quoted.value : null;
+  const quote =
+    quoted?.key === quoteKey && lane?.available && !laneRefreshing ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
+  const quoteDiagnostic = quoted?.key === quoteKey ? quoted.diagnostic : null;
+  const retryFeeSeconds =
+    feeCooldown?.key === quoteKey
+      ? Math.max(0, Math.ceil((feeCooldown.until - feeClock) / 1000))
+      : 0;
   const simKey = `${quoteKey}:${wallet.address}`;
   const simulation = simulatedState?.key === simKey ? simulatedState.value : null;
   const simulationError = simulatedState?.key === simKey ? simulatedState.error : null;
@@ -880,6 +1217,8 @@ export function Bridge() {
     recipient,
     amount,
     sourceId: source.id,
+    sourceCode: source.code,
+    sourceIssuer: source.issuer,
     destination,
     route,
   });
@@ -889,10 +1228,35 @@ export function Bridge() {
       recipient,
       amount,
       sourceId: source.id,
+      sourceCode: source.code,
+      sourceIssuer: source.issuer,
       destination,
       route,
     };
-  }, [wallet.address, recipient, amount, source.id, destination, route]);
+  }, [
+    wallet.address,
+    recipient,
+    amount,
+    source.id,
+    source.code,
+    source.issuer,
+    destination,
+    route,
+  ]);
+  // A network change detected mid-review must invalidate the reviewed quote immediately.
+  // The user switched their wallet to a different network while the review dialog was open:
+  // the transaction envelope they would sign is now for the wrong network, so we must close
+  // the review and surface the mismatch error. Never auto-resubmit or preserve a stale review.
+  useEffect(() => {
+    if (!wallet.networkMismatch) return;
+    if (!reviewing && !reviewed) return;
+    queueMicrotask(() => {
+      setReviewing(false);
+      setReviewed(null);
+      setReviewApproval(null);
+      setError(wallet.networkMismatch);
+    });
+  }, [wallet.networkMismatch, reviewing, reviewed]);
   const spendableStr =
     accounts?.account === wallet.address && !accounts.error && walletAsset
       ? spendableBalance(walletAsset)
@@ -921,14 +1285,13 @@ export function Bridge() {
           trustlineOk,
         });
 
-  const locked = busy || checkpoint !== null;
+  const locked = busy || checkpoint !== null || checkpointStorageError !== null;
   let inputError: string | null = null;
   let valid = false;
+  const amountValidation = validateAmount(amount, translations);
   if (amount.trim() && recipient.trim()) {
     try {
-      const parsed = parseUnits(amount.trim(), 7);
-      if (parsed <= 0n || parsed > (1n << 63n) - 1n)
-        throw new Error("Enter a positive amount within Stellar's asset limit.");
+      if (!amountValidation.valid) throw new Error(amountValidation.message);
       validateRecipient(recipient);
       valid = true;
     } catch (cause) {
@@ -936,8 +1299,13 @@ export function Bridge() {
     }
   }
   const fetching =
-    valid && !locked && !laneError && (!lane || (lane.available && quoted?.key !== quoteKey));
+    runtimeReady &&
+    valid &&
+    !locked &&
+    !laneError &&
+    (!lane || (lane.available && quoted?.key !== quoteKey));
   const simulating =
+    runtimeReady &&
     valid &&
     !!wallet.address &&
     !!quote &&
@@ -1005,25 +1373,12 @@ export function Bridge() {
   const invalidateQuote = () => {
     setQuoteVersion((version) => version + 1);
     setQuoted(null);
+    setReviewing(false);
+    setReviewApproval(null);
+    setReviewed(null);
+    setQuoteDiff(null);
   };
-  useEffect(() => {
-    let active = true;
-    const load = () => {
-      void readLane(destination, route)
-        .then((value) => {
-          if (active) setLaneState({ key: laneKey, value, error: null });
-        })
-        .catch((cause: unknown) => {
-          if (active) setLaneState({ key: laneKey, value: null, error: errorMessage(cause) });
-        });
-    };
-    load();
-    const timer = setInterval(load, 30000);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, [destination, route, laneKey]);
+
   useEffect(() => {
     if (!wallet.address) return;
     const account = wallet.address;
@@ -1051,26 +1406,38 @@ export function Bridge() {
     };
   }, [wallet.address, result, refresh]);
   useEffect(() => {
-    if (!valid || !lane?.available || locked) return;
+    if (!runtimeReady || !valid || !lane?.available || locked) return;
     let active = true;
     const timer = setTimeout(() => {
       void quoteTrade(destination, activeSource, amount, route)
         .then((value) => {
-          if (active) setQuoted({ key: quoteKey, value, error: null });
+          if (active) {
+            setFeeCooldown(null);
+            setQuoted({ key: quoteKey, value, error: null, diagnostic: null });
+          }
         })
         .catch((cause: unknown) => {
-          if (active) setQuoted({ key: quoteKey, value: null, error: errorMessage(cause) });
+          if (active) {
+            if (cause instanceof FeeUnavailableError)
+              setFeeCooldown({ key: quoteKey, until: Date.now() + cause.retryAfterSeconds * 1000 });
+            setQuoted({
+              key: quoteKey,
+              value: null,
+              error: errorMessage(cause),
+              diagnostic: cause instanceof TransferLimitError ? cause.diagnostic : null,
+            });
+          }
         });
     }, 400);
     return () => {
       active = false;
       clearTimeout(timer);
     };
-  }, [valid, lane, locked, destination, activeSource, amount, route, quoteKey]);
+  }, [runtimeReady, valid, lane, locked, destination, activeSource, amount, route, quoteKey]);
   useEffect(() => {
     const sender = wallet.address;
     // Conversion funds the later bridge. Simulate that bridge only after conversion confirms.
-    if (!valid || !quote || quote.conversion || !sender || locked) return;
+    if (!runtimeReady || !valid || !quote || quote.conversion || !sender || locked) return;
     let active = true;
     const timer = setTimeout(() => {
       void simulateBridgeOut(sender, quote.bridge, recipient)
@@ -1085,9 +1452,13 @@ export function Bridge() {
       active = false;
       clearTimeout(timer);
     };
-  }, [valid, quote, wallet.address, locked, recipient, simKey]);
+  }, [runtimeReady, valid, quote, wallet.address, locked, recipient, simKey]);
 
   const submit = async () => {
+    if (!runtimeReady) {
+      setError(message("runtimeUnknown"));
+      return;
+    }
     if (
       !reviewed ||
       !wallet.address ||
@@ -1097,18 +1468,47 @@ export function Bridge() {
       (!!reviewed.quote.conversion && !reserve)
     )
       return;
+    // Block signing if the wallet's network disagrees with Stellar Testnet. This can happen when
+    // the user switches their wallet to mainnet between the review and the sign tap. The review
+    // is stale for the wrong network; never auto-resubmit or forward it to the wallet.
+    if (wallet.networkMismatch) {
+      setReviewing(false);
+      setReviewApproval(null);
+      setReviewed(null);
+      setError(wallet.networkMismatch);
+      return;
+    }
     if (reviewApproval?.account !== wallet.address) {
       setReviewing(false);
       setReviewApproval(null);
       setReviewed(null);
-      setError("Your wallet account changed. Review the transfer again.");
+      setError(message("walletChanged"));
       return;
     }
-    if (reviewed.key !== quoteKey) {
+    let intentMatches = false;
+    try {
+      intentMatches = reviewedIntentMatches(
+        reviewed.intent,
+        makeReviewedIntent(
+          wallet.address,
+          source,
+          recipient,
+          reviewed.quote.bridge,
+          parseUnits(amount.trim(), 7),
+          reviewed.quote.conversion?.sourceMax ?? null,
+          reviewed.quote.conversion ? "conversion" : "bridge",
+          destination,
+          route,
+        ),
+      );
+    } catch {
+      intentMatches = false;
+    }
+    if (reviewed.key !== quoteKey || !intentMatches) {
       setReviewing(false);
       setReviewed(null);
       setReviewApproval(null);
-      setError("The conversion route changed. Review the updated path before signing.");
+      setError("The reviewed transfer intent changed. Review the updated path before signing.");
       return;
     }
     const reviewedQuote = reviewed.quote;
@@ -1141,6 +1541,7 @@ export function Bridge() {
     waitController.current?.abort();
     waitController.current = controller;
     const generation = ++waitGeneration.current;
+    approvalFocusPending.current = true;
     setBusy(true);
     setError(null);
     setResult(null);
@@ -1151,9 +1552,9 @@ export function Bridge() {
     const initialSourceId = source.id;
     const initialDestination = destination;
     const initialRoute = route;
-    let ownership: ReturnType<typeof claimOperationOwnership>;
+    let ownership: Awaited<ReturnType<typeof acquireOperationOwnership>>;
     try {
-      ownership = claimOperationOwnership({
+      ownership = await acquireOperationOwnership({
         account: sender,
         recipient: validateRecipient(recipient),
         destination,
@@ -1161,6 +1562,12 @@ export function Bridge() {
         bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
         stage: reviewedQuote.conversion ? "conversion" : "bridge",
       });
+      if (controller.signal.aborted || generation !== waitGeneration.current) {
+        ownership.release();
+        setBusy(false);
+        setPhase(null);
+        return;
+      }
     } catch (cause) {
       setError(errorMessage(cause));
       setBusy(false);
@@ -1179,7 +1586,29 @@ export function Bridge() {
         current.route !== initialRoute
       )
         return true;
-      return false;
+      if (!current.account) return true;
+      try {
+        return !reviewedIntentMatches(
+          reviewed.intent,
+          makeReviewedIntent(
+            current.account,
+            {
+              id: current.sourceId,
+              code: current.sourceCode,
+              issuer: current.sourceIssuer,
+            },
+            current.recipient,
+            reviewedQuote.bridge,
+            parseUnits(current.amount.trim(), 7),
+            reviewedQuote.conversion?.sourceMax ?? null,
+            reviewedQuote.conversion ? "conversion" : "bridge",
+            current.destination,
+            current.route,
+          ),
+        );
+      } catch {
+        return true;
+      }
     };
     let converted: TransferCheckpoint | null = null;
     const pending = (stage: "conversion" | "bridge", hash: string): TransferCheckpoint => ({
@@ -1192,21 +1621,36 @@ export function Bridge() {
       bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
       stage,
       txHash: hash,
+      source: {
+        id: reviewedQuote.source.id,
+        code: reviewedQuote.source.code,
+        issuer: reviewedQuote.source.issuer,
+      },
     });
     const conversionReconcile: SubmissionReconciliation = {
       expectedAccount: sender,
+      reviewedIntent: reviewed.intent,
       getCurrentAccount: () => liveReview.current.account ?? null,
       isSuperseded,
-      onAccountSwitch: (hash) => {
-        saveCheckpoint(pending("conversion", hash));
+      onSigned: async (hash) => {
+        await commitCheckpoint(pending("conversion", hash));
+      },
+      onAccountSwitch: async (hash) => {
+        await commitCheckpoint(pending("conversion", hash));
       },
     };
     const bridgeReconcile: SubmissionReconciliation = {
       expectedAccount: sender,
+      reviewedIntent: reviewed.intent,
       getCurrentAccount: () => liveReview.current.account ?? null,
       isSuperseded,
-      onAccountSwitch: (hash) => {
-        saveCheckpoint(pending("bridge", hash));
+      onSigned: async (hash) => {
+        const saved = await commitCheckpoint(pending("bridge", hash));
+        if (saved) await rememberLocalTransfer({ checkpoint: saved, sourceStatus: "unknown" });
+      },
+      onAccountSwitch: async (hash) => {
+        const saved = await commitCheckpoint(pending("bridge", hash));
+        if (saved) await rememberLocalTransfer({ checkpoint: saved, sourceStatus: "unknown" });
       },
     };
     try {
@@ -1216,9 +1660,8 @@ export function Bridge() {
           wallet.address,
           reviewedQuote.conversion,
           (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "conversion" }),
-          (next, hash) => {
+          (next) => {
             setPhase(next);
-            if (hash) saveCheckpoint(pending("conversion", hash));
           },
           { ...reviewApproval, operation: "conversion" },
           conversionReconcile,
@@ -1232,7 +1675,7 @@ export function Bridge() {
           return;
         }
         converted = pending("conversion", swap.txHash);
-        saveCheckpoint(converted);
+        await commitCheckpoint(converted);
         setResult(swap);
         return;
       }
@@ -1246,7 +1689,6 @@ export function Bridge() {
         (next, hash) => {
           setPhase(next);
           if (hash) {
-            saveCheckpoint(pending("bridge", hash));
             setResult({ status: "pending", txHash: hash });
           }
         },
@@ -1254,26 +1696,40 @@ export function Bridge() {
         bridgeReconcile,
         reviewed.simulation ?? undefined,
         controller.signal,
+        (diff) => {
+          if (generation === waitGeneration.current) setQuoteDiff(diff);
+        },
       );
       if (generation !== waitGeneration.current) return;
+      const saved = getTransferCheckpoint();
+      if (saved && (submitted.status === "confirmed" || submitted.status === "failed"))
+        await rememberLocalTransfer({ checkpoint: saved, sourceStatus: submitted.status });
       setResult(submitted);
     } catch (cause) {
-      const message = errorMessage(cause);
-      if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(converted);
-      setError(message);
+      if (cause instanceof QuoteChangedError) {
+        setQuoteDiff(cause.diff);
+        setReviewed(null);
+        setReviewApproval(null);
+        setError(null);
+      } else {
+        const message = errorMessage(cause);
+
+        setError(message);
+      }
     } finally {
-      releaseOperationOwnership(ownership.id);
+      ownership.release();
       setBusy(false);
       setPhase(null);
     }
   };
-  const reset = () => {
+  const reset = async () => {
     if (!checkpoint) return;
     try {
-      saveCheckpoint(null, checkpoint);
+      await commitCheckpoint(null, checkpoint);
       setResult(null);
       setError(null);
       setReviewed(null);
+      setQuoteDiff(null);
       setAmount("");
       setSimulatedState(null);
       setRefresh((value) => value + 1);
@@ -1317,6 +1773,80 @@ export function Bridge() {
       ? trustlineReserveImpact(reserve, reviewed.quote.conversion, reviewed.addTrustline)
       : null;
   const reviewedReserveInsufficient = !!reviewedImpact && reviewedImpact.projectedSpendable < 0n;
+  let recipientProblem = false;
+  if (recipient.trim()) {
+    try {
+      validateRecipient(recipient);
+    } catch {
+      recipientProblem = true;
+    }
+  }
+  const amountProblem = amount.trim() !== "" && !amountValidation.valid;
+  const sourceReadBlocked =
+    valid &&
+    !!wallet.address &&
+    (sourceBalance === undefined ||
+      !trustlineOk ||
+      xlmStatus !== "ok" ||
+      trustlineReserveUnknown ||
+      trustlineReserveInsufficient);
+  const routeReadBlocked =
+    !runtimeReady ||
+    !!laneError ||
+    (valid && lane !== null && !lane.available) ||
+    !!quoteError ||
+    !!simulationError;
+  const validationSummary = [
+    amountProblem ? { id: "send-amount", label: "amount" } : null,
+    recipientProblem ? { id: "recipient", label: "destination wallet" } : null,
+    insufficient || exceedsFlow ? { id: "send-amount", label: "amount and available limit" } : null,
+    sourceReadBlocked ? { id: "bridge-action-help", label: "balance and reserve checks" } : null,
+    routeReadBlocked ? { id: "bridge-action-help", label: "route and fee checks" } : null,
+    error || wallet.error
+      ? {
+          id: checkpoint ? "pending-recovery-message" : "bridge-action-help",
+          label: "recovery guidance",
+        }
+      : null,
+  ].filter((item): item is { id: string; label: string } => item !== null);
+  const actionHelp = checkpoint
+    ? "Check the saved source transaction before approving another transfer."
+    : !runtimeReady
+      ? message(
+          runtime.capabilities.routes[route === 0 ? "cctp" : "relay"] === "missing"
+            ? "staticFeeUnavailable"
+            : "runtimeUnknown",
+        )
+      : refreshing || fetching
+        ? "Wait while the current route and fee estimate are loaded."
+        : simulating
+          ? "Wait while the current transaction simulation is checked."
+          : busy
+            ? "An approval or source transaction check is already in progress."
+            : amountProblem || recipientProblem || !valid
+              ? "Enter a valid amount and destination wallet before reviewing."
+              : !wallet.address
+                ? "Connect your Stellar wallet to check its balance and review this transfer."
+                : laneError || (lane && !lane.available)
+                  ? (lane?.reason ?? "Network verification is unavailable. Refresh to try again.")
+                  : quoteError
+                    ? "The route or fee read failed. Refresh to retry before reviewing."
+                    : simulationError
+                      ? "The transaction check failed. Refresh to retry before reviewing."
+                      : insufficient || exceedsFlow
+                        ? "Reduce the amount to fit your spendable balance and the available route limit."
+                        : sourceBalance === undefined
+                          ? "Your current source balance has not been confirmed. Refresh to retry."
+                          : !trustlineOk
+                            ? "This source asset is not authorized for spending. Choose an available asset."
+                            : xlmStatus !== "ok" ||
+                                trustlineReserveUnknown ||
+                                trustlineReserveInsufficient
+                              ? "The account reserve and network fee checks must pass before reviewing."
+                              : !quote || (!quote.conversion && !simulation)
+                                ? "Wait for the current route and transaction checks to finish."
+                                : "Quote and balance checks complete. Review the exact amounts to continue. No transaction has been submitted.";
+
   return (
     <>
       {checkpoint && (
@@ -1327,7 +1857,11 @@ export function Bridge() {
           onReset={reset}
         />
       )}
-      <section className={styles.panel} aria-labelledby="bridge-heading" aria-busy={fetching}>
+      <section
+        className={styles.panel}
+        aria-labelledby="bridge-heading"
+        aria-busy={fetching || simulating || refreshing}
+      >
         <div className={styles.heading}>
           <div>
             <h2 id="bridge-heading">Bridge assets</h2>
@@ -1337,8 +1871,13 @@ export function Bridge() {
             className={styles.refresh}
             aria-label="Refresh quote and networks"
             title="Refresh quote and networks"
-            disabled={locked}
+            aria-describedby="bridge-action-help"
+            aria-busy={refreshing}
+            disabled={locked || refreshing || fetching || simulating}
             onClick={() => {
+              if (locked || refreshGate.current || fetching || simulating) return;
+              refreshGate.current = `${destination}:${route}:${refresh + 1}`;
+              setRefreshing(true);
               setRefresh((value) => value + 1);
               invalidateQuote();
             }}
@@ -1358,6 +1897,12 @@ export function Bridge() {
             <input
               id="send-amount"
               aria-label="Amount to send"
+              aria-describedby={
+                validationSummary.length
+                  ? "send-amount-help bridge-validation-summary"
+                  : "send-amount-help"
+              }
+              aria-invalid={amountProblem || !!insufficient || exceedsFlow}
               inputMode="decimal"
               autoComplete="off"
               value={amount}
@@ -1374,6 +1919,7 @@ export function Bridge() {
                 type="button"
                 className={styles.maxSpend}
                 aria-label="Use spendable balance"
+                aria-describedby="bridge-action-help"
                 disabled={
                   locked ||
                   conservativeMax === null ||
@@ -1383,6 +1929,7 @@ export function Bridge() {
                 onClick={() => {
                   if (conservativeMax !== null) {
                     setAmount(formatUnits(conservativeMax, 7));
+                    invalidateQuote();
                     setError(null);
                   }
                 }}
@@ -1394,7 +1941,7 @@ export function Bridge() {
               type="button"
               className={styles.tokenSelector}
               aria-label="Choose source token"
-              disabled={locked}
+              disabled={busy}
               onClick={() => {
                 setPicker("source");
               }}
@@ -1404,6 +1951,9 @@ export function Bridge() {
               <ChevronDown size={15} aria-hidden="true" />
             </button>
           </div>
+          <p id="send-amount-help" className={styles.balance} aria-live="polite">
+            {amountValidation.valid ? message("amountValid") : amountValidation.message}
+          </p>
           <p className={styles.balance}>
             {wallet.address
               ? sourceBalance !== undefined
@@ -1458,10 +2008,12 @@ export function Bridge() {
               <div className={styles.skeleton} aria-hidden="true" />
             ) : (
               <output aria-label="Minimum received" className={styles.receiveAmount}>
-                {quote ? (
+                {runtimeReady && quote ? (
                   formatUnits(quote.bridge.destinationAmount, destinationDecimals(route))
                 ) : (
-                  <span className={styles.emptyAmount}>0.00</span>
+                  <span className={styles.emptyAmount}>
+                    {quoteError || (valid && !runtimeReady) ? message("amountUnavailable") : "0.00"}
+                  </span>
                 )}
               </output>
             )}
@@ -1584,6 +2136,8 @@ export function Bridge() {
           <input
             id="recipient"
             aria-label={`Recipient on ${chain.name}`}
+            aria-invalid={recipientProblem}
+            aria-describedby={validationSummary.length ? "bridge-validation-summary" : undefined}
             autoComplete="off"
             spellCheck={false}
             placeholder="0x..."
@@ -1606,7 +2160,7 @@ export function Bridge() {
             </span>
             <div>
               <strong>Finding your route</strong>
-              <span>Checking liquidity, bridge fees and the receive amount</span>
+              <span>{message("routeLoading")}</span>
             </div>
             <span className={styles.fetchDots} aria-hidden="true">
               <i />
@@ -1641,26 +2195,94 @@ export function Bridge() {
               Quoted at Stellar ledger {quote.bridge.ledger}. Fees are checked again before signing.
             </p>
             <p className={styles.assetNote}>
-              Relay budgets include 10% headroom. The Axelar XLM budget is paid in full; the Circle
-              receive minimum accounts for its full USDC budget.
+              Estimates and approved budgets are separate. Axelar gas is approved in XLM, Circle
+              forwarding is approved in USDC, and any refund depends on provider behavior.
             </p>
           </details>
         ) : (
           !locked && (
             <p className={styles.quotePrompt}>
-              {lane?.available
-                ? "Enter an amount and destination wallet to find your route."
-                : (lane?.reason ??
-                  (laneError
-                    ? "Network verification is unavailable. Refresh to try again."
-                    : "Checking bridge availability..."))}
+              {!runtimeReady && valid
+                ? message(
+                    runtime.capabilities.routes[route === 0 ? "cctp" : "relay"] === "missing"
+                      ? "staticFeeUnavailable"
+                      : "runtimeUnknown",
+                  )
+                : lane?.available
+                  ? "Enter an amount and destination wallet to find your route."
+                  : (lane?.reason ??
+                    (laneError
+                      ? "Network verification is unavailable. Refresh to try again."
+                      : "Checking bridge availability..."))}
             </p>
           )
         )}
-        {(error ?? wallet.error ?? quoteError ?? laneError ?? (touched && inputError)) && (
+        {validationSummary.length > 0 && (
+          <nav
+            id="bridge-validation-summary"
+            aria-label="Transfer review checks"
+            className={styles.validationSummary}
+          >
+            <strong>Review before continuing</strong>
+            <ul>
+              {validationSummary.map((item) => (
+                <li key={`${item.id}-${item.label}`}>
+                  <a
+                    href={`#${item.id}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      const target = document.getElementById(item.id);
+                      target?.focus();
+                      target?.scrollIntoView({ block: "center" });
+                    }}
+                  >
+                    Review {item.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        )}
+        {checkpointStorageError && (
           <p role="alert" className={styles.error}>
-            {error ?? wallet.error ?? quoteError ?? laneError ?? inputError}
+            {checkpointStorageError}
           </p>
+        )}
+        {!error && !wallet.error && !wallet.networkMismatch && quoteError && quoteDiagnostic ? (
+          <div role="alert" className={styles.limitDiagnostic}>
+            <strong>{quoteDiagnostic.limitLabel}</strong>
+            <span>{quoteDiagnostic.summary}</span>
+            <span>{quoteDiagnostic.nextStep}</span>
+          </div>
+        ) : (
+          (error ??
+            wallet.error ??
+            wallet.networkMismatch ??
+            quoteError ??
+            laneError ??
+            (touched && inputError)) && (
+            <p role="alert" className={styles.error}>
+              {error ??
+                wallet.error ??
+                wallet.networkMismatch ??
+                quoteError ??
+                laneError ??
+                inputError}
+            </p>
+          )
+        )}
+        {quoteError && feeCooldown?.key === quoteKey && (
+          <button
+            type="button"
+            className={styles.secondary}
+            disabled={locked || retryFeeSeconds > 0}
+            onClick={() => {
+              setFeeCooldown(null);
+              setQuoteVersion((version) => version + 1);
+            }}
+          >
+            {retryFeeSeconds > 0 ? `Retry quote in ${retryFeeSeconds} seconds` : "Retry fee quote"}
+          </button>
         )}
         {insufficient && (
           <p role="alert" className={styles.error}>
@@ -1673,6 +2295,22 @@ export function Bridge() {
           <p role="alert" className={styles.error}>
             {`This amount exceeds the available route limit. Maximum bridgeable: ${formatUnits(conservativeMax, 7)} USDC.`}
           </p>
+        )}
+        {quoteDiff && (
+          <section className={styles.quoteDiff} aria-label="Refreshed quote comparison">
+            <QuoteDiffDetails diff={quoteDiff} />
+            <button
+              type="button"
+              className={styles.secondary}
+              disabled={busy}
+              onClick={() => {
+                setQuoteDiff(null);
+                invalidateQuote();
+              }}
+            >
+              Refresh quote for review
+            </button>
+          </section>
         )}
         {xlmStatus === "insufficient" && (
           <p role="alert" className={styles.error}>
@@ -1704,23 +2342,16 @@ export function Bridge() {
         {result?.failure && (
           <p role="status" className={styles.assetNote}>
             {result.failure.stage === "broadcast"
-              ? "The source broadcast outcome is unknown."
-              : "Source confirmation is temporarily unavailable."}{" "}
-            Check the saved source hash before approving another transaction.
+              ? message("sourceBroadcastUnknown")
+              : message("sourceConfirmationUnavailable")}{" "}
+            {message("sourceCheckBeforeApproval")}
           </p>
         )}
         {busy && (
           <p role="status" className={styles.progress}>
             <LoaderCircle className={styles.spinner} size={16} aria-hidden="true" />
-            {step === "conversion" ? "Converting to USDC" : "Preparing your bridge"}:{" "}
-            {phase === "signing"
-              ? "confirm in your wallet"
-              : phase === "submitting"
-                ? "submitting the signed transaction"
-                : phase === "pending"
-                  ? "waiting for Stellar confirmation"
-                  : "checking the current quote"}
-            .
+            {message(step === "conversion" ? "stepConversion" : "stepBridge")}:{" "}
+            {phaseMessage(phase, translations)}.
           </p>
         )}
         {busy && phase === "pending" && (
@@ -1729,7 +2360,7 @@ export function Bridge() {
             className={styles.secondary}
             onClick={() => waitController.current?.abort()}
           >
-            Stop waiting
+            {message("stopWaiting")}
           </button>
         )}
         <button
@@ -1763,9 +2394,13 @@ export function Bridge() {
         ) : (
           !checkpoint && (
             <button
+              ref={reviewAction}
+              aria-describedby="bridge-action-help"
+              aria-busy={fetching || simulating}
               type="button"
               className={styles.primary}
               disabled={
+                !runtimeReady ||
                 !quote ||
                 (!quote.conversion && !simulation) ||
                 busy ||
@@ -1775,10 +2410,29 @@ export function Bridge() {
                 activeSource.trustline === "frozen" ||
                 activeSource.trustline === "unauthorized" ||
                 trustlineReserveUnknown ||
-                trustlineReserveInsufficient
+                trustlineReserveInsufficient ||
+                !wallet.isReady
               }
               onClick={() => {
-                if (!wallet.address || !quote || (!quote.conversion && !simulation)) return;
+                if (
+                  !runtimeReady ||
+                  !wallet.address ||
+                  !quote ||
+                  (!quote.conversion && !simulation) ||
+                  !wallet.isReady
+                )
+                  return;
+                const intent = makeReviewedIntent(
+                  wallet.address,
+                  quote.source,
+                  recipient,
+                  quote.bridge,
+                  quote.sourceAmount,
+                  quote.conversion?.sourceMax ?? null,
+                  quote.conversion ? "conversion" : "bridge",
+                  destination,
+                  route,
+                );
                 setReviewApproval({
                   account: wallet.address,
                   network: TESTNET.networkPassphrase,
@@ -1787,23 +2441,30 @@ export function Bridge() {
                 setReviewed({
                   key: quoteKey,
                   quote,
+                  intent,
                   simulation,
                   addTrustline: needsTrustline,
                 });
+                setQuoteDiff(null);
                 setReviewing(true);
               }}
             >
               {fetching
                 ? "Finding your route..."
-                : simulating
-                  ? "Estimating bridge fees..."
-                  : simulationError
-                    ? "Refresh to retry simulation"
-                    : "Review transfer"}
+                : wallet.networkMismatch
+                  ? "Switch to Stellar Testnet"
+                  : simulating
+                    ? "Estimating bridge fees..."
+                    : simulationError
+                      ? "Refresh to retry simulation"
+                      : message("reviewTransfer")}
               <ArrowRight size={18} aria-hidden="true" />
             </button>
           )
         )}
+        <p id="bridge-action-help" tabIndex={-1} role="status" className={styles.reviewNote}>
+          {actionHelp}
+        </p>
         <p className={styles.feeNote}>
           <ShieldCheck size={13} aria-hidden="true" />
           You stay in control. Your wallet signs every transaction.
@@ -1835,10 +2496,17 @@ export function Bridge() {
         <SourceAssetPicker
           selected={source}
           balances={balances}
+          pendingRecovery={checkpoint?.source ?? null}
           onSelect={(asset) => {
+            // Editing the form never removes a signed operation or its original intent.
+            // The pending card keeps its own account, amount and explicit bridge review.
             setSource(asset);
             invalidateQuote();
-            setError(null);
+            setError(
+              checkpoint?.stage === "conversion" && !checkpointForAsset(checkpoint, asset)
+                ? "Your saved conversion belongs to the previous source asset. Check its status and review its bridge separately before starting another transfer."
+                : null,
+            );
           }}
           onClose={() => {
             setPicker(null);
@@ -1866,20 +2534,67 @@ export function Bridge() {
             setReviewing(false);
             setReviewed(null);
           }}
+          footer={
+            <>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={busy}
+                onClick={() => {
+                  setReviewing(false);
+                  setReviewed(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={
+                  busy ||
+                  laneRefreshing ||
+                  !lane?.available ||
+                  reviewedReserveInsufficient ||
+                  (!!reviewed.quote.conversion && !reserve) ||
+                  (!reviewed.quote.conversion &&
+                    (simulating || !!simulationError || !simulation)) ||
+                  !wallet.isReady
+                }
+                onClick={() => {
+                  void submit();
+                }}
+              >
+                {message(
+                  simulating
+                    ? "simulationEstimating"
+                    : simulationError
+                      ? "approvalBlocked"
+                      : "confirmInWallet",
+                )}{" "}
+                <ArrowUpRight size={17} aria-hidden="true" />
+              </button>
+            </>
+          }
         >
           <div className={styles.reviewTotal}>
-            <span>You send {reviewed.quote.conversion ? "up to" : ""}</span>
+            <span>{message(reviewed.quote.conversion ? "reviewSendMaximum" : "reviewSend")}</span>
             <strong>
-              {formatUnits(reviewed.quote.sourceAmount, 7)} {reviewed.quote.source.code}
+              {amountLabel(
+                reviewed.quote.sourceAmount,
+                7,
+                reviewed.quote.source.code,
+                translations,
+              )}
             </strong>
             <ArrowDown size={20} aria-hidden="true" />
-            <span>You receive at least</span>
+            <span>{message("reviewReceive")}</span>
             <strong>
-              {formatUnits(
+              {amountLabel(
                 reviewed.quote.bridge.destinationAmount,
                 destinationDecimals(reviewed.quote.bridge.route),
-              )}{" "}
-              {receiveSymbol(reviewed.quote.bridge.route)}
+                receiveSymbol(reviewed.quote.bridge.route),
+                translations,
+              )}
             </strong>
           </div>
           <p className={styles.reviewNote}>
@@ -1922,6 +2637,11 @@ export function Bridge() {
             </p>
           )}
           <QuoteDetails quote={reviewed.quote.bridge} simulation={reviewed.simulation} />
+          {quoteDiff && (
+            <section className={styles.quoteDiff} aria-label="Refreshed quote comparison">
+              <QuoteDiffDetails diff={quoteDiff} />
+            </section>
+          )}
           {reviewed.quote.conversion && (
             <p className={styles.reviewNote}>
               Two signatures: convert to USDC, then review the bridge simulation and its fees. Price
@@ -1951,26 +2671,6 @@ export function Bridge() {
               Simulation failed: {simulationError}. Approval blocked.
             </p>
           )}
-          <button
-            type="button"
-            className={styles.primary}
-            disabled={
-              busy ||
-              reviewedReserveInsufficient ||
-              (!!reviewed.quote.conversion && !reserve) ||
-              (!reviewed.quote.conversion && (simulating || !!simulationError || !simulation))
-            }
-            onClick={() => {
-              void submit();
-            }}
-          >
-            {simulating
-              ? "Estimating simulation..."
-              : simulationError
-                ? "Approval blocked"
-                : "Confirm in wallet"}{" "}
-            <ArrowUpRight size={17} aria-hidden="true" />
-          </button>
         </ReviewDialog>
       )}
     </>
@@ -1978,6 +2678,8 @@ export function Bridge() {
 }
 
 export function ClaimRecovery() {
+  const message = useMessages();
+  const translations = useTranslations();
   const wallet = useStellarWallet();
   const currentAccount = useRef(wallet.address);
   useLayoutEffect(() => {
@@ -1989,6 +2691,113 @@ export function ClaimRecovery() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<TransactionResult | null>(null);
+  const [claimPhase, setClaimPhase] = useState<TransactionPhase | null>(null);
+  const { checkpoint, blocked: claimStorageError } = useClaimSettlementCheckpoint();
+  const [recovery, setRecovery] = useState<CheckpointRecoveryResult | null>(null);
+  const settlementController = useRef<AbortController | null>(null);
+  const generation = useRef(0);
+  const mounted = useRef(true);
+  const statusAction = useRef<HTMLButtonElement>(null);
+  const resultAction = useRef<HTMLAnchorElement>(null);
+  const settlementFocusPending = useRef(false);
+  useEffect(() => {
+    if (busy || !settlementFocusPending.current) return;
+    settlementFocusPending.current = false;
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        active !== document.body &&
+        active.isConnected &&
+        !active.matches(":disabled")
+      )
+        return;
+      if (statusAction.current && !statusAction.current.disabled) statusAction.current.focus();
+      else resultAction.current?.focus();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [busy, checkpoint, result]);
+  useEffect(() => {
+    mounted.current = true;
+    const activeGeneration = generation;
+    return () => {
+      mounted.current = false;
+      activeGeneration.current++;
+      settlementController.current?.abort();
+    };
+  }, []);
+  const saveSignedClaims = (account: string, reviewed: readonly PendingClaim[], hash: string) => {
+    const first = reviewed[0];
+    if (!first) throw new Error("No reviewed claim identity is available.");
+    saveClaimSettlementCheckpoint({
+      router: TESTNET.router,
+      account,
+      chain: "stellar-testnet",
+      deploymentHash: first.deployment.wasmHash,
+      claimId: reviewed.map((claim) => claim.id).join(","),
+      recipient: first.recipient,
+      token: first.token,
+      amount: reviewed.reduce((sum, claim) => sum + claim.amount, 0n).toString(),
+      claims: reviewed.map((claim) => ({
+        claimId: claim.id.toString(),
+        recipient: claim.recipient,
+        token: claim.token,
+        amount: claim.amount.toString(),
+      })),
+      txHash: hash,
+    });
+  };
+  const checkSettlement = async (saved: ClaimSettlementCheckpoint, signal?: AbortSignal) => {
+    const active = () => !signal?.aborted && mounted.current;
+    const outcome = await resolveClaimSettlementCheckpoint(saved, signal);
+    if (!active()) return outcome;
+    setRecovery(outcome);
+    if (outcome.status !== "unknown") {
+      const refreshed = await getClaims(
+        claimSettlementIdentities(saved).map((claim) => BigInt(claim.claimId)),
+      );
+      if (!active()) return outcome;
+      const identities = claimSettlementIdentities(saved);
+      if (
+        refreshed.some((claim, index) => {
+          const identity = identities[index];
+          if (!identity) return true;
+          return (
+            claim.id.toString() !== identity.claimId ||
+            claim.recipient !== identity.recipient ||
+            claim.token !== identity.token ||
+            claim.amount.toString() !== identity.amount ||
+            (outcome.status === "confirmed" && !claim.settled)
+          );
+        })
+      )
+        throw new Error(
+          "Claim evidence changed during reconciliation. The saved hash remains unresolved.",
+        );
+      saveClaimSettlementCheckpoint(null, saved);
+      setClaims(refreshed);
+      setResult({ txHash: saved.txHash, status: outcome.status });
+    }
+    return outcome;
+  };
+  const reconcileSettlement = async () => {
+    if (!checkpoint || busy || claimStorageError) return;
+    const saved = checkpoint;
+    const controller = new AbortController();
+    settlementController.current?.abort();
+    settlementController.current = controller;
+    setBusy(true);
+    setError(null);
+    try {
+      await checkSettlement(saved, controller.signal);
+    } catch (cause) {
+      if (!controller.signal.aborted && mounted.current) setError(errorMessage(cause));
+    } finally {
+      if (!controller.signal.aborted && mounted.current) setBusy(false);
+    }
+  };
   const claimApproval: WalletApprovalProvenance | null = wallet.address
     ? {
         account: wallet.address,
@@ -2035,54 +2844,100 @@ export function ClaimRecovery() {
       setBusy(false);
     }
   };
-  const settleOne = async (claim: PendingClaim) => {
-    if (!wallet.address || busy) return;
+  const settleReviewed = async (reviewed: readonly PendingClaim[]) => {
+    if (!wallet.address || busy || checkpoint || claimStorageError || !reviewed.length) return;
+    const account = wallet.address;
+    const controller = new AbortController();
+    settlementController.current?.abort();
+    settlementController.current = controller;
+    const scope = ++generation.current;
+    const active = () =>
+      mounted.current && scope === generation.current && !controller.signal.aborted;
+    settlementFocusPending.current = true;
+    let lease: Awaited<ReturnType<typeof acquireClaimSettlementLease>> | undefined;
     setBusy(true);
     setError(null);
+    setRecovery(null);
+    setClaimPhase("preparing");
     try {
-      const transaction = await submitSettleClaim(
-        wallet.address,
-        claim.id,
-        (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "claim" }),
-        claimApproval ?? undefined,
-        { expectedAccount: wallet.address, getCurrentAccount: () => currentAccount.current },
+      lease = await acquireClaimSettlementLease();
+      assertCheckpointStorage();
+      if (controller.signal.aborted || !mounted.current) return;
+      const refreshed = await getClaims(reviewed.map((claim) => claim.id));
+      setClaims(refreshed);
+      if (
+        refreshed.some((claim, index) => {
+          const previous = reviewed[index];
+          return (
+            !previous ||
+            claim.settled ||
+            claim.recipient !== previous.recipient ||
+            claim.token !== previous.token ||
+            claim.amount !== previous.amount ||
+            claim.deployment.wasmHash !== previous.deployment.wasmHash
+          );
+        })
+      )
+        throw new Error("The claims changed. Review the refreshed claims before signing.");
+      const reconciliation: SubmissionReconciliation = {
+        expectedAccount: account,
+        getCurrentAccount: () => currentAccount.current,
+        isSuperseded: () =>
+          !mounted.current || scope !== generation.current || controller.signal.aborted,
+        onSigned: (hash) => {
+          saveSignedClaims(account, refreshed, hash);
+        },
+        onAccountSwitch: (hash) => {
+          saveSignedClaims(account, refreshed, hash);
+        },
+      };
+      const progress = (phase: TransactionPhase) => {
+        if (mounted.current && scope === generation.current) setClaimPhase(phase);
+      };
+      const sign = (xdr: string, opts: Parameters<typeof wallet.signTransaction>[1]) =>
+        wallet.signTransaction(xdr, { ...opts, operation: "claim" });
+      const first = refreshed[0];
+      if (!first) throw new Error("No current claim identity is available.");
+      const transaction =
+        refreshed.length === 1
+          ? await submitSettleClaim(
+              account,
+              first.id,
+              sign,
+              claimApproval ?? undefined,
+              reconciliation,
+              controller.signal,
+              first,
+              progress,
+            )
+          : await submitSettleClaims(
+              account,
+              refreshed,
+              sign,
+              claimApproval ?? undefined,
+              reconciliation,
+              controller.signal,
+              progress,
+            );
+      if (!active()) return;
+      setResult(
+        transaction.status === "confirmed" ? { ...transaction, status: "pending" } : transaction,
       );
-      setResult(transaction);
-      if (transaction.status === "confirmed") setClaims(await getClaims([claim.id]));
+      const saved = getClaimSettlementCheckpoint();
+      if (transaction.status === "confirmed" && saved)
+        await checkSettlement(saved, controller.signal);
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (mounted.current && scope === generation.current) setError(errorMessage(cause));
     } finally {
-      setBusy(false);
-    }
-  };
-  const settle = async () => {
-    if (claims.length < 2 || !wallet.address || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const transaction = await submitSettleClaims(
-        wallet.address,
-        claims,
-        wallet.signTransaction,
-        claimApproval ?? undefined,
-        { expectedAccount: wallet.address, getCurrentAccount: () => currentAccount.current },
-      );
-      setResult(transaction);
-      if (transaction.status === "confirmed")
-        setClaims(await getClaims(claims.map((claim) => claim.id)));
-    } catch (cause) {
-      try {
-        setClaims(await getClaims(claims.map((claim) => claim.id)));
-      } catch {
-        // Keep the original contract error when the follow-up read is unavailable.
+      lease?.release();
+      if (mounted.current && scope === generation.current) {
+        setBusy(false);
+        setClaimPhase(null);
       }
-      setError(
-        `Batch settlement was rejected by the router: ${errorMessage(cause)} Review each claim before trying again.`,
-      );
-    } finally {
-      setBusy(false);
     }
   };
+  const settleOne = (claim: PendingClaim) => settleReviewed([claim]);
+  const settle = () => settleReviewed(claims);
   return (
     <section
       id="claim-recovery"
@@ -2102,6 +2957,50 @@ export function ClaimRecovery() {
             Review parked claims from the indexer or enter claim numbers. Every recipient and amount
             below is re-read from the deployed Stellar router before signing.
           </p>
+          {claimStorageError && (
+            <p role="alert" className={styles.error}>
+              {claimStorageError}
+            </p>
+          )}
+          {checkpoint && (
+            <div className={styles.claimCheckpoint}>
+              <p role="status" className={styles.reviewNote}>
+                Settlement is unresolved. Check its outcome before requesting another signature.
+              </p>
+              <p className={styles.address}>Signed source hash: {checkpoint.txHash}</p>
+              {claimSettlementIdentities(checkpoint).map((claim) => (
+                <p className={styles.address} key={claim.claimId}>
+                  Claim {claim.claimId}: {claim.amount} base units of {claim.token}, recipient{" "}
+                  {claim.recipient}
+                </p>
+              ))}
+              <button
+                ref={statusAction}
+                type="button"
+                disabled={busy || !!claimStorageError}
+                onClick={() => void reconcileSettlement()}
+              >
+                {message(busy ? "settlementChecking" : "settlementCheck")}
+              </button>
+              <a
+                href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Inspect the saved source transaction
+              </a>
+            </div>
+          )}
+          {recovery && (
+            <p role="status" aria-live="polite" className={styles.reviewNote}>
+              {recovery.message}
+            </p>
+          )}
+          {claimPhase && (
+            <p role="status" aria-live="polite" className={styles.reviewNote}>
+              {settlementPhaseMessage(claimPhase, translations)}
+            </p>
+          )}
           <button type="button" disabled={busy} onClick={() => void loadOpenClaims()}>
             {busy ? "Checking..." : "Load parked claims"}
           </button>
@@ -2137,7 +3036,8 @@ export function ClaimRecovery() {
                 {claims.map((claim) => (
                   <li key={claim.id.toString()}>
                     <p className={styles.address}>
-                      Claim {claim.id.toString()} recipient: {claim.recipient}
+                      Claim {claim.id.toString()} recipient:{" "}
+                      <CopyableAddress value={claim.recipient} label="claim recipient" />
                     </p>
                     <p>
                       Amount:{" "}
@@ -2147,18 +3047,30 @@ export function ClaimRecovery() {
                     </p>
                     <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
                     <p className={styles.address}>
-                      Verified router: {claim.deployment.router} (revision {claim.deployment.commit}
-                      , deployed at ledger {claim.deployment.deployedLedger})
+                      Verified router:{" "}
+                      <CopyableAddress value={claim.deployment.router} label="verified router" />{" "}
+                      (revision {claim.deployment.commit}, deployed at ledger{" "}
+                      {claim.deployment.deployedLedger})
                     </p>
-                    <p className={styles.address}>Router WASM: {claim.deployment.wasmHash}</p>
+                    <p className={styles.address}>
+                      Router WASM:{" "}
+                      <CopyableAddress value={claim.deployment.wasmHash} label="router WASM hash" />
+                    </p>
                     {(claims.length === 1 || batchSupported === false) &&
                       !claim.settled &&
+                      claim.eligibility.status !== "unknown" &&
                       claimApproval && (
                         <>
                           <ApprovalDetails approval={claimApproval} />
                           <button
                             type="button"
-                            disabled={!wallet.address || busy || result?.status === "pending"}
+                            disabled={
+                              !wallet.address ||
+                              busy ||
+                              result?.status === "pending" ||
+                              checkpoint !== null ||
+                              !!claimStorageError
+                            }
                             onClick={() => void settleOne(claim)}
                           >
                             Sign claim settlement
@@ -2178,7 +3090,13 @@ export function ClaimRecovery() {
                   <ApprovalDetails approval={claimApproval} />
                   <button
                     type="button"
-                    disabled={!wallet.address || busy || result?.status === "pending"}
+                    disabled={
+                      !wallet.address ||
+                      busy ||
+                      result?.status === "pending" ||
+                      checkpoint !== null ||
+                      !!claimStorageError
+                    }
                     onClick={() => void settle()}
                   >
                     Sign batch settlement
@@ -2191,7 +3109,7 @@ export function ClaimRecovery() {
             </>
           )}
           {result && (
-            <Link href={`/transfers/${result.txHash}`}>
+            <Link ref={resultAction} href={`/transfers/${result.txHash}`}>
               {result.status === "confirmed"
                 ? "Settlement confirmed"
                 : result.status === "failed"

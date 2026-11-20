@@ -104,6 +104,76 @@ export const STELLAR_DEPLOYMENT = {
   commit: stellar.commit,
   deployedLedger: stellar.deployedAt.ledger,
 } as const;
+
+export interface PublicConfigurationAdmission {
+  readonly available: boolean;
+  readonly reasons: readonly string[];
+}
+
+/**
+ * Validate public deployment inputs before enabling money-like interactions.
+ * The result contains labels only; it never echoes environment values or secrets.
+ */
+export interface PublicConfigurationInputs {
+  networkPassphrase: string;
+  router: string;
+  token: string;
+  rpcUrl: string;
+  horizonUrl: string;
+  apiUrl?: string;
+  indexerUrl?: string;
+}
+
+function cleanPublicUrl(value: string, localHttp = false): boolean {
+  try {
+    const url = new URL(value);
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    return (
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      (url.protocol === "https:" || (localHttp && local && url.protocol === "http:"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function validatePublicConfiguration(
+  inputs: PublicConfigurationInputs,
+): PublicConfigurationAdmission {
+  const reasons: string[] = [];
+  if (
+    inputs.networkPassphrase !== "Test SDF Network ; September 2015" ||
+    STELLAR_DEPLOYMENT.networkPassphrase !== "Test SDF Network ; September 2015"
+  )
+    reasons.push("The configured Stellar network is not the supported testnet.");
+  if (inputs.router !== STELLAR_DEPLOYMENT.router || !StrKey.isValidContract(inputs.router))
+    reasons.push("The configured router does not match the published testnet deployment.");
+  if (inputs.token !== stellar.tokens.USDC.sacId || !StrKey.isValidContract(inputs.token))
+    reasons.push("The configured token does not match the published testnet token.");
+  if (!cleanPublicUrl(inputs.rpcUrl))
+    reasons.push("The configured RPC endpoint needs a valid HTTPS URL without credentials.");
+  if (!cleanPublicUrl(inputs.horizonUrl))
+    reasons.push("The configured Horizon endpoint needs a valid HTTPS URL without credentials.");
+  for (const origin of [inputs.apiUrl, inputs.indexerUrl])
+    if (origin?.trim() && !cleanPublicUrl(origin.trim(), true)) {
+      reasons.push(
+        "The configured activity API origin is invalid. Use HTTPS or a local development origin without credentials.",
+      );
+      break;
+    }
+  return { available: reasons.length === 0, reasons };
+}
+
+export function publicConfigurationAdmission(): PublicConfigurationAdmission {
+  return validatePublicConfiguration({
+    ...TESTNET,
+    apiUrl: process.env.NEXT_PUBLIC_HYPERION_API_URL ?? "",
+    indexerUrl: process.env.NEXT_PUBLIC_HYPERION_INDEXER_URL ?? "",
+  });
+}
 export function deploymentIdentityMismatch(router: string, token: string): string | null {
   if (router !== STELLAR_DEPLOYMENT.router)
     return "The configured Stellar router does not match the verified testnet deployment.";
@@ -245,12 +315,24 @@ export function cachedPublicAssetMetadata(query: string, now = Date.now()): Publ
 }
 export type BridgeRoute = 0 | 1;
 const cctpDestinations = new Set(
-  stellar.activation.cctp.status === "active" && stellar.activation.cctp.acceptance === "delivered"
-    ? stellar.activation.cctp.destinations
+  stellar.activation.cctp.status === "active" &&
+    stellar.activation.cctp.acceptance === "delivered" &&
+    !!stellar.activation.cctp.verifiedAt
+    ? stellar.activation.cctp.transfers
+        .filter(
+          (transfer) =>
+            stellar.activation.cctp.destinations.includes(transfer.destination) &&
+            /^[0-9a-f]{64}$/i.test(transfer.sourceHash) &&
+            /^0x[0-9a-f]{64}$/i.test(transfer.destinationHash),
+        )
+        .map((transfer) => transfer.destination)
     : [],
 );
 const itsDestinations = new Set(
-  stellar.activation.status === "active" && stellar.activation.acceptance === "delivered"
+  stellar.activation.status === "active" &&
+    stellar.activation.acceptance === "delivered" &&
+    /^[0-9a-f]{64}$/i.test(stellar.activation.sourceHash) &&
+    /^0x[0-9a-f]{64}$/i.test(stellar.activation.destinationHash)
     ? [stellar.peerChain]
     : [],
 );
@@ -289,4 +371,21 @@ export function destinationFor(key: string) {
   const destination = DESTINATIONS.find((chain) => chain.key === key);
   if (!destination) throw new Error("Choose a supported destination testnet.");
   return destination;
+}
+export interface SupportedLane {
+  route: BridgeRoute;
+  provider: string;
+}
+const LANE_PROVIDERS: Record<BridgeRoute, string> = {
+  0: "Circle CCTP",
+  1: "Axelar ITS",
+};
+/**
+ * Every rail this testnet deployment actually carries to a destination, independent of live
+ * liquidity or pause state. Read straight off `destination.routes`, the same activation-derived
+ * list `readLane` checks before ever asking the chain, so this can never drift from it or invent
+ * a lane that isn't actually wired for this deployment.
+ */
+export function supportedLanes(key: DestinationKey): readonly SupportedLane[] {
+  return destinationFor(key).routes.map((route) => ({ route, provider: LANE_PROVIDERS[route] }));
 }
