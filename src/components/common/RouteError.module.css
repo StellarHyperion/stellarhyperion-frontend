@@ -1,0 +1,39 @@
+.recovery {
+  display: grid;
+  gap: 24px;
+}
+.context {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+.context div {
+  min-width: 0;
+}
+.context dt {
+  color: var(--text-secondary);
+}
+.context dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.actions button,
+.actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--tap-target);
+  padding: 12px 20px;
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 12px;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+}
+.actions button {
+  cursor: pointer;
+}

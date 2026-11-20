@@ -42,6 +42,7 @@ import {
 } from "./claim-checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
+import { CapabilityCache } from "../lib/capability-cache";
 import { validateProviderFee } from "../lib/fee-schema";
 import { cctpPayoutBreakdown } from "../lib/relay-budget";
 
@@ -517,23 +518,27 @@ async function readWithRetry<T>(read: () => Promise<T>): Promise<T> {
     return read();
   }
 }
-const capabilityCache = new Map<
-  string,
-  { expires: number; promise: ReturnType<rpc.Server["getContractMethods"]> }
->();
+const capabilityCache = new CapabilityCache<Awaited<ReturnType<rpc.Server["getContractMethods"]>>>(
+  60_000,
+  Date.now,
+  64,
+  (methods) => methods.length > 0 && methods.every((method) => !!method.name),
+);
+export function invalidateCapabilityDiscovery(): void {
+  capabilityCache.invalidate();
+}
 function contractMethods(contract: string) {
-  const key = `${TESTNET.rpcUrl}:${contract}`;
-  const cached = capabilityCache.get(key);
-  if (cached && cached.expires > Date.now()) return cached.promise;
   // Capability discovery downloads WASM. Keep it separate from fresh state and pricing reads.
-  const promise = readWithRetry(() => server().getContractMethods(contract)).catch(
-    (error: unknown) => {
-      capabilityCache.delete(key);
-      throw error;
+  return capabilityCache.get(
+    {
+      network: `${TESTNET.rpcUrl}:${STELLAR_DEPLOYMENT.networkPassphrase}`,
+      router: STELLAR_DEPLOYMENT.router,
+      adapter: contract,
+      resource: "contract-methods",
+      revision: `${STELLAR_DEPLOYMENT.commit}:${STELLAR_DEPLOYMENT.wasmHash}`,
     },
+    () => readWithRetry(() => server().getContractMethods(contract)),
   );
-  capabilityCache.set(key, { expires: Date.now() + 60000, promise });
-  return promise;
 }
 
 export function errorMessage(error: unknown): string {
