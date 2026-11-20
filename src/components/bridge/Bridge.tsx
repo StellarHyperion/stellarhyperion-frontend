@@ -298,6 +298,18 @@ function QuoteDetails({
         <dt>{message("requestedSourceLabel")}</dt>
         <dd>{amountLabel(breakdown.requestedSourceAmount, 7, "USDC", translations)}</dd>
       </div>
+      {quote.observedAt && quote.validUntil && (
+        <div>
+          <dt>Estimate validity</dt>
+          <dd>
+            {quote.provider ?? (quote.route === 0 ? "Circle CCTP" : "Axelar ITS")} observed at{" "}
+            {new Date(quote.observedAt).toLocaleTimeString()}; expires at{" "}
+            {new Date(quote.validUntil).toLocaleTimeString()}. Fees in{" "}
+            {quote.route === 0 ? "USDC" : "XLM"}. A five-second clock allowance shortens this review
+            window.
+          </dd>
+        </div>
+      )}
       <div>
         <dt>{message("sourceDebitLabel")}</dt>
         <dd>{amountLabel(breakdown.actualSourceDebit, 7, "USDC", translations)}</dd>

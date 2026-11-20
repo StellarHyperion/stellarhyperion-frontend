@@ -1,0 +1,3 @@
+ITS: actual production fee provenance names provider/currency and conservative deadline; stale or unsupported-clock response blocks review and preserves inputs with zero signing/sends PASS.
+CCTP: actual production fee provenance names provider/currency and conservative deadline; stale or unsupported-clock response blocks review and preserves inputs with zero signing/sends PASS.
+Actual production transfer detail/EvidenceTimeline/proof drawer: lazy numeric-id lookup, keyboard expansion, read failure/manual retry, candidate stays unverified, exact verified payment and five checks, full selectable public hashes, no provider/query credentials, desktop/mobile overflow PASS. Actual backend-shaped records and transport errors are mocked; no external signing/broadcast/payment.

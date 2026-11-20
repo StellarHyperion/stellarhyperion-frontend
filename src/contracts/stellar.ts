@@ -42,6 +42,11 @@ import {
 } from "./claim-checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
 import { compareQuotes, type QuoteDiff } from "../lib/quote-diff";
+import {
+  isFreshFeeObservation,
+  validateFeeObservation,
+  type FeeObservation,
+} from "../lib/relay-budget";
 
 export type { QuoteDiff } from "../lib/quote-diff";
 import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
@@ -143,13 +148,17 @@ export interface LiveQuote {
   };
   resourceFee?: bigint;
   networkFee?: bigint;
+  validUntil?: string;
+  provider?: string;
+  readonly feeObservation?: FeeObservation;
 }
 export type QuoteFreshness = "current" | "stale" | "unknown";
 const QUOTE_MAX_AGE_MS = 30_000;
 export function quoteFreshness(
-  quote: Pick<LiveQuote, "observedAt">,
+  quote: Pick<LiveQuote, "observedAt" | "feeObservation">,
   now = Date.now(),
 ): QuoteFreshness {
+  if (quote.feeObservation && !isFreshFeeObservation(quote.feeObservation, now)) return "stale";
   const observed = Date.parse(quote.observedAt ?? "");
   if (!Number.isFinite(observed) || observed > now) return "unknown";
   return now - observed <= QUOTE_MAX_AGE_MS ? "current" : "stale";
@@ -937,8 +946,13 @@ export async function quoteTransfer(
     destination: providerDestination,
   });
   const providerAt = new Date().toISOString();
-  const relayGas = integer(object(fee).amount);
-  const estimatedRelayGas = integer(object(fee).estimatedAmount ?? relayGas);
+  const observation = validateFeeObservation(fee, {
+    token: route === 0 ? "USDC" : "XLM",
+    destination: providerDestination,
+    route,
+  });
+  const relayGas = integer(fee.amount);
+  const estimatedRelayGas = integer(fee.estimatedAmount);
   if (estimatedRelayGas <= 0n || estimatedRelayGas > relayGas)
     throw new Error("Invalid live fee estimate.");
   if (relayGas <= 0n || relayGas > I128_MAX) throw new Error("Invalid relay gas estimate.");
@@ -966,6 +980,9 @@ export async function quoteTransfer(
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
     observedAt: providerAt,
+    validUntil: observation.clientValidUntil,
+    feeObservation: observation,
+    ...(typeof fee.provider === "string" ? { provider: fee.provider } : {}),
     observations: { contractAt, providerAt },
     scope: {
       destination: destinationKey,

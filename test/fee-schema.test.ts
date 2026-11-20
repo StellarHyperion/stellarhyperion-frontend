@@ -84,6 +84,10 @@ describe("live provider endpoint schema boundaries", () => {
       decimals: 7,
       destination: "base-sepolia",
       finality: 2000,
+      provider: "Circle CCTP",
+      lane: { source: "stellar-testnet", destination: "base-sepolia", route: 0 },
+      observedAt: expect.any(String) as string,
+      validUntil: expect.any(String) as string,
     });
   });
   it("requires finalized Circle metadata and rejects incompatible forwarding shapes", async () => {

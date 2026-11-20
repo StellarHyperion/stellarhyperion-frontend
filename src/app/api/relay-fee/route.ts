@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { feeRouteCapabilityResponse } from "../../../lib/runtime-capabilities";
-import { relayBudget } from "../../../lib/relay-budget";
+import { feeObservation, relayBudget } from "../../../lib/relay-budget";
 import {
   feeRequestGuard,
   readFeeResponse,
@@ -85,6 +85,9 @@ export async function GET(request: Request) {
         token: "XLM",
         decimals: 7,
         destination: "ethereum-sepolia",
+        provider: "Axelar ITS",
+        ...feeObservation(),
+        lane: { source: "stellar-testnet", destination: "ethereum-sepolia", route: 1 },
       },
       { token: "XLM", destination: "ethereum-sepolia" },
     );
