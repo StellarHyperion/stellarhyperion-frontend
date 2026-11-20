@@ -14,6 +14,7 @@ import {
 } from "../../lib/format";
 import { getEvidenceAwareStage, hasVerifiedDestinationEvidence } from "../../lib/evidence";
 import { EvidenceTimeline } from "./EvidenceTimeline";
+import { CopyableAddress } from "../bridge/AssetPicker";
 import styles from "./TransferList.module.css";
 
 interface TransferListProps {
@@ -146,6 +147,27 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
               </span>
             </div>
           </div>
+
+          <details className={styles.identityDetails}>
+            <summary>Inspect full transfer identifiers</summary>
+            <div className={styles.identityList}>
+              <span>Sender</span>
+              <CopyableAddress value={t.origin.sender} label="sender address" />
+              <span>Origin transaction</span>
+              <CopyableAddress value={t.origin.txHash} label="origin transaction hash" />
+              <span>Recipient</span>
+              <CopyableAddress value={t.destination.recipient} label="recipient address" />
+              {t.destination.txHash && (
+                <>
+                  <span>Destination transaction</span>
+                  <CopyableAddress
+                    value={t.destination.txHash}
+                    label="destination transaction hash"
+                  />
+                </>
+              )}
+            </div>
+          </details>
 
           {t.claim && (
             <p className={styles.claimInfo}>

@@ -7,6 +7,7 @@ import {
   walletCapabilities,
   walletAvailabilityLabel,
 } from "../../wallets/stellar";
+import { CopyableAddress } from "../bridge/AssetPicker";
 import styles from "./StellarWalletButton.module.css";
 
 export function StellarWalletButton() {
@@ -160,6 +161,7 @@ export function StellarWalletButton() {
                 </p>
               </>
             )}
+            {address && <CopyableAddress value={address} label="stellar account" />}
           </div>
 
           {reconciliationRequired && (
