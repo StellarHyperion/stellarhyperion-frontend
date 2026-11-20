@@ -1,0 +1,20 @@
+# Versioned checkpoint and local source recovery
+
+Checkpoint mutations and resets share a browser Web Lock and compare the full saved intent and its committed revision. A persistent revision counter prevents a stale record from becoming current again after a reset. Duplicate signed progress notifications keep their original revision. Valid legacy records retain their exact integer amount, issuer identity, owner, recipient and signed hash; migration occurs only on a guarded successful mutation. Unsupported versions, malformed records and conflicting storage remain intact and block another approval with readable recovery guidance.
+
+A confirmed conversion remains a separate completed source operation when a fresh bridge quote fails. Retrying reviews the USDC already in the wallet and requires a fresh quote, simulation and explicit wallet approval. No conversion is automatically repeated. An unresolved signed bridge is retained before broadcast, and a failed local history write preserves the recovery checkpoint before a reset.
+
+Recent local source references are scoped to the connected Stellar account. The current backend has no bulk endpoint, so reconciliation uses its implemented by-transaction endpoint with at most 20 unique hashes and four concurrent reads. Hash, sender, chain, token, router, route, destination and recipient must match before an indexed reference is associated. Missing records, errors and incompatible identities retain each original local source observation. These observations do not establish destination payment; transfer details read source and indexed delivery evidence separately.
+
+All seven supported Node 22 commands passed on cumulative source `dde9959b1b6a9077caf765b2409185dccfbae315`: formatting, house rules, contrast, 528 deterministic tests with four funded skips, strict lint with zero errors, typecheck and the normal production Turbopack build. Tests ran as `npm run test -- --maxWorkers=4`; assertions and timeouts were unchanged. Three existing wallet-context effect warnings remain. Actual emitted client bundle checks passed with wallet 119262/450000 and transaction 1098227/1200000 bytes. [validation.json](validation.json) records each command and result.
+
+The current production Bridge, Providers, checkpoint implementation, wallet SDK and history page passed the Chromium 158 browser check. A synthetic conversion envelope was independently verified against mocked Horizon, its confirmed checkpoint survived a failed fresh quote, and retry reviewed existing USDC with fresh simulation and still required explicit approval. Two actual tabs concurrently promoted the same saved conversion: exactly one committed revision 2, the other refused its stale intent, and both read the winner. An unsupported future-version record remained intact, preserved valid entered values, disabled review and rejected a checkpoint commit.
+
+The actual history page retained three seeded current-account local source-confirmed references through 404, 503 and an incompatible indexer sender. A fourth foreign-account reference was never requested or shown. Disconnect removed account-scoped references. No delivered row was fabricated. Desktop and mobile captures were inspected; long source hashes wrap and content stays within the viewport. These local source fixtures do not prove an indexed or destination delivery.
+
+- [Confirmed conversion after quote failure](conversion-failure-desktop.png)
+- [Unsupported recovery version with valid input](future-version-mobile.png)
+- [Local history on desktop](local-history-desktop.png)
+- [Local history on mobile](local-history-mobile.png)
+
+[source-evidence.json](source-evidence.json) records 15 verified current production-source fingerprints. [browser-result.txt](browser-result.txt) records the final browser result. All RPC, Horizon, wallet, provider and indexer transports were mocked. The deterministic local conversion envelope was unfunded; no wallet approval, external broadcast or payment was performed.

@@ -7,6 +7,8 @@ import {
   fetchTransferByTx,
   fetchTransfers,
   filterTransfers,
+  reconcileTransfers,
+  localTransferMatches,
   type FormattedTransfer,
 } from "../src/api/backend";
 import {
@@ -26,6 +28,7 @@ import {
 import { defaultProofFile } from "./support/proof-file";
 import { readTransaction } from "../src/contracts/stellar";
 import { TESTNET } from "../src/config/testnet";
+import type { LocalTransferReference } from "../src/lib/local-transfers";
 import { createPublicClient, http } from "viem";
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -88,6 +91,124 @@ function record(
     claim: null,
   };
 }
+
+describe("account-scoped local source reconciliation", () => {
+  const account = Keypair.random().publicKey();
+  const reference = (hash = "a".repeat(64)): LocalTransferReference => ({
+    checkpoint: {
+      router: TESTNET.router,
+      token: TESTNET.token,
+      account,
+      recipient: `0x${"1".repeat(40)}`,
+      destination: "sepolia",
+      route: 1,
+      bridgeAmount: "1000000",
+      stage: "bridge",
+      txHash: hash,
+    },
+    sourceStatus: "confirmed",
+  });
+  const matching = (hash = "a".repeat(64)) =>
+    record({ sender: account, txHash: hash, token: TESTNET.token, router: TESTNET.router });
+
+  it("preserves confirmed references independently for missing, error and matching reads", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.endsWith("a".repeat(64)))
+          return Promise.resolve(new Response("{}", { status: 404 }));
+        if (url.endsWith("b".repeat(64)))
+          return Promise.resolve(new Response("{}", { status: 503 }));
+        return Promise.resolve(Response.json(matching("c".repeat(64))));
+      }),
+    );
+    const refs = [reference(), reference("b".repeat(64)), reference("c".repeat(64))];
+    const result = await reconcileTransfers(account, refs);
+    expect(result.map((item) => item.reference)).toEqual(refs);
+    expect(result[0]).toMatchObject({ transfer: null, error: null });
+    expect(result[1]?.error).toContain("503");
+    expect(result[2]?.transfer).toEqual(matching("c".repeat(64)));
+    expect(refs.every((item) => item.sourceStatus === "confirmed")).toBe(true);
+  });
+
+  it("never requests or merges another account, chain, hash, token or router", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const fetcher = vi.fn(() => Promise.resolve(Response.json(matching())));
+    vi.stubGlobal("fetch", fetcher);
+    const foreign = {
+      ...reference(),
+      checkpoint: { ...reference().checkpoint, account: Keypair.random().publicKey() },
+    };
+    expect(await reconcileTransfers(account, [foreign])).toEqual([]);
+    expect(fetcher).not.toHaveBeenCalled();
+    for (const change of [
+      { sender: foreign.checkpoint.account },
+      { chain: "stellar-mainnet" },
+      { txHash: "d".repeat(64) },
+      { token: "other-token" },
+      { router: "other-router" },
+      { router: null },
+    ]) {
+      expect(
+        localTransferMatches(reference(), {
+          ...matching(),
+          origin: { ...matching().origin, ...change },
+        }),
+      ).toBe(false);
+    }
+    const { router: omittedRouter, ...withoutRouter } = matching().origin;
+    expect(omittedRouter).toBe(TESTNET.router);
+    expect(localTransferMatches(reference(), { ...matching(), origin: withoutRouter })).toBe(false);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          Response.json({
+            ...matching(),
+            origin: { ...matching().origin, sender: foreign.checkpoint.account },
+          }),
+        ),
+      ),
+    );
+    expect((await reconcileTransfers(account, [reference()]))[0]).toMatchObject({ transfer: null });
+  });
+
+  it("bounds compatibility reads to 20 unique hashes and four concurrent requests", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    let active = 0,
+      maximum = 0,
+      calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        active++;
+        maximum = Math.max(maximum, active);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        active--;
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    const refs = Array.from({ length: 30 }, (_, index) =>
+      reference(index.toString(16).padStart(64, "0")),
+    );
+    expect((await reconcileTransfers(account, [...refs.slice(0, 1), ...refs])).length).toBe(20);
+    expect(calls).toBe(20);
+    expect(maximum).toBe(4);
+  });
+
+  it("preserves statuses and makes no requests after cancellation", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const result = await reconcileTransfers(account, [reference()], controller.signal);
+    expect(result[0]?.reference.sourceStatus).toBe("confirmed");
+    expect(result[0]?.error).toContain("cancelled");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
 /**
  * Enforces the public acceptance proof schema: a real signed source transaction is not enough on
  * its own, every reported amount is an exact integer (never a float or scientific-notation string),
