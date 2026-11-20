@@ -18,6 +18,7 @@ const checkpoint: TransferCheckpoint = {
   bridgeAmount: "9007199254740993123456789",
   stage: "bridge",
   txHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
 };
 
 function createStorage() {
@@ -57,7 +58,7 @@ describe("pending transfer checkpoints", () => {
   });
 
   it("retains a legacy conversion hash without guessing its original source asset", () => {
-    const legacy = { ...checkpoint, stage: "conversion" as const };
+    const legacy = { ...checkpoint, stage: "conversion" as const, source: undefined };
     const parsed = parseCheckpoint(JSON.stringify(legacy));
     expect(parsed).toEqual(legacy);
     expect(checkpointForAsset(parsed, XLM)).toBeNull();
