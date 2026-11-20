@@ -38,6 +38,11 @@ Connect Freighter, Albedo, xBull or LOBSTR for Stellar Testnet through the nativ
 
 The checked-in deployment supplies the default router and canonical USDC asset. Public overrides are documented in `.env.example`. The app is testnet only.
 
+At startup, the public configuration admission check compares the network,
+router and canonical token against the checked-in testnet deployment and
+requires an HTTPS RPC endpoint. A mismatch renders an unavailable state with
+safe diagnostic labels; it never prints environment values or server secrets.
+
 `NEXT_PUBLIC_STELLAR_READ_RPC_URLS` may list up to two additional, independently operated Stellar Testnet RPC origins, comma-separated. RPC transaction status is accepted only when every configured source identifies as Stellar Testnet and agrees on the signed hash, outcome, encoded result and return value. Reads share a five-second deadline and support cancellation. Disagreement or an unavailable source alongside final evidence leaves the saved transaction unknown; historical fallback cannot override conflicting RPC evidence. When RPC history is absent, the independently network-checked Horizon recovery path remains available. Reset compares the complete saved checkpoint so a change in another tab cannot discard a different intent.
 
 `NEXT_PUBLIC_HYPERION_API_URL` supplies transfer activity and destination verification. The backend must run its indexer and rail pollers regularly. The public testnet uses a five-minute GitHub Actions schedule, subject to runner queueing; destination Activity can take several minutes to update. Unreachable history is shown explicitly. A confirmed Stellar transaction proves source execution; destination delivery requires matching confirmed bridge and token-payment events.
@@ -95,3 +100,13 @@ As of October 29, 2026, `npm audit` reports zero known vulnerabilities after pat
 The layout study used [Jumper](https://jumper.xyz/), [Relay](https://relay.link/bridge) and [Stargate](https://stargate.finance/) as reference points for focused asset selection and progressive route details. Hyperion adds explicit receive-token identity, quote request feedback, review and interruption recovery. Decorative orbital paths provide background motion without implying that funds are moving. One theme button switches between light and dark; all motion honors reduced-motion preferences.
 
 MIT.
+
+## Independent acceptance proof checks
+
+Live ITS and route runners save the public signed source envelope and hash before broadcast, use atomic proof-file replacement and permit one runner per proof. An interrupted lock stays in place for manual inspection. Pending source and conversion hashes cannot be overwritten by a retry.
+
+Acceptance requires matching source account, canonical token contract, route, destination, recipient and exact integer amounts; origin gross, fee and net must agree. A successful destination receipt must match the indexed hash and block and contain the exact token Transfer payment to the recipient. A balance increase or provider reference alone cannot satisfy this check.
+
+Set `HYPERION_LIVE_PROOF=1` to inspect an existing ITS proof without signing. It uses `HYPERION_TESTNET_PROOF` or the same private default proof path as the ITS runner, verifies the public signature and source confirmation, then independently reads the Sepolia receipt. It does not enable the spending suites. Existing proofs without their public signed envelope remain available for manual recovery and cannot pass acceptance automatically.
+
+Deterministic checks cover source-only evidence, wrong chains, recipient or token, missing and inexact amounts, unrelated receipts, interrupted writes, retained hashes and competing proof owners. Application source and dependencies match the fully validated binding-limit head. Its diagnostic browser evidence and the included conversion-recovery evidence are retained under `docs/review/`. Live spending remained disabled during this repair.

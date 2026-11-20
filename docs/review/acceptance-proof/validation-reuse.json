@@ -1,0 +1,17 @@
+{
+  "final_source_head": "b8b1e4fa21d5f2aadde321dd9a65cfe6f8f6a96f",
+  "full_local_validation_source": "d2c149ec3ac1624f3e0e90c2a7a14fdbdb8a3c2e",
+  "full_commands": "fmt:check, house, contrast, test (367 pass/four live skips), lint, typecheck, build",
+  "production_source_matches_fully_validated_208": "e2beec7d4afc086449930965b0f3616680efd88a",
+  "package_lock_sha256": "853c342bc053d3754a241ac3eeac1d787d21f6877ea1d6b3f99a11ef0f964aa0",
+  "unchanged_acceptance_files": [
+    "test/acceptance-proof.test.ts",
+    "test/support/acceptance.ts",
+    "test/support/proof-file.ts",
+    "test/live-routes.test.ts",
+    "test/live-transfer.test.ts"
+  ],
+  "integration_focused_validation": "105 acceptance/checkpoint/recovery/RPC/Stellar/dialog-target tests passed; strict smoke lint passed.",
+  "browser_source_evidence_reuse": "Final207/208 current-source captures are inherited; production source is byte-identical to final208.",
+  "live_run": "No funded live acceptance/spending run. The opt-in live runner validates independently retrieved signed source and exact destination receipt; deterministic fixtures cannot establish live delivery."
+}
