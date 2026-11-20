@@ -25,6 +25,7 @@
     "house": "node scripts/house-rules.mjs",
     "icons": "python3 scripts/render-icons.py",
     "test": "vitest run",
+    "test:exact-amounts": "vitest run test/submission.test.ts test/assets.test.ts test/backend-api.test.ts test/wallet-signature.test.ts",
     "check": "npm run fmt:check && npm run house && npm run contrast && npm run test && npm run lint && npm run typecheck && npm run build",
     "test:browser": "node scripts/browser-smoke.mjs"
   },

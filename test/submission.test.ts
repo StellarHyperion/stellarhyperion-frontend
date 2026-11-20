@@ -10,12 +10,13 @@ import {
   rpc,
   type xdr,
 } from "@stellar/stellar-sdk";
-import { toHex } from "@hyperion/protocol";
+import { formatUnits, toHex } from "@hyperion/protocol";
 import {
   classifySubmissionFailure,
   SubmissionFailure,
   quoteFreshness,
   quoteBreakdown,
+  parseSendAmount,
   type LiveQuote,
   submitSettleClaim,
   submitOperation,
@@ -773,6 +774,86 @@ describe("Spendable-balance maximum amount planner", () => {
       // usdcAfterRelay = 999_999_999 - 11_000_000 = 988_999_999
       // cap = min(988_999_999, 999_999_997) = 988_999_999
       expect(result).toBe(988_999_999n);
+    });
+
+    it("round-trips generated source amounts and conserves six- and seven-decimal review quotes", () => {
+      let state = 0x159c0de;
+      const amounts = [
+        10_001n,
+        10_009n,
+        10_010n,
+        10_011n,
+        10_000_001n,
+        ...Array.from({ length: 48 }, () => {
+          state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+          return BigInt(state) * 100000000n + BigInt(state % 100000000) + 1n;
+        }),
+      ];
+      amounts.push(9007199254740993n);
+
+      const decimalOracle = (units: bigint, decimals: number): string => {
+        const scale = 10n ** BigInt(decimals);
+        const whole = units / scale;
+        const fraction = (units % scale).toString().padStart(decimals, "0").replace(/0+$/, "");
+        return fraction ? `${whole}.${fraction}` : whole.toString();
+      };
+
+      for (const [index, requestedAmount] of amounts.entries()) {
+        const sourceText = decimalOracle(requestedAmount, 7);
+        expect(parseSendAmount(sourceText)).toBe(requestedAmount);
+        expect(formatUnits(requestedAmount, 7)).toBe(sourceText);
+        expect(
+          parseBridgeFormParams(
+            `?a=${sourceText}&r=0x${"1".repeat(40)}&d=sepolia&t=1&s=native`,
+          )?.amount,
+        ).toBe(sourceText);
+
+        const quantum = index % 2 === 0 ? 10n : 1n;
+        const route = quantum === 10n ? 0 : 1;
+        const retainedDust = requestedAmount % quantum;
+        const grossAmount = requestedAmount - retainedDust;
+        const fee = BigInt(index + 1) * quantum;
+        const netAmount = grossAmount - fee;
+        const representableAmount = netAmount / quantum;
+        const relayGas = route === 0 ? 1n : 0n;
+        const destinationAmount = representableAmount - relayGas;
+        const quote: LiveQuote = {
+          route,
+          requestedAmount,
+          grossAmount,
+          fee,
+          netAmount,
+          representableAmount,
+          destinationAmount,
+          relayGas,
+          flowAvailable: requestedAmount * 2n,
+          ledger: index + 1,
+          adapter: TESTNET.router,
+          destination: "sepolia",
+        };
+        const review = quoteBreakdown(quote);
+
+        expect(review.requestedSourceAmount).toBe(requestedAmount);
+        expect(review.actualSourceDebit + review.protocolFee + review.retainedDust).toBe(
+          requestedAmount,
+        );
+        expect(review.actualSourceDebit).toBe(grossAmount);
+        expect(review.representableBridgeAmount).toBe(netAmount);
+        expect(review.representableBridgeAmount / quantum).toBe(representableAmount);
+        const destinationDecimals = route === 0 ? 6 : 7;
+        expect(destinationAmount).toBe(netAmount / quantum - relayGas);
+        expect(formatUnits(destinationAmount, destinationDecimals)).toBe(
+          decimalOracle(destinationAmount, destinationDecimals),
+        );
+      }
+    });
+
+    it("rejects amounts with precision beyond seven decimals", () => {
+      const invalid = "900719925.47409931";
+      expect(() => parseSendAmount(invalid)).toThrow();
+      expect(
+        parseBridgeFormParams(`?a=${invalid}&r=0x${"1".repeat(40)}&d=sepolia&t=1&s=native`),
+      ).toBeNull();
     });
   });
 });

@@ -43,6 +43,65 @@ describe("Real indexer client", () => {
       "https://indexer.example/v1/transfers?search=hash+%26+recipient&offset=40",
     );
   });
+  it("preserves generated source and destination base-unit strings independently", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const transfer = (sourceGross: bigint, index: number): FormattedTransfer => {
+      const fee = BigInt(index + 1) * 100n;
+      const sourceNet = sourceGross - fee;
+      return {
+        id: `amount-${index}`,
+        stage: "delivered",
+        route: 0,
+        origin: {
+          chain: "stellar-testnet",
+          nonce: String(index + 1),
+          sender: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+          token: "CUSDC",
+          symbol: "USDC",
+          decimals: 7,
+          grossAmount: sourceGross.toString(),
+          fee: fee.toString(),
+          netAmount: sourceNet.toString(),
+          block: String(index + 100),
+          txHash: `source-${index}`,
+          observedAt: "2026-11-18T12:00:00.000Z",
+        },
+        destination: {
+          token: "0x" + "1".repeat(40),
+          amount: (sourceNet / 10n).toString(),
+          symbol: "USDC",
+          decimals: 6,
+          chain: "sepolia",
+          recipient: "0x" + "2".repeat(40),
+          delivered: true,
+          block: String(index + 200),
+          txHash: `destination-${index}`,
+          deliveredAt: "2026-11-18T12:05:00.000Z",
+        },
+        rail: null,
+        claim: null,
+      };
+    };
+    let state = 0x159c0de;
+    const records = [
+      transfer(9007199254740993n, 0),
+      ...Array.from({ length: 32 }, (_, index) => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return transfer(BigInt(state) * 100000000n + 1000000n, index + 1);
+      }),
+    ];
+    const payload = { transfers: records, count: records.length, limit: 50, offset: 0 };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))));
+
+    const result = await fetchTransfers();
+    for (const [index, record] of records.entries()) {
+      expect(result.transfers[index]?.origin.grossAmount).toBe(record.origin.grossAmount);
+      expect(result.transfers[index]?.origin.fee).toBe(record.origin.fee);
+      expect(result.transfers[index]?.origin.netAmount).toBe(record.origin.netAmount);
+      expect(result.transfers[index]?.destination.amount).toBe(record.destination.amount);
+    }
+    expect(result.transfers[0]?.origin.grossAmount).toBe("9007199254740993");
+  });
   it("lists claims with explicit chain and settlement filters", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
     const payload = { claims: [], count: 0, limit: 20, offset: 0 };

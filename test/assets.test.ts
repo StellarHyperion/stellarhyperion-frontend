@@ -37,9 +37,18 @@ import {
   TESTNET,
 } from "../src/config/testnet";
 import { relayBudget } from "../src/lib/relay-budget";
+import { formatTokenAmount } from "../src/lib/format";
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+function decimalOracle(units: bigint, decimals: number): string {
+  const scale = 10n ** BigInt(decimals);
+  const whole = units / scale;
+  const fraction = (units % scale).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole.toString();
+}
+
 const path = {
   source_asset_type: "native",
   source_amount: "1.0000000",
@@ -546,6 +555,29 @@ describe("Real Stellar conversion transaction boundaries", () => {
     };
     expect(spendableBalance(precisionAsset)).toBe("0.0000001");
     expect(suggestSourceSpend(precisionAsset)).toBe("0.0000001");
+  });
+  it("renders generated six- and seven-decimal integer amounts against an independent oracle", () => {
+    let state = 0x159c0de;
+    const amounts = [
+      1n,
+      9n,
+      10n,
+      9999999n,
+      9007199254740993n,
+      ...Array.from({ length: 64 }, () => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return BigInt(state) * 100000000n + BigInt(state % 100000000) + 1n;
+      }),
+    ];
+
+    for (const decimals of [6, 7]) {
+      for (const units of amounts) {
+        const displayed = decimalOracle(units, decimals);
+        expect(formatTokenAmount(units.toString(), decimals)).toBe(displayed);
+        const [whole = "0", fraction = ""] = displayed.split(".");
+        expect(BigInt(`${whole}${fraction.padEnd(decimals, "0")}`)).toBe(units);
+      }
+    }
   });
 });
 describe("Independently verified testnet bridge lanes", () => {

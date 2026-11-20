@@ -90,17 +90,18 @@ try {
 
   // Opening a shared link loads bounded form state without any submission intent.
   const recipient = "0x" + "a".repeat(40);
-  await page.goto(`${origin}?a=1&r=${recipient}&d=sepolia&t=0&s=native`, {
-    waitUntil: "networkidle",
-  });
+  const exactAmount = "900719925.4740993";
+  const sharedLink = `${origin}?a=${exactAmount}&r=${recipient}&d=sepolia&t=0&s=native`;
+  await page.goto(sharedLink, { waitUntil: "networkidle" });
   await page.getByLabel("Amount to send").waitFor();
-  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), "1");
+  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), exactAmount);
   assert.strictEqual(
     await page.getByLabel("Recipient on Ethereum Sepolia").inputValue(),
     recipient,
   );
   assert.ok((await page.getByLabel("Choose source token").textContent()).includes("XLM"));
-  assert.ok(page.url().match(new RegExp(`\\?a=1&r=${recipient}&d=sepolia&t=0&s=native`)));
+  assert.strictEqual(new URL(page.url()).searchParams.get("a"), exactAmount);
+  assert.strictEqual(new URL(page.url()).searchParams.get("s"), "native");
   // No checkpoint or automatic submission intent is restored from a shared link.
   assert.strictEqual(
     await page.getByRole("button", { name: /Bridge converted USDC|continue/i }).count(),
@@ -108,13 +109,17 @@ try {
   );
   // Returning to (reloading) the link re-applies the bounded form state on mount: fresh lookup,
   // no stale submission intent carried over.
+  await page.getByLabel("Amount to send").fill("1.23456789");
+  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), "1.23456789");
+  await page.goto(sharedLink, { waitUntil: "networkidle" });
   await page.reload({ waitUntil: "networkidle" });
-  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), "1");
+  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), exactAmount);
   assert.strictEqual(
     await page.getByLabel("Recipient on Ethereum Sepolia").inputValue(),
     recipient,
   );
-  assert.ok(page.url().match(new RegExp(`\\?a=1&r=${recipient}&d=sepolia&t=0&s=native`)));
+  assert.strictEqual(new URL(page.url()).searchParams.get("a"), exactAmount);
+  assert.strictEqual(new URL(page.url()).searchParams.get("s"), "native");
 
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
   assert.equal(await page.getByLabel("Amount to send").count(), 1);
