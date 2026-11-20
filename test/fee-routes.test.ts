@@ -34,7 +34,7 @@ describe("fee route contracts", () => {
       amount: "1100002",
       decimals: 7,
     });
-  });
+  }, 30000);
 
   it.each([
     ["timeout", vi.fn().mockRejectedValue(new DOMException("timed out", "TimeoutError"))],

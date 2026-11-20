@@ -164,6 +164,8 @@ describe("Wallet signature verification", () => {
     expect(() => verifyWalletSignature("", signed, signer.publicKey())).toThrow("unreadable");
     expect(() => verifyWalletSignature(original.slice(0, 20), signed, signer.publicKey())).toThrow(
       "unreadable",
+    );
+  });
 
   describe("Read-only signing guard and reconciliation checks", () => {
     it("never permits signing for typed read-only accounts", () => {
