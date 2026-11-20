@@ -1026,6 +1026,8 @@ export function Bridge() {
   const [reviewApproval, setReviewApproval] = useState<WalletApprovalProvenance | null>(null);
   const [quoteDiff, setQuoteDiff] = useState<QuoteDiff | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const refreshGate = useRef<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [quoteVersion, setQuoteVersion] = useState(0);
   const [laneState, setLaneState] = useState<{
     key: string;
@@ -1085,12 +1087,18 @@ export function Bridge() {
   const laneKey = `${destination}:${route}:${refresh}`;
   const laneRefreshing = useVisibilityPoll(
     async (signal) => {
+      if (refreshGate.current !== null) refreshGate.current = laneKey;
       try {
         const value = await readLane(destination, route);
         if (!signal.aborted) setLaneState({ key: laneKey, value, error: null });
       } catch (cause) {
         if (!signal.aborted)
           setLaneState({ key: laneKey, value: null, error: errorMessage(cause) });
+      } finally {
+        if (!signal.aborted && refreshGate.current === laneKey) {
+          refreshGate.current = null;
+          setRefreshing(false);
+        }
       }
     },
     30_000,
@@ -1647,23 +1655,31 @@ export function Bridge() {
   }
   const amountProblem = amount.trim() !== "" && !amountValidation.valid;
   const sourceReadBlocked =
-    valid && !!wallet.address &&
-    (sourceBalance === undefined || !trustlineOk || xlmStatus !== "ok" ||
-      trustlineReserveUnknown || trustlineReserveInsufficient);
+    valid &&
+    !!wallet.address &&
+    (sourceBalance === undefined ||
+      !trustlineOk ||
+      xlmStatus !== "ok" ||
+      trustlineReserveUnknown ||
+      trustlineReserveInsufficient);
   const routeReadBlocked =
-    !!laneError || (valid && lane !== null && !lane.available) ||
-    !!quoteError || !!simulationError;
+    !!laneError || (valid && lane !== null && !lane.available) || !!quoteError || !!simulationError;
   const validationSummary = [
     amountProblem ? { id: "send-amount", label: "amount" } : null,
     recipientProblem ? { id: "recipient", label: "destination wallet" } : null,
     insufficient || exceedsFlow ? { id: "send-amount", label: "amount and available limit" } : null,
     sourceReadBlocked ? { id: "bridge-action-help", label: "balance and reserve checks" } : null,
     routeReadBlocked ? { id: "bridge-action-help", label: "route and fee checks" } : null,
-    error || wallet.error ? { id: checkpoint ? "pending-recovery-message" : "bridge-action-help", label: "recovery guidance" } : null,
+    error || wallet.error
+      ? {
+          id: checkpoint ? "pending-recovery-message" : "bridge-action-help",
+          label: "recovery guidance",
+        }
+      : null,
   ].filter((item): item is { id: string; label: string } => item !== null);
   const actionHelp = checkpoint
     ? "Check the saved source transaction before approving another transfer."
-    : fetching
+    : refreshing || fetching
       ? "Wait while the current route and fee estimate are loaded."
       : simulating
         ? "Wait while the current transaction simulation is checked."
@@ -1685,7 +1701,9 @@ export function Bridge() {
                         ? "Your current source balance has not been confirmed. Refresh to retry."
                         : !trustlineOk
                           ? "This source asset is not authorized for spending. Choose an available asset."
-                          : xlmStatus !== "ok" || trustlineReserveUnknown || trustlineReserveInsufficient
+                          : xlmStatus !== "ok" ||
+                              trustlineReserveUnknown ||
+                              trustlineReserveInsufficient
                             ? "The account reserve and network fee checks must pass before reviewing."
                             : !quote || (!quote.conversion && !simulation)
                               ? "Wait for the current route and transaction checks to finish."
@@ -1701,7 +1719,11 @@ export function Bridge() {
           onReset={reset}
         />
       )}
-      <section className={styles.panel} aria-labelledby="bridge-heading" aria-busy={fetching}>
+      <section
+        className={styles.panel}
+        aria-labelledby="bridge-heading"
+        aria-busy={fetching || simulating || refreshing}
+      >
         <div className={styles.heading}>
           <div>
             <h2 id="bridge-heading">Bridge assets</h2>
@@ -1711,8 +1733,13 @@ export function Bridge() {
             className={styles.refresh}
             aria-label="Refresh quote and networks"
             title="Refresh quote and networks"
-            disabled={locked}
+            aria-describedby="bridge-action-help"
+            aria-busy={refreshing}
+            disabled={locked || refreshing || fetching || simulating}
             onClick={() => {
+              if (locked || refreshGate.current || fetching || simulating) return;
+              refreshGate.current = `${destination}:${route}:${refresh + 1}`;
+              setRefreshing(true);
               setRefresh((value) => value + 1);
               invalidateQuote();
             }}
@@ -1732,8 +1759,12 @@ export function Bridge() {
             <input
               id="send-amount"
               aria-label="Amount to send"
-              aria-describedby={validationSummary.length ? "send-amount-help bridge-validation-summary" : "send-amount-help"}
-              aria-invalid={amount.trim() !== "" && !amountValidation.valid}
+              aria-describedby={
+                validationSummary.length
+                  ? "send-amount-help bridge-validation-summary"
+                  : "send-amount-help"
+              }
+              aria-invalid={amountProblem || !!insufficient || exceedsFlow}
               inputMode="decimal"
               autoComplete="off"
               value={amount}
@@ -1750,6 +1781,7 @@ export function Bridge() {
                 type="button"
                 className={styles.maxSpend}
                 aria-label="Use spendable balance"
+                aria-describedby="bridge-action-help"
                 disabled={
                   locked ||
                   conservativeMax === null ||
@@ -2040,17 +2072,26 @@ export function Bridge() {
           )
         )}
         {validationSummary.length > 0 && (
-          <nav id="bridge-validation-summary" aria-label="Transfer review checks" className={styles.validationSummary}>
+          <nav
+            id="bridge-validation-summary"
+            aria-label="Transfer review checks"
+            className={styles.validationSummary}
+          >
             <strong>Review before continuing</strong>
             <ul>
               {validationSummary.map((item) => (
                 <li key={`${item.id}-${item.label}`}>
-                  <a href={`#${item.id}`} onClick={(event) => {
-                    event.preventDefault();
-                    const target = document.getElementById(item.id);
-                    target?.focus();
-                    target?.scrollIntoView({block: "center"});
-                  }}>Review {item.label}</a>
+                  <a
+                    href={`#${item.id}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      const target = document.getElementById(item.id);
+                      target?.focus();
+                      target?.scrollIntoView({ block: "center" });
+                    }}
+                  >
+                    Review {item.label}
+                  </a>
                 </li>
               ))}
             </ul>
