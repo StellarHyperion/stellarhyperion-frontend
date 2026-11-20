@@ -11,7 +11,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { StellarWalletContextValue, WalletApprovalProvenance } from "./types";
+import type {
+  StellarWalletContextValue,
+  WalletApprovalProvenance,
+  WalletInteractionMode,
+} from "./types";
 import { TESTNET } from "../../config/testnet";
 import { assertWalletNetwork } from "./signature";
 
@@ -21,6 +25,7 @@ import {
   createGenerationTracker,
   createSigningCoordinator,
   isWalletId,
+  validateStellarAddress,
   walletAddress,
   walletNetwork,
   walletCurrentAddress,
@@ -29,6 +34,7 @@ import {
   type StellarWalletId,
   type PendingSigningRequest,
 } from "./sdk";
+import { assertSigningAuthorized } from "./signature";
 import styles from "./WalletPicker.module.css";
 import { WalletConnectionRecovery } from "./WalletConnectionRecovery";
 import type { WalletConnectionGuidance } from "./sdk";
@@ -45,10 +51,29 @@ import {
   saveWalletPreference,
 } from "./preference";
 
+const VIEWED_KEY = "hyperion.stellar.viewedAddress";
+
+function readSavedViewedAddress(): string | null {
+  try {
+    return localStorage.getItem(VIEWED_KEY);
+  } catch {
+    return null;
+  }
+}
+function saveViewedAddress(addr: string | null) {
+  try {
+    if (addr) localStorage.setItem(VIEWED_KEY, addr);
+    else localStorage.removeItem(VIEWED_KEY);
+  } catch {
+    /* Safe without browser storage. */
+  }
+}
+
 const Context = createContext<StellarWalletContextValue | null>(null);
 
 export function StellarWalletProvider({ children }: { children: ReactNode }) {
-  const [address, setAddress] = useState<string | null>(null);
+  const [connectedAddress, setConnectedAddress] = useState<string | null>(null);
+  const [viewedAddress, setViewedAddress] = useState<string | null>(readSavedViewedAddress);
   const addressRef = useRef<string | null>(null);
   const restorationAllowed = useRef(true);
   const [rememberedWallet, setRememberedWallet] = useState<StellarWalletId | null>(null);
@@ -56,12 +81,14 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [walletId, setWalletId] = useState<StellarWalletId | null>(null);
   const [isConnecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [readOnlyError, setReadOnlyError] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [inspectInput, setInspectInput] = useState("");
   const [connectionFailure, setConnectionFailure] = useState<{
     wallet: StellarWalletId;
     guidance: WalletConnectionGuidance;
   } | null>(null);
   const firstWallet = useRef<HTMLButtonElement>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const pickerOpener = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (pickerOpen) return;
@@ -72,6 +99,24 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const [availability, setAvailability] = useState<
     Partial<Record<StellarWalletId, WalletAvailabilityStatus>>
   >({});
+
+  const reconciliationRequired =
+    connectedAddress !== null && viewedAddress !== null && connectedAddress !== viewedAddress;
+
+  const isReadOnly =
+    viewedAddress !== null && (walletId === null || viewedAddress !== connectedAddress);
+
+  const isConnected = connectedAddress !== null && walletId !== null && !isReadOnly;
+
+  const address = viewedAddress ?? connectedAddress ?? null;
+  const shortAddress = address ? `${address.slice(0, 6)}...${address.slice(-6)}` : null;
+
+  const mode: WalletInteractionMode = isConnected
+    ? "connected"
+    : isReadOnly
+      ? "read-only"
+      : "disconnected";
+
   useEffect(() => {
     if (!pickerOpen) return;
     let active = true;
@@ -83,6 +128,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       active = false;
     };
   }, [pickerOpen]);
+
   const [authorizing, setAuthorizing] = useState<StellarWalletId | null>(null);
   const [pendingSigningRequest, setPendingSigningRequest] = useState<PendingSigningRequest | null>(
     null,
@@ -160,9 +206,12 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
           .run((signal) => walletAddress(saved, false, signal))
           .then((value) => {
             if (active && restorationAllowed.current && attempt.current === version) {
+              setConnectedAddress(value);
               addressRef.current = value;
-              setAddress(value);
               setWalletId(saved);
+              if (!readSavedViewedAddress()) {
+                setViewedAddress(value);
+              }
               connectionGeneration.current.advance();
             }
           })
@@ -170,7 +219,6 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
             /* Explicit connection remains available. */
           });
     });
-
     return () => {
       active = false;
       attempt.current++;
@@ -223,13 +271,18 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         walletAddress(id, true, signal),
       );
       if (attempt.current !== version) return;
+      setConnectedAddress(value);
       addressRef.current = value;
-      setAddress(value);
       setWalletId(id);
       connectionGeneration.current.advance();
       const storageError = saveWalletPreference(id);
       setPreferenceError(storageError);
       if (!storageError) setRememberedWallet(id);
+      setViewedAddress((current) => {
+        const next = current ?? value;
+        saveViewedAddress(next);
+        return next;
+      });
       pending.current(value);
       pending.current = null;
       setPickerOpen(false);
@@ -245,6 +298,54 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const inspectAddress = useCallback(async (raw: string): Promise<boolean> => {
+    try {
+      const validated = await validateStellarAddress(raw);
+      setViewedAddress(validated);
+      saveViewedAddress(validated);
+      setReadOnlyError(null);
+      return true;
+    } catch (cause) {
+      setReadOnlyError(
+        cause instanceof Error ? cause.message : "Enter a valid Stellar public address (G...).",
+      );
+      return false;
+    }
+  }, []);
+
+  const clearReadOnly = useCallback(() => {
+    setViewedAddress(connectedAddress);
+    saveViewedAddress(connectedAddress);
+    setReadOnlyError(null);
+  }, [connectedAddress]);
+
+  const reconcileMode = useCallback(
+    (target: "connected" | "viewed") => {
+      if (target === "connected") {
+        if (connectedAddress) {
+          setViewedAddress(connectedAddress);
+          saveViewedAddress(connectedAddress);
+          setReadOnlyError(null);
+        }
+      } else {
+        setConnectedAddress(null);
+        setWalletId(null);
+        const storageError = saveWalletPreference(null);
+        setPreferenceError(storageError);
+        if (!storageError) setRememberedWallet(null);
+        setError(null);
+      }
+    },
+    [connectedAddress],
+  );
+
+  const reconcileToConnected = useCallback(() => {
+    reconcileMode("connected");
+  }, [reconcileMode]);
+  const reconcileToViewed = useCallback(() => {
+    reconcileMode("viewed");
+  }, [reconcileMode]);
+
   const disconnect = useCallback(() => {
     closePicker();
     addressRef.current = null;
@@ -256,8 +357,12 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         "Wallet disconnected before the signature completed. Close any old wallet prompt, reconnect and review the transfer.",
       ),
     );
-    setAddress(null);
+    setConnectedAddress(null);
+    setViewedAddress(null);
+    saveViewedAddress(null);
     setWalletId(null);
+    setError(null);
+    setReadOnlyError(null);
     const storageError = saveWalletPreference(null);
     setPreferenceError(storageError);
     if (!storageError) setRememberedWallet(null);
@@ -272,7 +377,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
     coordinator.current.abandon(new Error(message));
     pending.current?.(null);
     pending.current = null;
-    setAddress(null);
+    setConnectedAddress(null);
     setWalletId(null);
     setConnecting(false);
     setPickerOpen(false);
@@ -281,7 +386,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!address || !walletId) return;
+    if (!connectedAddress || !walletId) return;
     let active = true;
     let checking = false;
     const verifyAccount = async () => {
@@ -295,13 +400,13 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         if (
           !active ||
           connectionGeneration.current.value() !== generation ||
-          addressRef.current !== address ||
+          addressRef.current !== connectedAddress ||
           current === undefined
         )
           return;
-        if (current !== address)
+        if (current !== connectedAddress)
           invalidateAccount(
-            address,
+            connectedAddress,
             "Your Stellar wallet account changed or disconnected. Reconnect before reviewing or signing.",
           );
       } catch {
@@ -325,7 +430,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", onVisibility);
       window.clearInterval(timer);
     };
-  }, [address, walletId, invalidateAccount]);
+  }, [connectedAddress, walletId, invalidateAccount]);
 
   const cancelSignature = useCallback(() => {
     coordinator.current.abandon(
@@ -352,10 +457,17 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         approval?: WalletApprovalProvenance;
       },
     ) => {
-      if (!address || !walletId) throw new Error("Connect your Stellar wallet first.");
+      assertSigningAuthorized({
+        account: address ?? "",
+        walletId,
+        isReadOnly,
+        connectedAccount: connectedAddress,
+        viewedAddress,
+      });
+      if (!connectedAddress || !walletId) throw new Error("Connect your Stellar wallet first.");
       if (opts?.networkPassphrase && opts.networkPassphrase !== TESTNET.networkPassphrase)
         throw new Error("Hyperion signs Stellar Testnet transactions only.");
-      if (opts?.approval && opts.approval.account !== address)
+      if (opts?.approval && opts.approval.account !== connectedAddress)
         throw new Error("The wallet account changed. Review the transaction again.");
       // Perform a synchronous check of the cached networkMismatch state so that a network
       // switch that was detected by the poller always blocks signing immediately. For wallets
@@ -370,23 +482,27 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       const result = await coordinator.current.run(
         {
           operation: opts?.approval?.operation ?? opts?.operation ?? "transaction",
-          account: address,
+          account: connectedAddress,
         },
         (signal) =>
           connectionGeneration.current.run(async (connectionSignal) => {
             const combined = AbortSignal.any([signal, connectionSignal]);
-            if (addressRef.current !== address)
+            if (addressRef.current !== connectedAddress)
               throw new Error("Your wallet account changed. Connect again.");
             const current = await walletCurrentAddress(walletId, combined);
             combined.throwIfAborted();
-            if (current !== undefined && current !== address) {
+            if (current !== undefined && current !== connectedAddress) {
               invalidateAccount(
-                address,
+                connectedAddress,
                 "Your Stellar wallet account changed. Reconnect before reviewing or signing.",
               );
               throw new Error("Your wallet account changed. Connect again.");
             }
-            return walletSign(walletId, transaction, address, opts?.approval, combined);
+            return walletSign(walletId, transaction, connectedAddress, opts?.approval, {
+              isReadOnly,
+              connectedAccount: connectedAddress,
+              signal: combined,
+            });
           }),
       );
       // The wallet took long enough to respond that the user disconnected or switched
@@ -399,7 +515,15 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
         );
       return result;
     },
-    [address, walletId, networkMismatch, invalidateAccount],
+    [
+      address,
+      connectedAddress,
+      walletId,
+      isReadOnly,
+      viewedAddress,
+      networkMismatch,
+      invalidateAccount,
+    ],
   );
 
   const isReady =
@@ -412,13 +536,19 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       address,
-      shortAddress: address ? `${address.slice(0, 6)}...${address.slice(-6)}` : null,
+      shortAddress,
+      viewedAddress,
+      connectedAddress,
       walletId,
-      isConnected: address !== null,
+      isConnected,
       isConnecting,
       isSigning: pendingSigningRequest !== null,
-      isReady,
+      isReadOnly,
+      mode,
+      reconciliationRequired,
       error,
+      readOnlyError,
+      isReady,
       networkMismatch,
       rememberedWallet,
       preferenceError,
@@ -426,26 +556,47 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       pendingSigningRequest,
       connect,
       disconnect,
+      inspectAddress,
+      clearReadOnly,
+      reconcileMode,
+      reconcileToConnected,
+      reconcileToViewed,
+      setReadOnlyError,
       signTransaction,
       cancelSignature,
     }),
     [
       address,
+      shortAddress,
+      viewedAddress,
+      connectedAddress,
       walletId,
+      isConnected,
       isConnecting,
-      isReady,
+      pendingSigningRequest,
+      isReadOnly,
+      mode,
+      reconciliationRequired,
       error,
+      readOnlyError,
+      isReady,
       networkMismatch,
       rememberedWallet,
       preferenceError,
       clearRememberedWallet,
-      pendingSigningRequest,
       connect,
       disconnect,
+      inspectAddress,
+      clearReadOnly,
+      reconcileMode,
+      reconcileToConnected,
+      reconcileToViewed,
+      setReadOnlyError,
       signTransaction,
       cancelSignature,
     ],
   );
+
   const failedWallet = connectionFailure
     ? STELLAR_WALLETS.find((wallet) => wallet.id === connectionFailure.wallet)
     : undefined;
@@ -465,7 +616,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
                   ref={wallet.id === STELLAR_WALLETS[0].id ? firstWallet : undefined}
                   type="button"
                   disabled={authorizing !== null}
-                  onClick={() => void chooseWallet(wallet.id)}
+                  onClick={() => {
+                    void chooseWallet(wallet.id);
+                  }}
                 >
                   {authorizing === wallet.id ? `Connecting to ${wallet.name}...` : wallet.name}
                 </button>
@@ -495,6 +648,44 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
               }}
             />
           )}
+
+          <div className={styles.readOnlySection}>
+            <p className={styles.note}>
+              Or inspect an account in read-only mode without connecting a wallet:
+            </p>
+            <form
+              className={styles.readOnlyForm}
+              onSubmit={(e) => {
+                e.preventDefault();
+                void (async () => {
+                  const ok = await inspectAddress(inspectInput);
+                  if (ok) {
+                    setInspectInput("");
+                    closePicker();
+                  }
+                })();
+              }}
+            >
+              <input
+                type="text"
+                className={styles.readOnlyInput}
+                placeholder="Public address (G...)"
+                aria-label="Stellar public address for read-only inspection"
+                value={inspectInput}
+                onChange={(e) => {
+                  setInspectInput(e.target.value);
+                }}
+              />
+              <button type="submit" className={styles.readOnlyButton}>
+                Inspect
+              </button>
+            </form>
+            {readOnlyError && (
+              <p role="alert" className={styles.readOnlyError}>
+                {readOnlyError}
+              </p>
+            )}
+          </div>
         </Dialog>
       )}
     </Context.Provider>

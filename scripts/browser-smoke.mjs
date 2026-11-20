@@ -34,6 +34,40 @@ try {
     localStorage.setItem("hyperion.testnet.pending-transfer", "unresolved-checkpoint");
   });
   page.on("pageerror", (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    window.freighter = true;
+    window.addEventListener("message", (event) => {
+      if (
+        typeof event.data === "object" &&
+        event.data !== null &&
+        event.data.source === "FREIGHTER_EXTERNAL_MSG_REQUEST"
+      ) {
+        if (event.data.type === "REQUEST_CONNECTION_STATUS") {
+          window.postMessage(
+            {
+              source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
+              messagedId: event.data.messageId,
+              isConnected: true,
+            },
+            "*",
+          );
+        } else if (
+          event.data.type === "REQUEST_ACCESS" ||
+          event.data.type === "REQUEST_PUBLIC_KEY"
+        ) {
+          window.postMessage(
+            {
+              source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
+              messagedId: event.data.messageId,
+              publicKey: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+              address: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+            },
+            "*",
+          );
+        }
+      }
+    });
+  });
   // This smoke check only reads and never signs. Catch any accidental live submission network
   // call (a Soroban RPC POST or an outbound Horizon transaction broadcast) so a change that makes
   // this read-only pass start spending testnet funds fails loudly instead of going unnoticed.
@@ -155,9 +189,61 @@ try {
   );
   assert.doesNotMatch(await page.locator("body").innerText(), /[\u2013\u2014]/);
   await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
-  await page.getByText("Freighter", { exact: true }).waitFor();
-  await page.getByText("Albedo", { exact: true }).waitFor();
-  await page.keyboard.press("Escape");
+  const pickerDialog = page.getByRole("dialog", { name: "Connect a Stellar wallet" });
+  await pickerDialog.waitFor();
+  await pickerDialog.getByText("Freighter", { exact: true }).waitFor();
+  await pickerDialog.getByText("Albedo", { exact: true }).waitFor();
+
+  // Test typing a read-only address in the wallet picker dialog
+  const readOnlyInput = pickerDialog.getByLabel("Stellar public address for read-only inspection");
+  await readOnlyInput.waitFor();
+  await readOnlyInput.fill("GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+  await pickerDialog.getByRole("button", { name: "Inspect", exact: true }).click();
+  await pickerDialog.waitFor({ state: "hidden" });
+  const readOnlyButton = page.getByRole("button", { name: /GBBD47.*read-only/i });
+  await readOnlyButton.waitFor();
+  await readOnlyButton.click();
+  const readOnlyDetails = page.getByRole("region", { name: "Wallet details" });
+  await readOnlyDetails.waitFor();
+  await readOnlyDetails.getByText("read-only inspection").waitFor();
+  await readOnlyDetails.getByRole("button", { name: "Exit inspection" }).click();
+  await readOnlyDetails.waitFor({ state: "hidden" });
+
+  // Connect wallet and test mode mismatch prompt
+  await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
+  await pickerDialog.waitFor();
+  await pickerDialog.getByRole("button", { name: "Freighter", exact: true }).click();
+  await pickerDialog.waitFor({ state: "hidden" });
+  const connectedButton = page.getByRole("button", { name: /GA5ZSE.*testnet/i });
+  await connectedButton.waitFor();
+  await connectedButton.click();
+  const connectedDetails = page.getByRole("region", { name: "Wallet details" });
+  await connectedDetails.waitFor();
+
+  // Type a different address while connected to trigger mode mismatch reconciliation prompt
+  const menuInspectInput = connectedDetails.getByLabel("Stellar address to inspect");
+  await menuInspectInput.waitFor();
+  await menuInspectInput.fill("GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+  await connectedDetails.getByRole("button", { name: "Inspect", exact: true }).click();
+
+  const reconciliationRegion = page.getByRole("region", { name: "Mode reconciliation" });
+  await reconciliationRegion.waitFor();
+  await reconciliationRegion.getByText("Mode reconciliation required").waitFor();
+  assert.equal(
+    await reconciliationRegion.getByRole("button", { name: "Use connected wallet" }).count(),
+    1,
+  );
+  assert.equal(
+    await reconciliationRegion.getByRole("button", { name: "Keep read-only" }).count(),
+    1,
+  );
+
+  // Keep read-only mode to reconcile
+  await reconciliationRegion.getByRole("button", { name: "Keep read-only" }).click();
+  assert.equal(await page.getByRole("region", { name: "Mode reconciliation" }).count(), 0);
+  await connectedDetails.getByText("read-only inspection").waitFor();
+  await connectedDetails.getByRole("button", { name: "Exit inspection" }).click();
+  await connectedDetails.waitFor({ state: "hidden" });
   await page.evaluate((router) => {
     localStorage.setItem(
       "hyperion.testnet.pending-transfer",

@@ -56,6 +56,49 @@
   overflow-wrap: anywhere;
   font-size: 0.8125rem;
 }
+.readOnlySection {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--edge-color);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.readOnlyForm {
+  display: flex;
+  gap: var(--space-2);
+}
+.readOnlyInput {
+  flex: 1;
+  padding: var(--space-2);
+  background: transparent;
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  font-family: var(--face-mono);
+  font-size: 0.75rem;
+}
+.readOnlyInput:focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 1px;
+}
+.readOnlyButton {
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+.readOnlyButton:hover {
+  border-color: var(--focus-color);
+}
+.readOnlyError {
+  color: var(--state-failed);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
 .error:focus-visible,
 .recoveryActions button:focus-visible,
 .recoveryActions a:focus-visible,

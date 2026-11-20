@@ -2,7 +2,54 @@ import { Keypair, Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
 import { TESTNET } from "../../config/testnet";
 import type { WalletApprovalProvenance } from "./types";
 
-export function assertWalletApproval(approval: WalletApprovalProvenance, account: string): void {
+export type WalletSigningErrorCode = "READ_ONLY_MODE" | "ACCOUNT_MISMATCH";
+
+export class WalletSigningError extends Error {
+  readonly code: WalletSigningErrorCode;
+
+  constructor(code: WalletSigningErrorCode, message: string) {
+    super(message);
+    this.name = "WalletSigningError";
+    this.code = code;
+    Object.setPrototypeOf(this, WalletSigningError.prototype);
+  }
+}
+
+export interface SigningAuthorizationCheck {
+  account?: string | undefined;
+  walletId?: string | null | undefined;
+  isReadOnly?: boolean | undefined;
+  connectedAccount?: string | null | undefined;
+  viewedAddress?: string | null | undefined;
+}
+
+export function assertSigningAuthorized(options: SigningAuthorizationCheck): void {
+  if (options.isReadOnly || !options.walletId) {
+    throw new WalletSigningError(
+      "READ_ONLY_MODE",
+      "A typed public address cannot sign transactions. Connect a Stellar wallet.",
+    );
+  }
+  if (
+    options.connectedAccount &&
+    options.viewedAddress &&
+    options.connectedAccount !== options.viewedAddress
+  ) {
+    throw new WalletSigningError(
+      "ACCOUNT_MISMATCH",
+      "Connected wallet differs from viewed address. Reconcile mode before signing.",
+    );
+  }
+}
+
+export function assertWalletApproval(
+  approval: WalletApprovalProvenance,
+  account: string,
+  options?: SigningAuthorizationCheck,
+): void {
+  if (options) {
+    assertSigningAuthorized(options);
+  }
   if (!(["conversion", "bridge", "claim-settlement"] as const).includes(approval.operation))
     throw new Error("The approval operation is unsupported. Review the transaction again.");
   if (approval.account !== account)
