@@ -1,4 +1,5 @@
 "use client";
+import { transferRowIdentity } from "../../lib/transfer-filters";
 
 import Link from "next/link";
 import { type ReactElement } from "react";
@@ -44,7 +45,7 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
   return (
     <div className={styles.transferList} role="feed" aria-label="Transfers list">
       {transfers.map((t) => (
-        <article key={t.id} className={styles.transferCard}>
+        <article key={transferRowIdentity(t)} className={styles.transferCard}>
           <div className={styles.cardTop}>
             <div className={styles.routeAndStage}>
               <span className={styles.routeBadge}>{getRouteName(t.route)}</span>

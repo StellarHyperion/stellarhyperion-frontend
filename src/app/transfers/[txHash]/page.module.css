@@ -21,3 +21,17 @@
     transform: translateY(0);
   }
 }
+
+.readAction {
+  border: 1px solid var(--edge-color);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  padding: var(--space-2) var(--space-4);
+  min-block-size: var(--tap-target);
+  cursor: pointer;
+}
+.readAction:hover {
+  background: var(--surface-panel);
+  border-color: var(--edge-color-strong);
+}

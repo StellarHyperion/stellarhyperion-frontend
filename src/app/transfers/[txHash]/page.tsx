@@ -8,14 +8,26 @@ import { STELLAR_DEPLOYMENT } from "../../../config/testnet";
 import { formatTokenAmount, formatTokenIdentity, getExplorerUrl } from "../../../lib/format";
 import { hasVerifiedDestinationEvidence } from "../../../lib/evidence";
 import { EvidenceTimeline } from "../../../components/transfers/EvidenceTimeline";
-import { ActivityRequestGuard } from "../../../lib/activity-request";
 import { useVisibilityPoll } from "../../../lib/visibility-poll";
+import { ActivityRequestGuard } from "../../../lib/activity-request";
 import styles from "./page.module.css";
 export default function TransferDetailPage({ params }: { params: Promise<{ txHash: string }> }) {
   const { txHash } = use(params);
-  return <TransferDetailContent key={txHash} txHash={txHash} />;
+  if (!/^[0-9a-f]{64}$/i.test(txHash))
+    return (
+      <Column>
+        <Link href="/transfers">Back to transfer history</Link>
+        <h1 className="display">Invalid transaction hash</h1>
+        <p role="alert">
+          Enter a 64-character Stellar transaction hash. No chain or indexer lookup was made for
+          this input.
+        </p>
+      </Column>
+    );
+  return <TransferDetailContent key={txHash.toLowerCase()} txHash={txHash.toLowerCase()} />;
 }
 function TransferDetailContent({ txHash }: { txHash: string }) {
+  const [retry, setRetry] = useState(0);
   const [record, setRecord] = useState<FormattedTransfer | null>(null);
   const [origin, setOrigin] = useState<TransactionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +76,7 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
     },
     5_000,
     60_000,
-    txHash,
+    JSON.stringify([txHash, retry]),
     0,
   );
 
@@ -76,7 +88,18 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
         {txHash}
       </p>
       {(loading || refreshing) && <p role="status">Checking fresh chain and indexer status...</p>}
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <>
+          <p role="alert">Source lookup is unavailable: {error}</p>
+          <a
+            href={getExplorerUrl("stellar-testnet", "tx", txHash)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Check the source on Stellar Explorer
+          </a>
+        </>
+      )}
       {origin && (
         <section className={styles.legPanel} aria-label="Stellar transaction status">
           <h2>Stellar transaction</h2>
@@ -85,8 +108,9 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
               ? "Confirmed on Stellar Testnet."
               : origin.status === "failed"
                 ? "Failed on Stellar. No transfer was dispatched."
-                : "Not yet confirmed by the RPC. Check this hash before submitting again."}
+                : "Outcome unknown from the RPC. Check this hash before submitting again."}
           </p>
+          {origin.reason && <p>{origin.reason}</p>}
           <a
             href={getExplorerUrl("stellar-testnet", "tx", txHash)}
             target="_blank"
@@ -99,10 +123,22 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
       {indexerError && (
         <p role="status">{indexerError} Destination delivery cannot be verified here.</p>
       )}
+      {!loading && (error !== null || indexerError !== null || !record) && (
+        <button
+          type="button"
+          className={styles.readAction}
+          onClick={() => {
+            setLoading(true);
+            setRetry((value) => value + 1);
+          }}
+        >
+          Retry read-only status lookup
+        </button>
+      )}
       {!loading && !record && !indexerError && (
         <p>
-          The indexer has not recorded this transfer yet. Source confirmation alone does not verify
-          destination delivery.
+          The indexer has not recorded this transfer yet. This is not proof that the source
+          transaction is absent. Source confirmation alone does not verify destination delivery.
         </p>
       )}
       {record && (
@@ -159,10 +195,10 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
                   : `Funds are parked on the ${record.destination.chain} router for the recorded recipient.`}
               </p>
               {!record.claim.settled &&
-                indexerFresh &&
+                (indexerFresh &&
                 !refreshing &&
-                !loading &&
-                (record.claim.deployment?.chain === STELLAR_DEPLOYMENT.chain &&
+                !indexerError &&
+                record.claim.deployment?.chain === STELLAR_DEPLOYMENT.chain &&
                 record.claim.deployment.router === STELLAR_DEPLOYMENT.router &&
                 record.claim.deployment.revision === STELLAR_DEPLOYMENT.wasmHash ? (
                   <Link href="/#claim-recovery">Recover Stellar claim {record.claim.id}</Link>

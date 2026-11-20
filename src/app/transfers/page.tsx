@@ -1,19 +1,25 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { Column } from "../../components/chrome";
 import {
   fetchIndexerMetrics,
   fetchTransfers,
   cursorFreshness,
+  filterTransfers,
   type IndexerMetrics,
   type TransfersResponse,
 } from "../../api";
 import { TransferList } from "../../components/transfers";
 import { errorMessage } from "../../contracts";
-import { ActivityRequestGuard } from "../../lib/activity-request";
 import { useVisibilityPoll } from "../../lib/visibility-poll";
+import { ActivityRequestGuard } from "../../lib/activity-request";
 import { useStellarWallet } from "../../wallets";
 import styles from "./page.module.css";
+import {
+  readTransferFilters,
+  validateTransferFilters,
+  filterSupportError,
+} from "../../lib/transfer-filters";
 
 function ActivityCoverage({
   response,
@@ -72,9 +78,14 @@ export default function TransfersPage() {
 }
 function TransfersPageContent({ address }: { address?: string | null }) {
   const [search, setSearch] = useState("");
+  const [asset, setAsset] = useState("");
+  const [deployment, setDeployment] = useState("");
   const [offset, setOffset] = useState(0);
+  const [ready, setReady] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   const [loading, setLoading] = useState(true);
-  const scope = JSON.stringify([address ?? null, search, offset]);
+  const scope = JSON.stringify([address ?? null, search, offset, retry]);
   const [snapshot, setSnapshot] = useState<{
     scope: string;
     response: TransfersResponse | null;
@@ -84,11 +95,33 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   } | null>(null);
   const current = snapshot?.scope === scope ? snapshot : null;
   const response = current?.response ?? null;
-  const transfers = response?.transfers ?? [];
+  const validated = validateTransferFilters({ asset, deployment });
+  const filterError =
+    urlError ?? validated.error ?? filterSupportError(response?.transfers ?? [], validated.filters);
+  const transfers = filterError
+    ? []
+    : filterTransfers(response?.transfers ?? [], validated.filters);
   const metrics = current?.metrics ?? null;
   const metricsError = current?.metricsError ?? null;
   const error = current?.error ?? null;
   const requestGuard = useRef(new ActivityRequestGuard());
+  useEffect(() => {
+    const readUrl = () => {
+      const result = readTransferFilters(window.location.search);
+      startTransition(() => {
+        setAsset(result.filters.asset ?? "");
+        setDeployment(result.filters.deployment ?? "");
+        setUrlError(result.error);
+        setOffset(0);
+        setReady(true);
+      });
+    };
+    readUrl();
+    window.addEventListener("popstate", readUrl);
+    return () => {
+      window.removeEventListener("popstate", readUrl);
+    };
+  }, []);
   useEffect(() => {
     const guard = requestGuard.current;
     guard.setIdentity(scope);
@@ -99,6 +132,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   }, [scope]);
   const refreshing = useVisibilityPoll(
     async (signal) => {
+      if (!ready) return;
       const guard = requestGuard.current;
       const token = guard.begin();
       setLoading(true);
@@ -135,6 +169,31 @@ function TransfersPageContent({ address }: { address?: string | null }) {
   );
   const pending = loading || refreshing || current === null;
 
+  const updateFilter = (name: "asset" | "deployment", value: string) => {
+    if (name === "asset") setAsset(value);
+    else setDeployment(value);
+    setUrlError(null);
+    const result = validateTransferFilters({ asset, deployment, [name]: value });
+    if (result.error) return;
+    const params = new URLSearchParams(window.location.search);
+    for (const key of ["asset", "deployment"] as const) {
+      const identity = result.filters[key];
+      if (identity) params.set(key, identity);
+      else params.delete(key);
+    }
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  };
+  const clearFilters = () => {
+    setAsset("");
+    setDeployment("");
+    setUrlError(null);
+    const params = new URLSearchParams(window.location.search);
+    params.delete("asset");
+    params.delete("deployment");
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  };
   return (
     <Column>
       <h1 className="display">Transfer history</h1>
@@ -160,11 +219,66 @@ function TransfersPageContent({ address }: { address?: string | null }) {
           setOffset(0);
         }}
       />
+      <div className={styles.identityFilters} role="group" aria-label="Transfer identity filters">
+        <label>
+          Asset identity
+          <input
+            className={styles.searchInput}
+            aria-label="Filter by exact asset identity"
+            placeholder="Issuer or token address"
+            value={asset}
+            onChange={(event) => {
+              updateFilter("asset", event.target.value);
+            }}
+          />
+        </label>
+        <label>
+          Deployment revision
+          <input
+            className={styles.searchInput}
+            aria-label="Filter by deployment revision"
+            placeholder="Router or revision"
+            value={deployment}
+            onChange={(event) => {
+              updateFilter("deployment", event.target.value);
+            }}
+          />
+        </label>
+      </div>
+      <p className={styles.claimNote}>
+        Identity filters apply to the loaded page. Filtering the full history by token or revision
+        is unavailable from this indexer. Continue through the pages to inspect more records.
+      </p>
+      {(asset || deployment || filterError) && (
+        <button type="button" className={styles.readAction} onClick={clearFilters}>
+          Clear identity filters
+        </button>
+      )}
+      {filterError && <p role="alert">{filterError}</p>}
+      {error && (
+        <>
+          <p role="alert">{error}</p>
+          <button
+            type="button"
+            className={styles.readAction}
+            onClick={() => {
+              setRetry((value) => value + 1);
+            }}
+          >
+            Retry history lookup
+          </button>
+        </>
+      )}
+      {!error && !filterError && response && (asset || deployment) && transfers.length === 0 && (
+        <p role="alert">
+          No record on this loaded page matches the selected identity. Later pages and incomplete
+          history may contain more records.
+        </p>
+      )}
       {refreshing && transfers.length > 0 && (
         <p role="status">Refreshing indexed history before changing pages...</p>
       )}
-      {error && <p role="alert">{error}</p>}
-      {pending && transfers.length === 0 ? (
+      {filterError ? null : pending && transfers.length === 0 ? (
         <p role="status">Loading indexed transfers...</p>
       ) : (
         <TransferList transfers={transfers} />
@@ -182,7 +296,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
         <span>Page {offset / 20 + 1}</span>
         <button
           type="button"
-          disabled={transfers.length < 20 || pending}
+          disabled={(response?.transfers.length ?? 0) < 20 || pending}
           onClick={() => {
             setOffset((value) => value + 20);
           }}

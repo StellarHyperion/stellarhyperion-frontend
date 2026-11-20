@@ -6,8 +6,16 @@ import {
   fetchClaims,
   fetchTransferByTx,
   fetchTransfers,
+  filterTransfers,
   type FormattedTransfer,
 } from "../src/api/backend";
+import {
+  readTransferFilters,
+  validateTransferFilters,
+  filterSupportError,
+  transferRowIdentity,
+} from "../src/lib/transfer-filters";
+import { Keypair } from "@stellar/stellar-sdk";
 import { getEvidenceTimeline, hasVerifiedDestinationEvidence } from "../src/lib/evidence";
 import { formatTokenAmount, formatTokenIdentity } from "../src/lib/format";
 import {
@@ -121,7 +129,24 @@ describe("Real indexer client", () => {
   it("treats a genuine 404 lookup as not found", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 404 })));
-    expect(await fetchTransferByTx("missing")).toBeNull();
+    expect(await fetchTransferByTx("a".repeat(64))).toBeNull();
+  });
+  it("rejects invalid hashes before making any indexer request", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    for (const hash of ["", "a".repeat(63), "g".repeat(64), "0x" + "a".repeat(64), "a/b"]) {
+      await expect(fetchTransferByTx(hash)).rejects.toThrow("64-character");
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("canonicalizes a valid hash while retaining transport failure as unavailable", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const fetcher = vi.fn().mockResolvedValue(new Response("{}", { status: 503 }));
+    vi.stubGlobal("fetch", fetcher);
+    await expect(fetchTransferByTx("AB".repeat(32))).rejects.toThrow("HTTP 503");
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      "https://indexer.example/v1/transfers/by-tx/" + "ab".repeat(32),
+    );
   });
   it("passes search and pagination to the backend without altering amounts", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example/");
@@ -241,6 +266,55 @@ describe("transfer evidence", () => {
     ...overrides,
   });
 
+  it("validates shareable exact identities and rejects symbols, duplicates and malformed revisions", () => {
+    const issuer = Keypair.random().publicKey();
+    expect(
+      readTransferFilters("?asset=" + encodeURIComponent("USDC:" + issuer)).filters.asset,
+    ).toBe("USDC:" + issuer);
+    expect(
+      validateTransferFilters({ asset: " 0x" + "A".repeat(40) + " ", deployment: "B".repeat(64) }),
+    ).toEqual({
+      filters: { asset: "0x" + "a".repeat(40), deployment: "b".repeat(64) },
+      error: null,
+    });
+    for (const query of [
+      "?asset=USDC",
+      "?asset=USDC%3Abad",
+      "?deployment=latest",
+      "?asset=&asset=",
+      "?deployment=&deployment=",
+    ]) {
+      expect(readTransferFilters(query).error).not.toBeNull();
+    }
+  });
+  it("separates identical nonces across deployments without changing integer amounts", () => {
+    const base = transfer();
+    const first = {
+      ...base,
+      origin: {
+        ...base.origin,
+        router: "0x" + "A".repeat(40),
+        revision: "B".repeat(64),
+        token: "0x" + "1".repeat(40),
+      },
+    };
+    const second = {
+      ...first,
+      origin: { ...first.origin, router: "0x" + "2".repeat(40), revision: "C".repeat(64) },
+    };
+    const third = { ...first, origin: { ...first.origin, token: "0x" + "3".repeat(40) } };
+    expect(transferRowIdentity(first)).not.toBe(transferRowIdentity(second));
+    expect(transferRowIdentity(first)).not.toBe(transferRowIdentity(third));
+    expect(filterTransfers([first, second], { deployment: "b".repeat(64) })).toEqual([first]);
+    expect(filterTransfers([first, third], { asset: "0x" + "1".repeat(40) })).toEqual([first]);
+    expect(first.origin.netAmount).toBe("9970000");
+  });
+  it("reports missing deployment metadata instead of representing it as no matching history", () => {
+    const base = transfer();
+    expect(filterSupportError([base], { deployment: "b".repeat(64) })).toContain("unavailable");
+    expect(filterSupportError([base], { asset: "0x" + "1".repeat(40) })).toBeNull();
+    expect(filterSupportError([], { deployment: "b".repeat(64) })).toBeNull();
+  });
   it("preserves real destination metadata through the indexer response", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
     const record = transfer({

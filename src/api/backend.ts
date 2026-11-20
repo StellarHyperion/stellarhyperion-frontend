@@ -27,6 +27,9 @@ export interface FormattedTransfer {
     readonly nonce: string;
     readonly sender: string;
     readonly token: string;
+    /** Optional deployment identity supplied by newer indexer contracts. */
+    readonly router?: string | null;
+    readonly revision?: string | null;
     readonly symbol?: string | null;
     readonly decimals?: number | null;
     readonly grossAmount: string;
@@ -162,6 +165,38 @@ export interface TransfersQuery {
   readonly search?: string;
 }
 
+export interface TransferFilters {
+  readonly asset?: string;
+  readonly deployment?: string;
+}
+
+export function filterTransfers(
+  transfers: readonly FormattedTransfer[],
+  filters: TransferFilters,
+): readonly FormattedTransfer[] {
+  const asset = filters.asset?.trim();
+  const deployment = filters.deployment?.trim();
+  return transfers.filter((transfer) => {
+    const assetMatches =
+      !asset ||
+      [transfer.origin.token, transfer.destination.token]
+        .filter((value): value is string => Boolean(value))
+        .some((value) =>
+          /^0x/i.test(value) ? value.toLowerCase() === asset.toLowerCase() : value === asset,
+        );
+    const deploymentMatches =
+      !deployment ||
+      [transfer.origin.router, transfer.origin.revision]
+        .filter((value): value is string => Boolean(value))
+        .some((value) =>
+          /^0x/i.test(value) || /^[0-9a-f]{64}$/i.test(value)
+            ? value.toLowerCase() === deployment.toLowerCase()
+            : value === deployment,
+        );
+    return assetMatches && deploymentMatches;
+  });
+}
+
 export function getRouteName(route: number): string {
   switch (route) {
     case 0:
@@ -241,9 +276,7 @@ export function fetchTransferByTx(
   hash: string,
   signal?: AbortSignal,
 ): Promise<FormattedTransfer | null> {
-  return request<FormattedTransfer>(
-    `/v1/transfers/by-tx/${encodeURIComponent(hash)}`,
-    true,
-    signal,
-  );
+  if (!/^[0-9a-f]{64}$/i.test(hash))
+    return Promise.reject(new Error("Enter a 64-character Stellar transaction hash."));
+  return request<FormattedTransfer>(`/v1/transfers/by-tx/${hash.toLowerCase()}`, true, signal);
 }
