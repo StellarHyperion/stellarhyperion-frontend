@@ -1,0 +1,14 @@
+{
+  "sources": {
+    "src/wallets/stellar/context.tsx": "792e4bf49ffe3f981939adc536b07afd2765dd1cfce97ab765edf3aeda5fe10c",
+    "src/wallets/stellar/sdk.ts": "9137c2e2da4eeea709ccc1145b2f79d49fd640d2bdb62307b0f9118abdda30f8",
+    "src/wallets/stellar/signature.ts": "5e698dea0d64e708845ed3b511fc8d68adbadd73102b2cb1f0e7d1df8b168b11",
+    "src/wallets/stellar/timeout.ts": "d0e7268a242093c753288955b8819a656a95755a7a5f715dabd9270aba4e9b4b",
+    "src/wallets/stellar/WalletConnectionRecovery.tsx": "54c0ed209761796f0b610344cbf97e07b04e43c5cb3c89c98f48d97b65314ba6",
+    "src/wallets/stellar/WalletPicker.module.css": "c01b6142e6251e4ca338a2d69847ea6c31c64e53595591f81fcfc80df702cedd",
+    "src/components/wallet/StellarWalletButton.tsx": "a956f1ef69ae31a42214e68accd8397e277850129c20e318888b10dae99b6be0",
+    "src/components/common/Dialog.tsx": "ec7ca654ac1b1aaa7ff049589c834353e042eddf94dde967fa9db66d73b0d327",
+    "src/app/globals.css": "15024b300b2d45decdc9a3c333fa3c7935d609bc3f7dd9c62664cbbef5fffc21"
+  },
+  "scope": "Actual wallet provider/button/SDK mounted in React with mocked Freighter transport. Four race cases passed; generated local Testnet signature, no submission. Complete production Bridge owner/checkpoint behavior is separately covered in source-evidence.json."
+}

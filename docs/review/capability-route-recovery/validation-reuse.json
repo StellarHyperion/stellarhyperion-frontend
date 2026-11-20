@@ -1,0 +1,63 @@
+{
+  "full_validation_source": "4958de43a4710be5cb19189622490b4474aa16a9",
+  "full_validation": {
+    "head": "4958de43a4710be5cb19189622490b4474aa16a9",
+    "lock_sha256": "01fb86074774817c16d680d8d19443a2a4d5443ab4798c216bd2988b94fa1063",
+    "commands": [
+      {
+        "command": ["npm", "run", "fmt:check"],
+        "exit": 0,
+        "seconds": 16.2,
+        "log": "/home/dotmantissa/hyperion/.maintenance/review-all-20261119/frontend216-current-0-fmt-check.log"
+      },
+      {
+        "command": ["npm", "run", "house"],
+        "exit": 0,
+        "seconds": 1.11,
+        "log": "/home/dotmantissa/hyperion/.maintenance/review-all-20261119/frontend216-current-1-house.log"
+      },
+      {
+        "command": ["npm", "run", "contrast"],
+        "exit": 0,
+        "seconds": 0.92,
+        "log": "/home/dotmantissa/hyperion/.maintenance/review-all-20261119/frontend216-current-2-contrast.log"
+      },
+      {
+        "command": ["npm", "run", "test", "--", "--maxWorkers=1"],
+        "exit": 0,
+        "seconds": 62.5,
+        "log": "/home/dotmantissa/hyperion/.maintenance/review-all-20261119/frontend216-current-3-test.log"
+      },
+      {
+        "command": [
+          "npm",
+          "run",
+          "lint",
+          "--",
+          "--cache",
+          "--cache-location",
+          "/tmp/hyperion-frontend216-eslintcache"
+        ],
+        "exit": 0,
+        "seconds": 82.63,
+        "log": "/home/dotmantissa/hyperion/.maintenance/review-all-20261119/frontend216-current-4-lint.log"
+      },
+      {
+        "command": ["npm", "run", "typecheck"],
+        "exit": 0,
+        "seconds": 28.01,
+        "log": "/home/dotmantissa/hyperion/.maintenance/review-all-20261119/frontend216-current-5-typecheck.log"
+      },
+      {
+        "command": ["npm", "run", "build"],
+        "exit": 0,
+        "seconds": 77.96,
+        "log": "/home/dotmantissa/hyperion/.maintenance/review-all-20261119/frontend216-current-6-build.log"
+      }
+    ],
+    "complete": true
+  },
+  "post_validation_executable_diff": "diff --git a/src/components/bridge/Bridge.module.css b/src/components/bridge/Bridge.module.css\nindex f45ab16..bd87557 100644\n--- a/src/components/bridge/Bridge.module.css\n+++ b/src/components/bridge/Bridge.module.css\n@@ -562,6 +562,9 @@\n   padding-top: 12px;\n   border-top: 1px solid var(--edge-color);\n }\n+.summary > div:last-child dt {\n+  flex-shrink: 0;\n+}\n .summary > div:last-child dd {\n   color: var(--text-primary);\n   font-weight: 500;\n",
+  "post_validation_changes": "Inherited three-line quote-scope label CSS only. Verified by frontend215 final production build and current Bridge fee browser; all recovery fixture source fingerprints match current files. Removed four unused history/detail/visibility metadata fingerprints; fixture never imports those files.",
+  "browser_scope": "Actual recovery components under React error boundary; full Next runtime error routing untested."
+}
