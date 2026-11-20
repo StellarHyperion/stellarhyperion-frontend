@@ -802,11 +802,29 @@ function PendingTransferCard({
         setError(null);
       } else if (active()) {
         const message = errorMessage(cause);
-
-        setError(message);
+        setError(
+          `Conversion remains confirmed on Stellar. Fresh bridge attempt failed before submission: ${message}. Its USDC remains in your wallet.`,
+        );
       }
     } finally {
       if (requestRef.current === controller) requestRef.current = null;
+      setChecking(false);
+    }
+  };
+  const resetRecovered = async () => {
+    if (checking || busy || requestRef.current) return;
+    setChecking(true);
+    try {
+      if (
+        checkpoint.stage === "bridge" &&
+        visibleCurrent &&
+        (visibleCurrent.status === "confirmed" || visibleCurrent.status === "failed")
+      )
+        await rememberLocalTransfer({ checkpoint, sourceStatus: visibleCurrent.status });
+      await onReset();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
       setChecking(false);
     }
   };
