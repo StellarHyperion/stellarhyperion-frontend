@@ -784,6 +784,11 @@ describe("Interrupted transfer recovery", () => {
   ])("refuses a corrupted recovery record %j", (change) => {
     expect(parseCheckpoint(JSON.stringify({ ...checkpoint, ...change }))).toBeNull();
   });
+  it("never lets a conversion-only checkpoint stand in for a completed cross-chain transfer", () => {
+    const conversionOnly = parseCheckpoint(JSON.stringify({ ...checkpoint, stage: "conversion" }));
+    expect(conversionOnly?.stage).toBe("conversion");
+    expect(conversionOnly?.stage).not.toBe("bridge");
+  });
   it("never lets a newly selected asset reuse another asset's converted-USDC recovery data", () => {
     expect(checkpointForAsset(parseCheckpoint(JSON.stringify(checkpoint)), XLM)).toEqual(
       checkpoint,
@@ -1211,4 +1216,42 @@ describe("Horizon search cancellation", () => {
     expect(assets.map((asset) => asset.id)).toEqual([USDC.id]);
     vi.unstubAllGlobals();
   });
+});
+describe("Live Stellar liquidity acceptance proof schema", () => {
+  // Explicit opt-in only: reads real Stellar Testnet Horizon liquidity, never signs or spends.
+  // Normal checks stay credential-free and skip this suite.
+  const liveEnabled = process.env.HYPERION_LIVE_TESTNET === "1";
+  it.skipIf(!liveEnabled)(
+    "keeps issuer-specific USDC identity and exact integer amounts on a real liquid path",
+    async () => {
+      vi.unstubAllGlobals();
+      const amount = 10000000n;
+      const conversion = await quoteConversion(XLM, amount);
+      expect(conversion.sourceMax).toBe(amount);
+      expect(conversion.usdcAmount).toBeGreaterThan(0n);
+      const tx = new TransactionBuilder(new Account(TESTNET.reader, "1"), {
+        fee: "100",
+        networkPassphrase: TESTNET.networkPassphrase,
+      });
+      for (const operation of conversionOperations(TESTNET.reader, conversion, true))
+        tx.addOperation(operation);
+      const decoded = TransactionBuilder.fromXdr(
+        tx.setTimeout(60).build().toXdr(),
+        TESTNET.networkPassphrase,
+      );
+      const payment = decoded.operations.find(
+        (operation) => operation.type === "pathPaymentStrictReceive",
+      );
+      if (payment?.type !== "pathPaymentStrictReceive")
+        throw new Error("Missing conversion operation.");
+      // Issuer-specific token identity: the real liquid path must still resolve to the exact
+      // canonical USDC issuer, never a different asset that merely shares the USDC code.
+      expect(payment.destAsset.getIssuer()).toBe(USDC.issuer);
+      // Exact integer amounts: Stellar's classic amount strings never carry scientific notation
+      // or extra rounding beyond the fixed seven decimal places.
+      expect(payment.sendMax).toMatch(/^\d+\.\d{7}$/);
+      expect(payment.destAmount).toMatch(/^\d+\.\d{7}$/);
+    },
+    30_000,
+  );
 });

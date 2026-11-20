@@ -1,7 +1,7 @@
 {
   "sources": {
-    "src/components/bridge/Bridge.tsx": "103043a8685a71bdb0dc371ec36c3c6c2f2868f040a57bf5109146380c688e0d",
-    "src/components/bridge/Bridge.module.css": "1a6d3242539fb9bdeb55df8f6a7978a4db3ac857c7a52ecc5e3418d9d52227e4",
+    "src/components/bridge/Bridge.tsx": "bd82164a7ef3f45a5ee2279e13a3c3f2fa158b1f05f0654c4fec806ff3d7de79",
+    "src/components/bridge/Bridge.module.css": "f4a6694d7ecac4935d075c5bc1c88deac0a5b4c6f3ba36c1b256881ec42f8ac6",
     "src/contracts/stellar.ts": "56e9c912a7e6bba083c8f2cf0f704efd5d6204fe2ea01cf5c02305cf669652cc",
     "src/config/testnet.ts": "2078560491eb1b3d3ed6781ca664f25f830c9f5f9e79f2769674d5ba918247a8"
   },
