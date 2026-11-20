@@ -18,6 +18,7 @@ export function StellarWalletButton() {
     address,
     walletId,
     error,
+    networkMismatch,
     pendingSigningRequest,
     rememberedWallet,
     preferenceError,
@@ -116,10 +117,17 @@ export function StellarWalletButton() {
       >
         <span className={styles.dot} />
         <span>{shortAddress}</span>
-        <span className={styles.network}>{pendingSigningRequest ? "signing..." : "(testnet)"}</span>
+        <span className={styles.network}>
+          {pendingSigningRequest ? "signing..." : networkMismatch ? "(wrong network)" : "(testnet)"}
+        </span>
       </button>
 
-      {preferenceError && !menuOpen && (
+      {networkMismatch && !menuOpen && (
+        <p role="alert" className={styles.preferenceNotice}>
+          {networkMismatch}
+        </p>
+      )}
+      {preferenceError && !menuOpen && !networkMismatch && (
         <p role="alert" className={styles.preferenceNotice}>
           {preferenceError}
         </p>
@@ -131,6 +139,11 @@ export function StellarWalletButton() {
             {address && <CopyableAddress value={address} label="stellar account" />}
           </div>
 
+          {networkMismatch && (
+            <p role="alert" className={styles.preferenceError}>
+              {networkMismatch}
+            </p>
+          )}
           {preference}
           <div className={styles.diagnosticsSection}>
             <span className={styles.diagTitle}>adapter diagnostics</span>

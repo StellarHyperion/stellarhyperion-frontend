@@ -6,9 +6,11 @@ import {
   createSigningCoordinator,
   WALLET_SIGN_TIMEOUT_MS,
   walletAddress,
+  walletNetwork,
+  walletCurrentAddress,
   walletSign,
 } from "../src/wallets/stellar/sdk";
-import { verifyWalletSignature } from "../src/wallets/stellar/signature";
+import { assertWalletNetwork, verifyWalletSignature } from "../src/wallets/stellar/signature";
 import {
   withTimeout,
   WalletTimeoutError,
@@ -28,7 +30,12 @@ const api = vi.hoisted(() => ({
   },
   albedo: { publicKey: vi.fn(), tx: vi.fn() },
   xbull: { connect: vi.fn(), sign: vi.fn(), closeConnections: vi.fn() },
-  lobstr: { isConnected: vi.fn(), getPublicKey: vi.fn(), signTransaction: vi.fn() },
+  lobstr: {
+    isConnected: vi.fn(),
+    getPublicKey: vi.fn(),
+    signTransaction: vi.fn(),
+    getConnectedWallet: vi.fn(),
+  },
 }));
 vi.mock("@stellar/freighter-api", () => api.freighter);
 vi.mock("@albedo-link/intent", () => ({ default: api.albedo }));
@@ -40,7 +47,6 @@ vi.mock("@creit.tech/xbull-wallet-connect", () => ({
   },
 }));
 vi.mock("@lobstrco/signer-extension-api", () => api.lobstr);
-
 const signer = Keypair.random();
 function envelope() {
   const tx = new TransactionBuilder(new Account(signer.publicKey(), "0"), {
@@ -70,8 +76,33 @@ beforeEach(() => {
   });
   api.lobstr.isConnected.mockResolvedValue(true);
   api.lobstr.getPublicKey.mockResolvedValue(signer.publicKey());
+  api.lobstr.getConnectedWallet.mockResolvedValue({
+    publicKey: signer.publicKey(),
+    network: "stellar",
+  });
 });
 describe("Direct Stellar wallet adapters", () => {
+  it("detects a changed Freighter account without requesting access", async () => {
+    const changed = Keypair.random().publicKey();
+    api.freighter.getAddress.mockResolvedValue({ address: changed });
+    expect(await walletCurrentAddress("freighter")).toBe(changed);
+    expect(api.freighter.requestAccess).not.toHaveBeenCalled();
+  });
+  it("detects a changed LOBSTR account and reports unsupported silent popup checks", async () => {
+    const changed = Keypair.random().publicKey();
+    api.lobstr.getPublicKey.mockResolvedValue(changed);
+    expect(await walletCurrentAddress("lobstr")).toBe(changed);
+    expect(await walletCurrentAddress("albedo")).toBeUndefined();
+    expect(await walletCurrentAddress("xbull")).toBeUndefined();
+    expect(api.albedo.publicKey).not.toHaveBeenCalled();
+    expect(api.xbull.connect).not.toHaveBeenCalled();
+  });
+  it("reports a removed extension as disconnected without opening a prompt", async () => {
+    api.freighter.isConnected.mockResolvedValue({ isConnected: false });
+    expect(await walletCurrentAddress("freighter")).toBeNull();
+    expect(api.freighter.getAddress).not.toHaveBeenCalled();
+    expect(api.freighter.requestAccess).not.toHaveBeenCalled();
+  });
   it("releases signing ownership when an adapter throws before returning a promise", async () => {
     const coordinator = createSigningCoordinator();
     await expect(
@@ -587,5 +618,127 @@ describe("Bounded wallet adapter request timeouts", () => {
     // uncertain and moved on. It must be dropped, not retroactively resubmitted or trusted.
     resolveLate?.({ signedTxXdr: signed });
     await vi.advanceTimersByTimeAsync(0);
+  });
+});
+
+describe("Wallet network detection", () => {
+  it("reports the testnet passphrase from Freighter when it is on Testnet", async () => {
+    expect(await walletNetwork("freighter")).toBe(TESTNET.networkPassphrase);
+    expect(api.freighter.getNetworkDetails).toHaveBeenCalledOnce();
+  });
+
+  it("reports a non-testnet passphrase from Freighter when switched to mainnet", async () => {
+    const mainnet = "Public Global Stellar Network ; September 2015";
+    api.freighter.getNetworkDetails.mockResolvedValue({ networkPassphrase: mainnet });
+    expect(await walletNetwork("freighter")).toBe(mainnet);
+  });
+
+  it("returns null for Freighter when getNetworkDetails reports an error", async () => {
+    api.freighter.getNetworkDetails.mockResolvedValue({
+      networkPassphrase: "",
+      error: { message: "Not connected" },
+    });
+    expect(await walletNetwork("freighter")).toBeNull();
+  });
+
+  it("returns null for Freighter when it throws", async () => {
+    api.freighter.getNetworkDetails.mockRejectedValue(new Error("Extension removed"));
+    expect(await walletNetwork("freighter")).toBeNull();
+  });
+
+  it("returns the testnet passphrase for LOBSTR when it reports stellar network", async () => {
+    api.lobstr.getConnectedWallet.mockResolvedValue({
+      publicKey: signer.publicKey(),
+      network: "stellar",
+    });
+    expect(await walletNetwork("lobstr")).toBe(TESTNET.networkPassphrase);
+    expect(api.lobstr.getConnectedWallet).toHaveBeenCalledOnce();
+  });
+
+  it("returns null for LOBSTR when getConnectedWallet returns null (not connected)", async () => {
+    api.lobstr.getConnectedWallet.mockResolvedValue(null);
+    expect(await walletNetwork("lobstr")).toBeNull();
+  });
+
+  it("returns a non-testnet marker for LOBSTR when it reports ripple network", async () => {
+    api.lobstr.getConnectedWallet.mockResolvedValue({
+      publicKey: signer.publicKey(),
+      network: "ripple",
+    });
+    const result = await walletNetwork("lobstr");
+    expect(result).not.toBeNull();
+    expect(result).not.toBe(TESTNET.networkPassphrase);
+  });
+
+  it("returns null for LOBSTR when it throws", async () => {
+    api.lobstr.getConnectedWallet.mockRejectedValue(new Error("Extension removed"));
+    expect(await walletNetwork("lobstr")).toBeNull();
+  });
+
+  it("returns null for Albedo (no network query API)", async () => {
+    expect(await walletNetwork("albedo")).toBeNull();
+    expect(api.albedo.publicKey).not.toHaveBeenCalled();
+  });
+
+  it("returns null for xBull (no network query API)", async () => {
+    expect(await walletNetwork("xbull")).toBeNull();
+    expect(api.xbull.connect).not.toHaveBeenCalled();
+  });
+
+  it("walletSign blocks Freighter signing when getNetworkDetails reports mainnet", async () => {
+    const mainnet = "Public Global Stellar Network ; September 2015";
+    api.freighter.getNetworkDetails.mockResolvedValue({ networkPassphrase: mainnet });
+    await expect(walletSign("freighter", envelope().original, signer.publicKey())).rejects.toThrow(
+      "Testnet",
+    );
+    expect(api.freighter.signTransaction).not.toHaveBeenCalled();
+  });
+
+  it("walletSign is not blocked for Albedo when network query returns null", async () => {
+    const { original, signed } = envelope();
+    api.albedo.publicKey.mockResolvedValue({ pubkey: signer.publicKey() });
+    api.albedo.tx.mockResolvedValue({ signed_envelope_xdr: signed });
+    // Albedo returns null from walletNetwork, so signing must proceed and reach the wallet.
+    await expect(walletSign("albedo", original, signer.publicKey())).resolves.toEqual({
+      signedTxXdr: signed,
+    });
+    expect(api.albedo.tx).toHaveBeenCalledOnce();
+  });
+
+  it("respects an AbortSignal and returns null instead of throwing on cancellation", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("Cancelled"));
+    // walletNetwork catches all errors and returns null; a cancelled signal should not propagate.
+    expect(await walletNetwork("freighter", controller.signal)).toBeNull();
+  });
+
+  it("assertWalletNetwork allows matching network passphrase and null", () => {
+    expect(() => {
+      assertWalletNetwork(TESTNET.networkPassphrase);
+    }).not.toThrow();
+    expect(() => {
+      assertWalletNetwork(null);
+    }).not.toThrow();
+  });
+
+  it("assertWalletNetwork throws actionable message when wrong network is selected", () => {
+    expect(() => {
+      assertWalletNetwork(
+        "Public Global Stellar Network ; September 2015",
+        TESTNET.networkPassphrase,
+        "Freighter",
+      );
+    }).toThrow("Switch Freighter to Stellar Testnet before signing.");
+  });
+
+  it("walletSign blocks LOBSTR signing when connected to wrong network", async () => {
+    api.lobstr.getConnectedWallet.mockResolvedValue({
+      publicKey: signer.publicKey(),
+      network: "ripple",
+    });
+    await expect(walletSign("lobstr", envelope().original, signer.publicKey())).rejects.toThrow(
+      "Switch LOBSTR to Stellar Testnet before signing.",
+    );
+    expect(api.lobstr.signTransaction).not.toHaveBeenCalled();
   });
 });

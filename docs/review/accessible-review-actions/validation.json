@@ -1,0 +1,15 @@
+{
+  "source": "d4ac343f8c3ad8053cccf2bdcb9d9e682a0c288e",
+  "command": "npm run check",
+  "node": "22.22.1",
+  "result": "PASS",
+  "tests": 509,
+  "funded_skips": 4,
+  "browser": "frontend221-final-current-browser-retry.log PASS",
+  "captures_inspected": 3,
+  "source_fingerprints_verified": 11,
+  "wallet_bytes": 119262,
+  "wallet_limit": 450000,
+  "transaction_bytes": 1098386,
+  "transaction_limit": 1200000
+}

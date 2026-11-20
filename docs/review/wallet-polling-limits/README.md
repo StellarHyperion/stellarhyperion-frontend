@@ -1,0 +1,20 @@
+# Wallet recovery and polling verification
+
+This review covers original PR #211 and issues #45, #135 and #149. It preserves the original contributor commits, validated transfer recovery work and the merged mobile review footer from PR #248.
+
+The actual wallet provider, adapter logic, recovery component, wallet button, native dialog, transfer history and transaction detail components were compiled from the current source for Chromium 158.0.8127.18. The fixture supplies a mock Freighter transport and read-only indexer/RPC responses. Next links render as anchors. Document visibility transitions are synthesized in the browser; this is not a live signing, provider pricing or on-chain spending test.
+
+Browser assertions verify denied access, missing extensions, blocked popups and unsupported network guidance; focus on the resulting status; Tab to retry; an explicit retry count; wallet selection focus; and returning focus to the opener after cancellation. The official installation link is only offered as an action. No failure opens an automatic popup or exposes arbitrary adapter details.
+
+The actual transfer history immediately refreshes after a visibility transition, blocks pagination until that request settles, retains the public pending checkpoint and ignores late search results. The actual detail page keeps claim actions blocked while refreshing and after an indexer failure, retains the public source hash, and discards results from a previous transaction after navigation. Desktop and mobile captures were inspected and have no horizontal overflow. Mock claims and hashes in these captures are fixture data.
+
+The deterministic suite verifies one timer and request owner, hidden minute budgets, coalesced foreground refreshes, cancellation and cleanup. Provider-route regressions verify shared concurrency admission despite forged forwarding headers, structured `429` retry guidance, exact fee units and destination binding, URL limits, bounded streamed response bodies and release after completed requests. These tests mock provider responses and do not establish live prices.
+
+Source fingerprints and browser scope are recorded in [browser-evidence.json](browser-evidence.json). Captures:
+
+- [Denied connection and safe details](denied-desktop.png)
+- [Missing extension recovery on mobile](missing-mobile.png)
+- [Failed status refresh with claim action blocked](failed-refresh-desktop.png)
+- [Fresh transaction detail on mobile](fresh-detail-mobile.png)
+
+All seven supported Node22 commands passed on source 2deebbe99c8335a21e15775c82baf58e04f9b4f4: formatting, house, contrast, 408 deterministic tests with four opt-in live skips, strict lint, TypeScript and production build. Screenshot inspection then found narrow wallet names collapsing vertically; the current grid keeps names readable and availability on a separate row, with 44px wallet/install controls. The current browser passed explicit wallet-label width and height assertions and refreshed inspected captures. The final CSS production build also passed at source 4091e147edacc3ffcf66c5d1d1abbea688beb98a, with fresh formatting, house and contrast checks. Source evidence is in `validation-reuse.json`. The Impeccable detector returned no findings for the changed recovery and transfer surfaces.

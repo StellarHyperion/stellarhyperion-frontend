@@ -1,18 +1,29 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { parseLocalTransfers, useLocalTransfers } from "../../lib/local-transfers";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { Column } from "../../components/chrome";
 import {
   fetchIndexerMetrics,
+  reconcileTransfers,
+  type ReconciliationResult,
   fetchTransfers,
   cursorFreshness,
+  filterTransfers,
   type IndexerMetrics,
   type TransfersResponse,
 } from "../../api";
 import { TransferList } from "../../components/transfers";
 import { errorMessage } from "../../contracts";
+import { useVisibilityPoll } from "../../lib/visibility-poll";
 import { ActivityRequestGuard } from "../../lib/activity-request";
 import { useStellarWallet } from "../../wallets";
 import styles from "./page.module.css";
+import {
+  readTransferFilters,
+  validateTransferFilters,
+  filterSupportError,
+} from "../../lib/transfer-filters";
 
 function ActivityCoverage({
   response,
@@ -70,65 +81,144 @@ export default function TransfersPage() {
   return <TransfersPageContent key={address ?? "public"} address={address} />;
 }
 function TransfersPageContent({ address }: { address?: string | null }) {
+  const localRaw = useLocalTransfers();
+  const localReferences = parseLocalTransfers(localRaw).filter(
+    (reference) => reference.checkpoint.account === address,
+  );
+  const localIdentity = JSON.stringify(localReferences);
   const [search, setSearch] = useState("");
+  const [asset, setAsset] = useState("");
+  const [deployment, setDeployment] = useState("");
   const [offset, setOffset] = useState(0);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [cursorHistory, setCursorHistory] = useState<(string | null)[]>([]);
+  const [ready, setReady] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   const [loading, setLoading] = useState(true);
-  const scope = JSON.stringify([address ?? null, search, offset]);
+  const scope = JSON.stringify([address ?? null, search, offset, cursor, retry, localIdentity]);
   const [snapshot, setSnapshot] = useState<{
     scope: string;
     response: TransfersResponse | null;
+    reconciled: ReconciliationResult[];
     metrics: IndexerMetrics | null;
     metricsError: string | null;
     error: string | null;
   } | null>(null);
   const current = snapshot?.scope === scope ? snapshot : null;
   const response = current?.response ?? null;
-  const transfers = response?.transfers ?? [];
+  const reconciled = current?.reconciled ?? [];
+  const validated = validateTransferFilters({ asset, deployment });
+  const filterError =
+    urlError ?? validated.error ?? filterSupportError(response?.transfers ?? [], validated.filters);
+  const transfers = filterError
+    ? []
+    : filterTransfers(response?.transfers ?? [], validated.filters);
   const metrics = current?.metrics ?? null;
   const metricsError = current?.metricsError ?? null;
   const error = current?.error ?? null;
-  const pending = loading || current === null;
   const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
+    const readUrl = () => {
+      const result = readTransferFilters(window.location.search);
+      startTransition(() => {
+        setAsset(result.filters.asset ?? "");
+        setDeployment(result.filters.deployment ?? "");
+        setUrlError(result.error);
+        setOffset(0);
+        setCursor(null);
+        setCursorHistory([]);
+        setReady(true);
+      });
+    };
+    readUrl();
+    window.addEventListener("popstate", readUrl);
+    return () => {
+      window.removeEventListener("popstate", readUrl);
+    };
+  }, []);
+  useEffect(() => {
     const guard = requestGuard.current;
-    guard.setIdentity(address ?? null);
+    guard.setIdentity(scope);
     guard.invalidate();
-    const load = async () => {
+    return () => {
+      guard.invalidate();
+    };
+  }, [scope]);
+  const refreshing = useVisibilityPoll(
+    async (signal) => {
+      if (!ready) return;
+      const guard = requestGuard.current;
       const token = guard.begin();
+      setLoading(true);
       try {
-        const [historyResult, metricsResult] = await Promise.allSettled([
-          fetchTransfers({
-            ...(address ? { sender: address } : {}),
-            search,
-            limit: "20",
-            offset: String(offset),
-          }),
-          fetchIndexerMetrics(),
+        const [historyResult, metricsResult, localResult] = await Promise.allSettled([
+          fetchTransfers(
+            {
+              ...(address ? { sender: address } : {}),
+              search,
+              limit: "20",
+              ...(cursor ? { cursor } : { offset: String(offset) }),
+            },
+            signal,
+          ),
+          fetchIndexerMetrics(signal),
+          address ? reconcileTransfers(address, localReferences, signal) : Promise.resolve([]),
         ]);
-        if (!guard.isCurrent(token)) return;
+        if (signal.aborted || !guard.isCurrent(token)) return;
         setSnapshot({
           scope,
-          response: historyResult.status === "fulfilled" ? historyResult.value : null,
+          response:
+            historyResult.status === "fulfilled"
+              ? {
+                  ...historyResult.value,
+                  transfers: historyResult.value.transfers.filter(
+                    (record) => !address || record.origin.sender === address,
+                  ),
+                }
+              : null,
+          reconciled: localResult.status === "fulfilled" ? localResult.value : [],
           error: historyResult.status === "rejected" ? errorMessage(historyResult.reason) : null,
           metrics: metricsResult.status === "fulfilled" ? metricsResult.value : null,
           metricsError:
             metricsResult.status === "rejected" ? errorMessage(metricsResult.reason) : null,
         });
       } finally {
-        if (guard.isCurrent(token)) setLoading(false);
+        if (!signal.aborted && guard.isCurrent(token)) setLoading(false);
       }
-    };
-    const delay = setTimeout(() => {
-      setLoading(true);
-      void load();
-    }, 300);
-    const timer = setInterval(() => void load(), 10_000);
-    return () => {
-      guard.invalidate();
-      clearTimeout(delay);
-      clearInterval(timer);
-    };
-  }, [address, offset, search, scope]);
+    },
+    10_000,
+    60_000,
+    scope,
+    300,
+  );
+  const pending = loading || refreshing || current === null;
+
+  const updateFilter = (name: "asset" | "deployment", value: string) => {
+    if (name === "asset") setAsset(value);
+    else setDeployment(value);
+    setUrlError(null);
+    const result = validateTransferFilters({ asset, deployment, [name]: value });
+    if (result.error) return;
+    const params = new URLSearchParams(window.location.search);
+    for (const key of ["asset", "deployment"] as const) {
+      const identity = result.filters[key];
+      if (identity) params.set(key, identity);
+      else params.delete(key);
+    }
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  };
+  const clearFilters = () => {
+    setAsset("");
+    setDeployment("");
+    setUrlError(null);
+    const params = new URLSearchParams(window.location.search);
+    params.delete("asset");
+    params.delete("deployment");
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  };
   return (
     <Column>
       <h1 className="display">Transfer history</h1>
@@ -141,6 +231,41 @@ function TransfersPageContent({ address }: { address?: string | null }) {
         Claim numbers appear when a destination router holds funds for recovery. Delivered transfers
         need no claim recovery. Open transfer details to check a claim and its status.
       </p>
+      {localReferences.length > 0 && (
+        <section className={styles.indexerStatus} aria-label="Recent local source references">
+          <h2>Recent local sends</h2>
+          <p>
+            These public source references are retained in this browser. Source confirmation and
+            destination delivery are checked separately.
+          </p>
+          {localReferences.map((reference) => {
+            const result = reconciled.find(
+              (item) => item.reference.checkpoint.txHash === reference.checkpoint.txHash,
+            );
+            return (
+              <article className={styles.localReference} key={reference.checkpoint.txHash}>
+                <Link href={`/transfers/${reference.checkpoint.txHash}`}>
+                  {reference.checkpoint.txHash}
+                </Link>
+                <p>
+                  {reference.sourceStatus === "confirmed"
+                    ? "Source confirmation saved locally."
+                    : reference.sourceStatus === "failed"
+                      ? "Source failure saved locally."
+                      : "Signed source hash; outcome unknown."}
+                </p>
+                <p role="status">
+                  {result?.transfer
+                    ? "Matching indexed reference found. Open details for delivery evidence."
+                    : result?.error
+                      ? `Indexer lookup unavailable: ${result.error} The local source reference is retained.`
+                      : "Not indexed yet. The local source reference is retained."}
+                </p>
+              </article>
+            );
+          })}
+        </section>
+      )}
       {(response !== null || metricsError !== null) && (
         <ActivityCoverage response={response} metrics={metrics} metricsError={metricsError} />
       )}
@@ -152,10 +277,70 @@ function TransfersPageContent({ address }: { address?: string | null }) {
         onChange={(event) => {
           setSearch(event.target.value);
           setOffset(0);
+          setCursor(null);
+          setCursorHistory([]);
         }}
       />
-      {error && <p role="alert">{error}</p>}
-      {pending && transfers.length === 0 ? (
+      <div className={styles.identityFilters} role="group" aria-label="Transfer identity filters">
+        <label>
+          Asset identity
+          <input
+            className={styles.searchInput}
+            aria-label="Filter by exact asset identity"
+            placeholder="Issuer or token address"
+            value={asset}
+            onChange={(event) => {
+              updateFilter("asset", event.target.value);
+            }}
+          />
+        </label>
+        <label>
+          Deployment revision
+          <input
+            className={styles.searchInput}
+            aria-label="Filter by deployment revision"
+            placeholder="Router or revision"
+            value={deployment}
+            onChange={(event) => {
+              updateFilter("deployment", event.target.value);
+            }}
+          />
+        </label>
+      </div>
+      <p className={styles.claimNote}>
+        Identity filters apply to the loaded page. Filtering the full history by token or revision
+        is unavailable from this indexer. Continue through the pages to inspect more records.
+      </p>
+      {(asset || deployment || filterError) && (
+        <button type="button" className={styles.readAction} onClick={clearFilters}>
+          Clear identity filters
+        </button>
+      )}
+      {filterError && <p role="alert">{filterError}</p>}
+      {error && (
+        <>
+          <p role="alert">{error}</p>
+          <button
+            type="button"
+            className={styles.readAction}
+            onClick={() => {
+              setRetry((value) => value + 1);
+            }}
+          >
+            Retry history lookup
+          </button>
+        </>
+      )}
+      {!error && !filterError && response && (asset || deployment) && transfers.length === 0 && (
+        <p role="alert">
+          No record on this loaded page matches the selected identity. Later pages and incomplete
+          history may contain more records.
+        </p>
+      )}
+      {refreshing && transfers.length > 0 && (
+        <p role="status">Refreshing indexed history before changing pages...</p>
+      )}
+      {filterError ? null : pending && transfers.length === 0 ? (
         <p role="status">Loading indexed transfers...</p>
       ) : (
         <TransferList transfers={transfers} />
@@ -163,19 +348,29 @@ function TransfersPageContent({ address }: { address?: string | null }) {
       <div className={styles.filterControls}>
         <button
           type="button"
-          disabled={offset === 0 || pending}
+          disabled={(offset === 0 && cursorHistory.length === 0) || pending}
           onClick={() => {
-            setOffset((value) => Math.max(0, value - 20));
+            if (cursorHistory.length > 0) {
+              setCursor(cursorHistory[cursorHistory.length - 1] ?? null);
+              setCursorHistory((history) => history.slice(0, -1));
+            } else {
+              setOffset((value) => Math.max(0, value - 20));
+            }
           }}
         >
           Previous
         </button>
-        <span>Page {offset / 20 + 1}</span>
+        <span>Page {offset / 20 + cursorHistory.length + 1}</span>
         <button
           type="button"
-          disabled={transfers.length < 20 || pending}
+          disabled={!(response?.hasMore ?? (response?.transfers.length ?? 0) >= 20) || pending}
           onClick={() => {
-            setOffset((value) => value + 20);
+            if (response?.nextCursor) {
+              setCursorHistory((history) => [...history, cursor]);
+              setCursor(response.nextCursor);
+            } else {
+              setOffset((value) => value + 20);
+            }
           }}
         >
           Next
