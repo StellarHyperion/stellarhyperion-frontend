@@ -93,7 +93,9 @@ function TransfersPageContent({ address }: { address?: string | null }) {
     const guard = requestGuard.current;
     guard.setIdentity(scope);
     guard.invalidate();
-    return () => guard.invalidate();
+    return () => {
+      guard.invalidate();
+    };
   }, [scope]);
   const refreshing = useVisibilityPoll(
     async (signal) => {

@@ -27,7 +27,9 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
     const guard = requestGuard.current;
     guard.setIdentity(txHash);
     guard.invalidate();
-    return () => guard.invalidate();
+    return () => {
+      guard.invalidate();
+    };
   }, [txHash]);
   const refreshing = useVisibilityPoll(
     async (signal) => {

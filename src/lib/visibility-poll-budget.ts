@@ -16,23 +16,24 @@ export function createVisibilityPollBudget({
   initialDelay?: number;
   onRefreshing?: (refreshing: boolean) => void;
 }) {
-  let active = true;
+  const state = { active: true, refreshQueued: false };
+  const isActive = () => state.active;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let controller: AbortController | null = null;
-  let refreshQueued = false;
   const clear = () => {
     if (timer !== undefined) clearTimeout(timer);
     timer = undefined;
   };
   const schedule = () => {
     clear();
-    if (active) timer = setTimeout(() => void run(), visible() ? visibleInterval : hiddenInterval);
+    if (state.active)
+      timer = setTimeout(() => void run(), visible() ? visibleInterval : hiddenInterval);
   };
   const run = async () => {
-    if (!active) return;
+    if (!isActive()) return;
     clear();
     if (controller !== null) {
-      refreshQueued = true;
+      state.refreshQueued = true;
       controller.abort();
       return;
     }
@@ -45,12 +46,12 @@ export function createVisibilityPollBudget({
       // Callers retain their domain-specific error state; failed refreshes still have a budget.
     } finally {
       controller = null;
-      if (!active) return;
-      if (refreshQueued && visible()) {
-        refreshQueued = false;
+      if (!isActive()) return;
+      if (state.refreshQueued && visible()) {
+        state.refreshQueued = false;
         void run();
       } else {
-        refreshQueued = false;
+        state.refreshQueued = false;
         onRefreshing(false);
         schedule();
       }
@@ -60,19 +61,19 @@ export function createVisibilityPollBudget({
   else timer = setTimeout(() => void run(), visible() ? Math.max(0, initialDelay) : hiddenInterval);
   return {
     refresh: run,
-    visibilityChanged() {
+    visibilityChanged: () => {
       clear();
       if (visible()) {
         onRefreshing(true);
         void run();
       } else {
-        refreshQueued = false;
+        state.refreshQueued = false;
         controller?.abort();
         if (!controller) schedule();
       }
     },
     stop() {
-      active = false;
+      state.active = false;
       clear();
       controller?.abort();
     },

@@ -75,7 +75,7 @@ describe("bounded public provider admission", () => {
     const inflight = Array.from({ length: 4 }, (_, i) =>
       relay(
         new Request("http://localhost/api/relay-fee", {
-          headers: { "x-forwarded-for": "198.51.100." + i },
+          headers: { "x-forwarded-for": `198.51.100.${i}` },
         }),
       ),
     );
@@ -90,7 +90,9 @@ describe("bounded public provider admission", () => {
     expect(rejected.headers.get("cache-control")).toBe("no-store");
     expect(await rejected.json()).toMatchObject({ code: "RATE_LIMITED", retryAfter: 1 });
     expect(provider).toHaveBeenCalledTimes(4);
-    release.forEach((finish) => finish(new Response("1000")));
+    release.forEach((finish) => {
+      finish(new Response("1000"));
+    });
     expect((await Promise.all(inflight)).every((response) => response.status === 200)).toBe(true);
     vi.stubGlobal(
       "fetch",

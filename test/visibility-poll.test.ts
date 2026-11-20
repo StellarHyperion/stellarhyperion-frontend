@@ -7,7 +7,7 @@ afterEach(() => vi.useRealTimers());
 describe("visibility-aware polling ownership", () => {
   it("reduces hidden work, immediately refreshes on return, and keeps one timer", async () => {
     let visible = true;
-    const work = vi.fn(async () => undefined);
+    const work = vi.fn(() => Promise.resolve());
     const budget = createVisibilityPollBudget({
       callback: work,
       visible: () => visible,
@@ -94,9 +94,7 @@ describe("visibility-aware polling ownership", () => {
     expect(vi.getTimerCount()).toBe(0);
 
     const failed = createVisibilityPollBudget({
-      callback: async () => {
-        throw new Error("offline");
-      },
+      callback: () => Promise.reject(new Error("offline")),
       visible: () => true,
       visibleInterval: 1000,
       hiddenInterval: 60000,

@@ -301,6 +301,9 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
       cancelSignature,
     ],
   );
+  const failedWallet = connectionFailure
+    ? STELLAR_WALLETS.find((wallet) => wallet.id === connectionFailure.wallet)
+    : undefined;
   return (
     <Context.Provider value={value}>
       {children}
@@ -314,7 +317,7 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
             {STELLAR_WALLETS.map((wallet) => (
               <div key={wallet.id} className={styles.row}>
                 <button
-                  ref={wallet.id === STELLAR_WALLETS[0]?.id ? firstWallet : undefined}
+                  ref={wallet.id === STELLAR_WALLETS[0].id ? firstWallet : undefined}
                   type="button"
                   disabled={authorizing !== null}
                   onClick={() => void chooseWallet(wallet.id)}
@@ -335,10 +338,10 @@ export function StellarWalletProvider({ children }: { children: ReactNode }) {
               </div>
             ))}
           </div>
-          {connectionFailure && (
+          {connectionFailure && failedWallet && (
             <WalletConnectionRecovery
               guidance={connectionFailure.guidance}
-              wallet={STELLAR_WALLETS.find((wallet) => wallet.id === connectionFailure.wallet)!}
+              wallet={failedWallet}
               onRetry={() => void chooseWallet(connectionFailure.wallet)}
               onChoose={() => {
                 setError(null);

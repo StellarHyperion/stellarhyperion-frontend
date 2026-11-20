@@ -63,16 +63,14 @@ export async function readFeeResponse(response: Response): Promise<string> {
   const chunks: Uint8Array[] = [];
   let length = 0;
   try {
-    while (true) {
+    for (;;) {
       const chunk = await reader.read();
       if (chunk.done) break;
-      if (
-        !(chunk.value instanceof Uint8Array) ||
-        chunk.value.byteLength > FEE_MAX_RESPONSE_BYTES - length
-      )
+      const bytes: unknown = chunk.value;
+      if (!(bytes instanceof Uint8Array) || bytes.byteLength > FEE_MAX_RESPONSE_BYTES - length)
         throw new Error("Provider fee response exceeds its budget.");
-      chunks.push(chunk.value);
-      length += chunk.value.byteLength;
+      chunks.push(bytes);
+      length += bytes.byteLength;
     }
   } catch (error) {
     await reader.cancel().catch(() => undefined);

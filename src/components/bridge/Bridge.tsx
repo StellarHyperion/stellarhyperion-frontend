@@ -223,7 +223,13 @@ function QuoteDetails({
   const breakdown = quoteBreakdown(quote);
 
   const [now, setNow] = useState(Date.now);
-  useVisibilityPoll(() => setNow(Date.now()), 1000, 60_000);
+  useVisibilityPoll(
+    () => {
+      setNow(Date.now());
+    },
+    1000,
+    60_000,
+  );
   const freshness = quoteFreshness(quote, now);
   return (
     <dl className={styles.summary}>

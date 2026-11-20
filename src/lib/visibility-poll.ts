@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createVisibilityPollBudget, type PollWork } from "./visibility-poll-budget";
 
 /** Run background work less often in hidden tabs and immediately refresh on return. */
@@ -10,7 +10,9 @@ export function useVisibilityPoll(
   initialDelay?: number,
 ) {
   const callbackRef = useRef(callback);
-  callbackRef.current = callback;
+  useLayoutEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
   const [refreshing, setRefreshing] = useState(false);
   useEffect(() => {
     const budget = createVisibilityPollBudget({
