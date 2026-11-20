@@ -1,0 +1,8 @@
+{
+  "current_source_head": "4091e147edacc3ffcf66c5d1d1abbea688beb98a",
+  "full_seven_command_source": "2deebbe99c8335a21e15775c82baf58e04f9b4f4",
+  "full_pipeline": "PASS formatting,house,contrast,408tests/four live skips,strictlint,types,build",
+  "post_full_source_change": "WalletPicker.module.css only: readable wallet-name grid and44px wallet/install targets. Other changes are preserving main ancestry/review metadata.",
+  "current_verification": "Current production build,formatting,house,contrast and actual wallet/history/detail browser PASS; explicit mobile wallet name widths/heights passed and refreshed captures inspected.",
+  "browser_scope": "Actual production wallet/provider/recovery/history/detail; mocked Freighter/indexer/RPC transports, disabled signing, synthetic visibility. Next links are anchors; no live spending."
+}
