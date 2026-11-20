@@ -13,10 +13,10 @@
   },
   "fixture": "Actual complete Bridge/Dialog/picker/provider/SDK fee request lifecycle and actual fee refresh guard. Mock lane/quote/simulation boundaries; execution boundary checks real guard then invokes actual wallet callback, transport rejects approval. Generated local unsigned envelope, mocked Horizon. No broadcast.",
   "captures": {
-    "desktop.png": "5dcbff81d603f51a2eb47540f59f253020a84f5db4a37efc9347f57624be9425",
-    "desktop-fees.png": "04725d698b85eaf1acaaa69128a95b30a3116b559a9a7b233a1d2c1def888591",
-    "mobile-summary.png": "668310b434cb233816952d0e8151f69db3e70e4bd02cf6d4c1ccf56bcf71280d",
-    "mobile-fees.png": "302f33f1345738c8dcf89dc59167c5766f7badb686953406c2aaf8db0f7bb201",
-    "mobile.png": "354078bde63d38523a87e14c7e096b3de35e098a61f16b6faa3130d42b298b75"
+    "desktop.png": "210aac2ad95409aa1ef6a3e3b69106ff98bf21575f50f7d44d71759ffdcac54f",
+    "desktop-fees.png": "11a955124c90799278247f4acccc141b8baf42991a5ee30ca1ad1297288eea2b",
+    "mobile-summary.png": "aad3478b53d8815e9bdff5724f94fa9e58f5e3b7e04a45e523069c38bc6011ff",
+    "mobile-fees.png": "6e7949e5a0ff46a9a28ad28929644a9182b9c66217bbe57fd4c2a0be600a53be",
+    "mobile.png": "422cdac2aed17fccf94a2fad842d380bc05f0f9c6c360ad216b0c56865fcdb84"
   }
 }
