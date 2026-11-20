@@ -1,0 +1,10 @@
+{
+  "base_validation_source": "53ae7e56d8b62ea9b011db8d8a689624f10d6059",
+  "base_commands": "PASS formatting,house,contrast,441tests/four skips,strictlint; typecheck failed optional tuple inference",
+  "repair_source": "70eb698d3fd95ac1e9872622cd2a67df73f9913d",
+  "repair": "Test cases typed as exact bigint tuples; production source unchanged",
+  "repair_validation": "PASS 95 submission tests,strictlint,typecheck,productionbuild",
+  "current_source_head": "6383078fbf515ed282b5e9cb80ef764679aad7be",
+  "current_production_and_package_lock_unchanged": true,
+  "browser": "PASS current full Bridge/provider fee quote ordering,full forwarding deduction,worsening/unavailable fee blockswallet,improved fee preserves approvedbudget/minimum;mock transports,Freighter rejection,no accepted signature/broadcast."
+}
