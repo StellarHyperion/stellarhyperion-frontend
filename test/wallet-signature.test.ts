@@ -110,4 +110,32 @@ describe("Wallet signature verification", () => {
       "did not sign",
     );
   });
+  it("rejects a signature from a stale, overlapping session whose sequence has moved on", () => {
+    // Session A prepares and signs a transaction while session B, overlapping it, prepares a
+    // fresh transaction for the same account after its sequence number has already advanced. A
+    // wallet that mixes the two up must never have the stale signature accepted as current.
+    const stale = transaction();
+    const staleUnsigned = stale.toXdr();
+    stale.sign(signer);
+    const current = new TransactionBuilder(new Account(signer.publicKey(), "1"), {
+      fee: "100",
+      networkPassphrase: Networks.TESTNET,
+    })
+      .addOperation(
+        Operation.payment({
+          destination: Keypair.random().publicKey(),
+          asset: Asset.native(),
+          amount: "1",
+        }),
+      )
+      .setTimeout(60)
+      .build();
+    expect(() => verifyWalletSignature(current.toXdr(), stale.toXdr(), signer.publicKey())).toThrow(
+      "changed the transaction",
+    );
+    // The stale envelope is only ever valid against the session that actually requested it.
+    expect(verifyWalletSignature(staleUnsigned, stale.toXdr(), signer.publicKey())).toBe(
+      stale.toXdr(),
+    );
+  });
 });

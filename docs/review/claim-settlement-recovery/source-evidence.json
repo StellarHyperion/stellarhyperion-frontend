@@ -1,0 +1,23 @@
+{
+  "sources": {
+    "src/components/bridge/Bridge.tsx": "e8e27e7c31382e22191df25149026e8d76ff98e6000065270126fce214fa5dee",
+    "src/contracts/stellar.ts": "98e1cc4b6055bf389a8bd21990d64ff5e0260d22e46a929fd362259ff6666a00",
+    "src/contracts/checkpoint.ts": "ff2255d4b2b00c82e2810ff568376c1fc1c4d96205655bb36dec548f69c781bb",
+    "src/contracts/claim-checkpoint.ts": "53e2b82d1eb31b75cfc4921d27f317cab215bfb0d241c8c941701aa76b6bf0ec",
+    "src/lib/amount-validation.ts": "14f6a9d32fce7a384eecffee5c863016af5938eba203d3ed7e8f5a3590bd8064",
+    "src/wallets/stellar/sdk.ts": "fc63230d8ee4fa7c702bc1c7177d5597b13ea87126ee9025aee8205ca7fde484",
+    "src/wallets/stellar/context.tsx": "ccbf1ccd54a479b7ea351acbb19fac5065fbf54d3e266e2e6846eec3afaa82f3",
+    "src/wallets/stellar/signature.ts": "5e698dea0d64e708845ed3b511fc8d68adbadd73102b2cb1f0e7d1df8b168b11",
+    "src/components/bridge/Bridge.module.css": "d519998253e2de3a82a74051e2e5331db59a8a76025af6ca429c5bc6a51a1def",
+    "src/config/testnet-deployment.json": "672e6946b4e4aea346bb8c9a4393c955e0666d67119b2805a45192962c5e6d06",
+    "src/app/globals.css": "15024b300b2d45decdc9a3c333fa3c7935d609bc3f7dd9c62664cbbef5fffc21",
+    "package-lock.json": "01fb86074774817c16d680d8d19443a2a4d5443ab4798c216bd2988b94fa1063"
+  },
+  "fixture": "Actual complete Bridge/ClaimRecovery/Providers/provider/SDK and settlement submission/storage/resolver. All RPC/Horizon/wallet transports mocked. Synthetic zero-funded local signer generates real signed envelope; mocked send boundary loses acknowledgement. No external signing or actual network broadcast/payment.",
+  "sourceValidationHead": "d53e83ba26b6b52a978d581256c7516a3b5b059e",
+  "captures": {
+    "pending-desktop.png": "121b9ad903a38e4bfcebed9f745904d251021013f0b008802fb4b283097e947b",
+    "pending-mobile.png": "07b56a6ff5438ac79ce1ec80f19fa27c693d551a179ae249c4a3620e3b41da33",
+    "confirmed-mobile.png": "b1b91210ecf190f5fc93bc541b5b54898d6bb99f56effa1a336f25fc1257666a"
+  }
+}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Account, Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Account, Keypair, TransactionBuilder, rpc } from "@stellar/stellar-sdk";
 import {
   quoteConversion,
   accountAssets,
@@ -17,16 +17,23 @@ import {
   isCanonicalUsdc,
   revalidateConversion,
   issuerVerificationLabel,
+  minimumXlmReserve,
   quoteTrade,
   searchAssets,
   spendableBalance,
+  spendableXlm,
   stellarAsset,
   suggestSourceSpend,
   USDC,
   XLM,
   trustlineLabel,
+  xlmShortfall,
 } from "../src/contracts/assets";
-import { parseCheckpoint, type TransferCheckpoint } from "../src/contracts/checkpoint";
+import {
+  checkpointForAsset,
+  parseCheckpoint,
+  type TransferCheckpoint,
+} from "../src/contracts/checkpoint";
 import {
   DESTINATIONS,
   deploymentIdentityMismatch,
@@ -34,6 +41,7 @@ import {
   TESTNET,
 } from "../src/config/testnet";
 import { boundedRetryAfter, cctpMinimumReceived, relayBudget } from "../src/lib/relay-budget";
+import { createReviewedIntentSnapshot } from "../src/contracts/stellar";
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -625,6 +633,30 @@ describe("Trustline reserve and network fee disclosure", () => {
       "Invalid Stellar account reserve data.",
     );
   });
+  it("refuses to invent sponsorship counts for the pre-sign trustline reserve check", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              input.includes("/ledgers")
+                ? { _embedded: { records: [{ base_reserve_in_stroops: "5000000" }] } }
+                : {
+                    subentry_count: 0,
+                    num_sponsoring: "0",
+                    num_sponsored: 0,
+                    balances: [{ asset_type: "native", balance: "10.0000000" }],
+                  },
+            ),
+          ),
+        ),
+      ),
+    );
+    await expect(accountTrustlineReserve(TESTNET.reader)).rejects.toThrow(
+      "Invalid Stellar account reserve data.",
+    );
+  });
 });
 describe("Trustline reserve and network fee disclosure", () => {
   const foo: SourceAsset = {
@@ -733,8 +765,9 @@ describe("Interrupted transfer recovery", () => {
     bridgeAmount: "1000000",
     stage: "conversion",
     txHash: "a".repeat(64),
+    source: { id: XLM.id, code: XLM.code, issuer: XLM.issuer },
   };
-  it("preserves a real conversion hash and the intended second leg", () => {
+  it("preserves a real conversion hash, the intended second leg and the originating asset", () => {
     expect(parseCheckpoint(JSON.stringify(checkpoint))).toEqual(checkpoint);
   });
   it.each([
@@ -746,8 +779,308 @@ describe("Interrupted transfer recovery", () => {
     { bridgeAmount: "0" },
     { txHash: "fake" },
     { recipient: `0x${"0".repeat(40)}` },
+    { source: null },
+    { source: { id: "FAKE", code: "FAKE", issuer: null } },
+    { source: { id: USDC.id, code: USDC.code, issuer: TESTNET.reader } },
   ])("refuses a corrupted recovery record %j", (change) => {
     expect(parseCheckpoint(JSON.stringify({ ...checkpoint, ...change }))).toBeNull();
+  });
+  it("never lets a conversion-only checkpoint stand in for a completed cross-chain transfer", () => {
+    const conversionOnly = parseCheckpoint(JSON.stringify({ ...checkpoint, stage: "conversion" }));
+    expect(conversionOnly?.stage).toBe("conversion");
+    expect(conversionOnly?.stage).not.toBe("bridge");
+  });
+  it("never lets a newly selected asset reuse another asset's converted-USDC recovery data", () => {
+    expect(checkpointForAsset(parseCheckpoint(JSON.stringify(checkpoint)), XLM)).toEqual(
+      checkpoint,
+    );
+    expect(checkpointForAsset(parseCheckpoint(JSON.stringify(checkpoint)), USDC)).toBeNull();
+    expect(checkpointForAsset(null, USDC)).toBeNull();
+  });
+});
+describe("Spendable XLM accounts for reserves and fees", () => {
+  it("computes the minimum reserve and spendable figures with exact stroop arithmetic", () => {
+    // (2 base entries + 3 subentries + 1 sponsoring - 0 sponsored) * 5,000,000 stroop reserve.
+    expect(minimumXlmReserve(3, 1, 0, 5000000n)).toBe(30000000n);
+    expect(minimumXlmReserve(0, 0, 1, 5000000n)).toBe(5000000n);
+    expect(minimumXlmReserve(0, 0, 2, 5000000n)).toBe(0n);
+    expect(() => minimumXlmReserve(0, 0, 3, 5000000n)).toThrow(
+      "Invalid Stellar reserve accounting.",
+    );
+    expect(() => minimumXlmReserve(Number.MAX_SAFE_INTEGER, 0, 0, 5000000n)).toThrow();
+    expect(() => spendableXlm(-1n, 0n, 0n, 1n)).toThrow();
+    expect(spendableXlm(100000000n, 1000000n, 30000000n, 200n)).toBe(68999800n);
+    // Never goes negative: a balance already below the reserve and fee margin clamps to zero.
+    expect(spendableXlm(1000000n, 0n, 30000000n, 200n)).toBe(0n);
+  });
+  it("never assumes safety when the spendable figure is unconfirmed", () => {
+    expect(xlmShortfall(undefined, 100n)).toBe("unknown");
+    // available alone, without a confirmed nativeMinimumReserve, is not trusted.
+    expect(xlmShortfall({ ...XLM, available: "0.0000100" }, 100n)).toBe("unknown");
+    const confirmed = {
+      ...XLM,
+      balance: "3.0000300",
+      nativeMinimumReserve: "3.0000000",
+      nativeFeeMargin: "0.0000200",
+      available: "0.0000100",
+    };
+    expect(xlmShortfall(confirmed, 0n)).toBe("ok");
+    expect(xlmShortfall(confirmed, 100n)).toBe("ok");
+    expect(xlmShortfall(confirmed, 101n)).toBe("insufficient");
+  });
+  it("derives spendable XLM from live balances, liabilities and the account's real reserve count", async () => {
+    const request = vi.fn((input: string) => {
+      if (input.includes("/ledgers"))
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              _embedded: {
+                records: [{ base_fee_in_stroops: 100, base_reserve_in_stroops: 5000000 }],
+              },
+            }),
+            { status: 200 },
+          ),
+        );
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            subentry_count: 4,
+            num_sponsoring: 0,
+            num_sponsored: 0,
+            balances: [
+              { asset_type: "native", balance: "100.0000000", selling_liabilities: "1.0000000" },
+              {
+                asset_type: "credit_alphanum4",
+                asset_code: "FOO",
+                asset_issuer: TESTNET.reader,
+                balance: "5.0000000",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", request);
+    const assets = await accountAssets(TESTNET.reader);
+    const native = assets.find((asset) => asset.id === XLM.id);
+    // balance 100 - liabilities 1 - reserve (2+4)*0.5 = 3 - fee margin 2*0.00001 = 95.99998 XLM
+    expect(native?.nativeMinimumReserve).toBe("3.0000000");
+    expect(native?.nativeFeeMargin).toBe("0.0000200");
+    expect(native?.available).toBe("95.9999800");
+    expect(assets.find((asset) => asset.code === "FOO")?.balance).toBe("5.0000000");
+  });
+  it("surfaces unknown reserve information explicitly instead of defaulting to the raw balance", async () => {
+    const request = vi.fn((input: string) => {
+      if (input.includes("/ledgers")) return Promise.resolve(new Response("", { status: 503 }));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            subentry_count: 0,
+            num_sponsoring: 0,
+            num_sponsored: 0,
+            balances: [{ asset_type: "native", balance: "50.0000000" }],
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", request);
+    const assets = await accountAssets(TESTNET.reader);
+    const native = assets.find((asset) => asset.id === XLM.id);
+    expect(native?.nativeMinimumReserve).toBeUndefined();
+    expect(native?.available).toBe("0.0000000");
+    expect(native?.balance).toBe("50.0000000");
+  });
+  it.each([
+    { num_sponsoring: undefined },
+    { num_sponsoring: "0" },
+    { num_sponsored: null },
+    { num_sponsored: -1 },
+    { num_sponsored: 0.5 },
+    { subentry_count: Number.MAX_SAFE_INTEGER },
+    { num_sponsored: 3 },
+  ])("keeps malformed account reserve metadata unknown: %j", async (change) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              input.includes("/ledgers")
+                ? {
+                    _embedded: {
+                      records: [{ base_fee_in_stroops: 100, base_reserve_in_stroops: 5000000 }],
+                    },
+                  }
+                : {
+                    subentry_count: 0,
+                    num_sponsoring: 0,
+                    num_sponsored: 0,
+                    ...change,
+                    balances: [{ asset_type: "native", balance: "10.0000000" }],
+                  },
+            ),
+          ),
+        ),
+      ),
+    );
+    const native = (await accountAssets(TESTNET.reader))[0];
+    expect(native?.balance).toBe("10.0000000");
+    expect(native?.nativeMinimumReserve).toBeUndefined();
+    expect(native?.available).toBe("0.0000000");
+    expect(xlmShortfall(native, 0n)).toBe("unknown");
+  });
+  it.each([undefined, 0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, "100.5", "4294967296"])(
+    "keeps invalid live fees unknown even for a zero relay gas budget: %s",
+    async (baseFee) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string) =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify(
+                input.includes("/ledgers")
+                  ? {
+                      _embedded: {
+                        records: [
+                          { base_fee_in_stroops: baseFee, base_reserve_in_stroops: 5000000 },
+                        ],
+                      },
+                    }
+                  : {
+                      subentry_count: 0,
+                      num_sponsoring: 0,
+                      num_sponsored: 0,
+                      balances: [{ asset_type: "native", balance: "10.0000000" }],
+                    },
+              ),
+            ),
+          ),
+        ),
+      );
+      const native = (await accountAssets(TESTNET.reader))[0];
+      expect(native?.nativeFeeMargin).toBeUndefined();
+      expect(xlmShortfall(native, 0n)).toBe("unknown");
+    },
+  );
+  it.each([1, 2])(
+    "uses exact string ledger parameters for an account with %s sponsored base entries",
+    async (sponsored) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string) =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify(
+                input.includes("/ledgers")
+                  ? {
+                      _embedded: {
+                        records: [
+                          { base_fee_in_stroops: "100", base_reserve_in_stroops: "5000000" },
+                        ],
+                      },
+                    }
+                  : {
+                      subentry_count: 0,
+                      num_sponsoring: 0,
+                      num_sponsored: sponsored,
+                      balances: [{ asset_type: "native", balance: "1.0000000" }],
+                    },
+              ),
+            ),
+          ),
+        ),
+      );
+      const native = (await accountAssets(TESTNET.reader))[0];
+      expect(native?.nativeMinimumReserve).toBe(sponsored === 1 ? "0.5000000" : "0.0000000");
+      expect(native?.available).toBe(sponsored === 1 ? "0.4999800" : "0.9999800");
+      expect(xlmShortfall(native, 0n)).toBe("ok");
+    },
+  );
+  it("does not let a clamped zero balance hide an unpaid network fee", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              input.includes("/ledgers")
+                ? {
+                    _embedded: {
+                      records: [{ base_fee_in_stroops: 100, base_reserve_in_stroops: 5000000 }],
+                    },
+                  }
+                : {
+                    subentry_count: 0,
+                    num_sponsoring: 0,
+                    num_sponsored: 0,
+                    balances: [{ asset_type: "native", balance: "1.0000199" }],
+                  },
+            ),
+          ),
+        ),
+      ),
+    );
+    const native = (await accountAssets(TESTNET.reader))[0];
+    expect(native?.available).toBe("0.0000000");
+    expect(native?.nativeFeeMargin).toBe("0.0000200");
+    expect(xlmShortfall(native, 0n)).toBe("insufficient");
+  });
+  it("keeps malformed native liabilities unknown instead of treating them as zero", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              input.includes("/ledgers")
+                ? {
+                    _embedded: {
+                      records: [{ base_fee_in_stroops: 100, base_reserve_in_stroops: 5000000 }],
+                    },
+                  }
+                : {
+                    subentry_count: 0,
+                    num_sponsoring: 0,
+                    num_sponsored: 0,
+                    balances: [
+                      { asset_type: "native", balance: "10.0000000", selling_liabilities: 1 },
+                    ],
+                  },
+            ),
+          ),
+        ),
+      ),
+    );
+    const native = (await accountAssets(TESTNET.reader))[0];
+    expect(native?.nativeFeeMargin).toBeUndefined();
+    expect(xlmShortfall(native, 0n)).toBe("unknown");
+  });
+  it("propagates cancellation during the ledger read", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/ledgers")) {
+          controller.abort();
+          return Promise.reject(new Error("Ledger read canceled."));
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              subentry_count: 0,
+              num_sponsoring: 0,
+              num_sponsored: 0,
+              balances: [{ asset_type: "native", balance: "10.0000000" }],
+            }),
+          ),
+        );
+      }),
+    );
+    await expect(accountAssets(TESTNET.reader, controller.signal)).rejects.toThrow(
+      "Ledger read canceled.",
+    );
   });
 });
 describe("Live relay fee headroom", () => {
@@ -778,7 +1111,11 @@ describe("Native reserve-aware balances", () => {
       num_sponsored: 4,
       balances: [{ asset_type: "native", balance: "12.0000000", selling_liabilities: "1.0000000" }],
     };
-    const ledger = { _embedded: { records: [{ base_reserve_in_stroops: 5000000 }] } };
+    const ledger = {
+      _embedded: {
+        records: [{ base_fee_in_stroops: 100, base_reserve_in_stroops: 5000000 }],
+      },
+    };
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(payload)))
@@ -786,7 +1123,8 @@ describe("Native reserve-aware balances", () => {
     vi.stubGlobal("fetch", fetcher);
     const native = (await accountAssets(TESTNET.reader))[0];
     expect(native?.nativeMinimumReserve).toBe("10.0000000");
-    expect(native?.available).toBe("1.0000000");
+    // 12 - 1 liability - 10 reserve - fee margin (2 * 0.00001) = 0.9999800.
+    expect(native?.available).toBe("0.9999800");
   });
   it("does not invent native spendable funds when reserve metadata is absent", async () => {
     vi.stubGlobal(
@@ -889,5 +1227,169 @@ describe("Horizon search cancellation", () => {
     const assets = await current;
     expect(assets.map((asset) => asset.id)).toEqual([USDC.id]);
     vi.unstubAllGlobals();
+  });
+});
+describe("Live Stellar liquidity acceptance proof schema", () => {
+  // Explicit opt-in only: reads real Stellar Testnet Horizon liquidity, never signs or spends.
+  // Normal checks stay credential-free and skip this suite.
+  const liveEnabled = process.env.HYPERION_LIVE_TESTNET === "1";
+  it.skipIf(!liveEnabled)(
+    "keeps issuer-specific USDC identity and exact integer amounts on a real liquid path",
+    async () => {
+      vi.unstubAllGlobals();
+      const amount = 10000000n;
+      const conversion = await quoteConversion(XLM, amount);
+      expect(conversion.sourceMax).toBe(amount);
+      expect(conversion.usdcAmount).toBeGreaterThan(0n);
+      const tx = new TransactionBuilder(new Account(TESTNET.reader, "1"), {
+        fee: "100",
+        networkPassphrase: TESTNET.networkPassphrase,
+      });
+      for (const operation of conversionOperations(TESTNET.reader, conversion, true))
+        tx.addOperation(operation);
+      const decoded = TransactionBuilder.fromXdr(
+        tx.setTimeout(60).build().toXdr(),
+        TESTNET.networkPassphrase,
+      );
+      const payment = decoded.operations.find(
+        (operation) => operation.type === "pathPaymentStrictReceive",
+      );
+      if (payment?.type !== "pathPaymentStrictReceive")
+        throw new Error("Missing conversion operation.");
+      // Issuer-specific token identity: the real liquid path must still resolve to the exact
+      // canonical USDC issuer, never a different asset that merely shares the USDC code.
+      expect(payment.destAsset.getIssuer()).toBe(USDC.issuer);
+      // Exact integer amounts: Stellar's classic amount strings never carry scientific notation
+      // or extra rounding beyond the fixed seven decimal places.
+      expect(payment.sendMax).toMatch(/^\d+\.\d{7}$/);
+      expect(payment.destAmount).toMatch(/^\d+\.\d{7}$/);
+    },
+    30_000,
+  );
+});
+
+describe("Reviewed conversion submission", () => {
+  it("keeps the copied source identity and spend bound while account reads are pending", async () => {
+    const conversion: Conversion = {
+      source: { ...XLM },
+      sourceMax: 10000000n,
+      usdcAmount: 8000000n,
+      path: [],
+      pathComparison: pathComparison(8100000n),
+    };
+    let release: ((response: Response) => void) | undefined;
+    const first = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const account = {
+      subentry_count: 1,
+      num_sponsoring: 0,
+      num_sponsored: 0,
+      balances: [
+        { asset_type: "native", balance: "100.0000000", selling_liabilities: "0.0000000" },
+        {
+          asset_type: "credit_alphanum4",
+          asset_code: USDC.code,
+          asset_issuer: USDC.issuer,
+          balance: "100.0000000",
+          selling_liabilities: "0.0000000",
+          is_authorized: true,
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockReturnValueOnce(first)
+        .mockImplementation((url: string) =>
+          Promise.resolve(
+            Response.json(
+              url.includes("/accounts/")
+                ? account
+                : {
+                    _embedded: {
+                      records: [
+                        {
+                          base_fee_in_stroops: 100,
+                          base_reserve_in_stroops: 5000000,
+                          sequence: 100,
+                        },
+                      ],
+                    },
+                  },
+            ),
+          ),
+        ),
+    );
+    const network = vi.spyOn(rpc.Server.prototype, "getNetwork").mockResolvedValue({
+      passphrase: "fixture-wrong-network",
+      protocolVersion: "27",
+    });
+    const wallet = vi.fn();
+    try {
+      const submission = submitConversion(TESTNET.reader, conversion, wallet);
+      conversion.sourceMax = 10000000000n;
+      conversion.source.id = "changed-source";
+      if (!release) throw new Error("Missing pending read fixture");
+      release(Response.json(account));
+      await expect(submission).rejects.toThrow("not Stellar Testnet");
+      expect(wallet).not.toHaveBeenCalled();
+    } finally {
+      network.mockRestore();
+    }
+  });
+  it("refuses changed exact spend, output or issuer identity before reading account data or asking the wallet", async () => {
+    const account = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(22)).publicKey();
+    const conversion: Conversion = {
+      source: XLM,
+      sourceMax: 10000000n,
+      usdcAmount: 8000000n,
+      path: [],
+      pathComparison: {
+        returnedPaths: 1,
+        eligiblePaths: 1,
+        selectedOutput: 8100000n,
+        excludedPaths: 0,
+        diagnostics: [],
+        omittedDiagnostics: 0,
+      },
+    };
+    const intent = createReviewedIntentSnapshot({
+      account,
+      asset: XLM,
+      destination: "sepolia",
+      route: 1,
+      recipient: "0x" + "1".repeat(40),
+      amount: conversion.usdcAmount,
+      sourceDebit: conversion.usdcAmount,
+      protocolFee: 30000n,
+      netAmount: 7970000n,
+      representableAmount: 7970000n,
+      adapter: TESTNET.router,
+      minimum: 7970000n,
+      providerBudget: 100n,
+      estimatedProviderBudget: 80n,
+      sourceAmount: conversion.sourceMax,
+      sourceMaximum: conversion.sourceMax,
+      stage: "conversion",
+    });
+    const fetchRead = vi.fn();
+    vi.stubGlobal("fetch", fetchRead);
+    const wallet = vi.fn();
+    for (const change of [
+      { sourceMax: conversion.sourceMax + 1n },
+      { usdcAmount: conversion.usdcAmount - 1n },
+      { source: USDC },
+    ]) {
+      await expect(
+        submitConversion(account, { ...conversion, ...change }, wallet, undefined, undefined, {
+          expectedAccount: account,
+          reviewedIntent: intent,
+        }),
+      ).rejects.toThrow("reviewed conversion intent changed");
+    }
+    expect(fetchRead).not.toHaveBeenCalled();
+    expect(wallet).not.toHaveBeenCalled();
   });
 });

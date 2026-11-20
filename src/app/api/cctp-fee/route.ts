@@ -1,37 +1,95 @@
 import { NextResponse } from "next/server";
 import { destinationFor } from "../../../config/testnet";
-import { boundedRetryAfter, relayBudget } from "../../../lib/relay-budget";
+import { relayBudget } from "../../../lib/relay-budget";
+import {
+  feeRequestGuard,
+  readFeeResponse,
+  validateFeeRequest,
+  providerFeeCooldown,
+} from "../../../lib/fee-request-guard";
 import { validateProviderFee } from "../../../lib/fee-schema";
 
 export async function GET(request: Request) {
+  let url: URL;
+  try {
+    url = validateFeeRequest(request, ["destination"]);
+  } catch {
+    return NextResponse.json(
+      { error: "Choose a supported fee request.", code: "BAD_REQUEST" },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+  const admission = feeRequestGuard.acquire();
+  if ("retryAfter" in admission)
+    return NextResponse.json(
+      {
+        error: "Fee estimates are busy. Retry after the indicated delay.",
+        code: "RATE_LIMITED",
+        retryAfter: admission.retryAfter,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(admission.retryAfter), "Cache-Control": "no-store" },
+      },
+    );
   let destination: ReturnType<typeof destinationFor>;
   try {
-    destination = destinationFor(new URL(request.url).searchParams.get("destination") ?? "");
+    destination = destinationFor(url.searchParams.get("destination") ?? "");
   } catch {
-    return NextResponse.json({ error: "Choose a supported destination testnet." }, { status: 400 });
+    admission.release();
+    return NextResponse.json(
+      { error: "Choose a supported destination testnet.", code: "BAD_REQUEST" },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+  const cooldown = providerFeeCooldown.remaining("cctp");
+  if (cooldown > 0) {
+    admission.release();
+    return NextResponse.json(
+      {
+        error: "Live provider pricing is cooling down. No transfer can be prepared.",
+        code: "RATE_LIMITED",
+        retryAfter: cooldown,
+      },
+      { status: 429, headers: { "Retry-After": String(cooldown), "Cache-Control": "no-store" } },
+    );
+  }
+  const cooldown = providerFeeCooldown.remaining("cctp");
+  if (cooldown > 0) {
+    admission.release();
+    return NextResponse.json(
+      {
+        error: "Live provider pricing is cooling down. No transfer can be prepared.",
+        code: "RATE_LIMITED",
+        retryAfter: cooldown,
+      },
+      { status: 429, headers: { "Retry-After": String(cooldown), "Cache-Control": "no-store" } },
+    );
   }
   try {
     const response = await fetch(
       `https://iris-api-sandbox.circle.com/v2/burn/USDC/fees/27/${destination.cctpDomain}?forward=true`,
       {
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]),
         cache: "no-store",
       },
     );
     if (response.status === 429 || response.status === 503) {
-      const retryAfter = boundedRetryAfter(response.headers.get("retry-after"));
+      const retryAfter = providerFeeCooldown.block("cctp", response.headers.get("retry-after"));
+      await response.body?.cancel();
       return NextResponse.json(
-        { error: "Circle forwarding pricing is rate-limited. No transfer can be prepared." },
+        {
+          error: "Circle forwarding pricing is rate-limited. No transfer can be prepared.",
+          code: "RATE_LIMITED",
+          retryAfter,
+        },
         {
           status: 429,
-          headers: {
-            "Cache-Control": "no-store",
-            ...(retryAfter === null ? {} : { "Retry-After": String(retryAfter) }),
-          },
+          headers: { "Retry-After": String(retryAfter), "Cache-Control": "no-store" },
         },
       );
     }
-    const body: unknown = await response.json();
+    const body: unknown = JSON.parse(await readFeeResponse(response));
     if (!response.ok || !Array.isArray(body) || body.length > 32)
       throw new Error("Invalid Circle fee response.");
     const fee = body.find(
@@ -69,7 +127,9 @@ export async function GET(request: Request) {
   } catch {
     return NextResponse.json(
       { error: "Circle forwarding pricing is unavailable. Try again later." },
-      { status: 503 },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
     );
+  } finally {
+    admission.release();
   }
 }
