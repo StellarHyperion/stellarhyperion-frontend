@@ -18,10 +18,70 @@ const browser = await { chromium, firefox }[engine].launch(
 );
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  await page.addInitScript(() => {
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (value) => (copied = value) },
+    });
+    Object.defineProperty(window, "__hyperionCopiedAddress", { get: () => copied });
+  });
   const errors = [];
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("wallet-preference-smoke-seeded")) return;
+    sessionStorage.setItem("wallet-preference-smoke-seeded", "true");
+    localStorage.setItem("hyperion.stellar.walletId", "albedo");
+    localStorage.setItem("hyperion.testnet.pending-transfer", "unresolved-checkpoint");
+  });
   page.on("pageerror", (error) => errors.push(error.message));
+  // This smoke check only reads and never signs. Catch any accidental live submission network
+  // call (a Soroban RPC POST or an outbound Horizon transaction broadcast) so a change that makes
+  // this read-only pass start spending testnet funds fails loudly instead of going unnoticed.
+  // Matching is done against the parsed hostname (never an unanchored substring test against the
+  // full URL), so an attacker-controlled URL like https://evil.com/soroban-testnet.stellar.org or
+  // https://soroban-testnet.stellar.org.evil.com cannot be mistaken for the real testnet host.
+  const submissionCalls = [];
+  const submissionHostname = (url) => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return null;
+    }
+  };
+  page.on("request", (request) => {
+    const url = request.url();
+    const hostname = submissionHostname(url);
+    if (
+      request.method() === "POST" &&
+      (hostname === "soroban-testnet.stellar.org" ||
+        (hostname === "horizon-testnet.stellar.org" &&
+          new URL(url).pathname.includes("/transactions")))
+    )
+      submissionCalls.push(url);
+  });
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+  const identityDetails = page
+    .locator("details")
+    .filter({ hasText: "Inspect canonical USDC identity" });
+  await identityDetails.locator("summary").click();
+  const canonicalIssuer = deployment.networks["stellar-testnet"].tokens.USDC.issuer;
+  assert.ok((await identityDetails.innerText()).includes(canonicalIssuer));
+  assert.ok(
+    (await identityDetails.innerText()).includes(
+      deployment.networks["stellar-testnet"].tokens.USDC.sacId,
+    ),
+  );
+  await identityDetails.getByRole("button", { name: "Copy canonical USDC issuer" }).click();
+  await identityDetails.getByRole("status").filter({ hasText: "Copied" }).waitFor();
+  assert.equal(await page.evaluate(() => window.__hyperionCopiedAddress), canonicalIssuer);
+  assert.ok((await identityDetails.innerText()).includes("Axelar ITS USDC representation"));
+  await page.getByRole("button", { name: "Choose destination network and token" }).click();
+  const representationDialog = page.getByRole("dialog", { name: "Choose a destination" });
+  await representationDialog
+    .getByRole("button", { name: /Circle CCTP delivers native USDC/ })
+    .click();
+  assert.ok((await identityDetails.innerText()).includes("Circle CCTP native USDC"));
 
   // Opening a shared link loads bounded form state without any submission intent.
   const recipient = "0x" + "a".repeat(40);
@@ -60,6 +120,14 @@ try {
   assert.equal(await themeToggle.getAttribute("aria-pressed"), "true");
   assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
   assert.equal(await page.getByRole("button", { name: "Toggle dark theme" }).count(), 1);
+  await page.getByText("Remembered wallet: Albedo").waitFor();
+  assert.equal(await page.getByRole("dialog", { name: "Connect a Stellar wallet" }).count(), 0);
+  await page.getByRole("button", { name: "clear saved preference" }).click();
+  assert.equal(await page.evaluate(() => localStorage.getItem("hyperion.stellar.walletId")), null);
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
+    "unresolved-checkpoint",
+  );
   await page.getByRole("button", { name: "Choose source token", exact: true }).click();
   const sourceDialog = page.getByRole("dialog", { name: "Choose a token" });
   await sourceDialog.waitFor();
@@ -108,7 +176,53 @@ try {
   }, router);
   await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
   await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
+  await page
+    .getByText(
+      "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer.",
+    )
+    .waitFor();
   await page.getByRole("button", { name: "Check status" }).waitFor();
+  const checkpointBeforeNavigation = await page.evaluate(() =>
+    localStorage.getItem("hyperion.testnet.pending-transfer"),
+  );
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
+    checkpointBeforeNavigation,
+  );
+  assert.equal(
+    await page.getByRole("link", { name: "Recovery" }).getAttribute("href"),
+    "/#pending-recovery",
+  );
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
+  await page.getByRole("link", { name: "Activity" }).click();
+  await page.getByRole("heading", { name: "Transfer history" }).waitFor();
+  await page.getByRole("link", { name: "Recovery" }).click();
+  await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
+  // Selecting the current recovery fragment again restores focus without resetting its identity.
+  await page.getByRole("link", { name: "Activity" }).focus();
+  await page.getByRole("link", { name: "Recovery" }).click();
+  await page.waitForFunction(() => document.activeElement?.id === "pending-recovery-action");
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("hyperion.testnet.pending-transfer")),
+    checkpointBeforeNavigation,
+  );
+  const otherTab = await page.context().newPage();
+  await otherTab.goto(origin, { waitUntil: "domcontentloaded" });
+  await otherTab.evaluate(() => {
+    const checkpoint = JSON.parse(localStorage.getItem("hyperion.testnet.pending-transfer"));
+    localStorage.setItem(
+      "hyperion.testnet.pending-transfer",
+      JSON.stringify({ ...checkpoint, txHash: "f".repeat(64) }),
+    );
+  });
+  await page
+    .getByRole("region", { name: "Transfer recovery" })
+    .getByRole("link", { name: /f{12}\.\.\.f{8}/ })
+    .waitFor();
+  await otherTab.close();
   await page.evaluate(() => {
     localStorage.removeItem("hyperion.testnet.pending-transfer");
     window.dispatchEvent(new Event("hyperion:pending-transfer"));
@@ -122,9 +236,110 @@ try {
       `Horizontal overflow on ${route}`,
     );
   }
+  // Touch targets and small screens. The dialog body scrolls while its close control and the
+  // recovery action stay inside the viewport, long amounts and hashes never overlap the controls
+  // beside them, and 320 by 640 CSS pixels stands in for a 640 pixel window at 200 percent zoom.
+  const box = (locator) =>
+    locator.evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        width: rect.width,
+        height: rect.height,
+        top: rect.top,
+        bottom: rect.bottom,
+        left: rect.left,
+        right: rect.right,
+      };
+    });
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 320, height: 640 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(origin, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+    await page.getByLabel("Amount to send").fill("123456789.1234567");
+    const amountBox = await box(page.getByLabel("Amount to send"));
+    const tokenBox = await box(
+      page.getByRole("button", { name: "Choose source token", exact: true }),
+    );
+    assert.ok(
+      amountBox.bottom <= tokenBox.top + 0.5 || amountBox.right <= tokenBox.left + 0.5,
+      `Long amount overlaps the token selector at ${viewport.width}px`,
+    );
+    await page.getByRole("button", { name: "Choose source token", exact: true }).click();
+    const tokenDialog = page.getByRole("dialog", { name: "Choose a token" });
+    await tokenDialog.waitFor();
+    const tokenDialogBox = await box(tokenDialog);
+    assert.ok(
+      tokenDialogBox.left >= 0 && tokenDialogBox.right <= viewport.width + 0.5,
+      `Dialog overflows the narrow viewport at ${viewport.width}px`,
+    );
+    assert.ok(
+      tokenDialogBox.top >= 0 && tokenDialogBox.bottom <= viewport.height + 0.5,
+      `Dialog exceeds the viewport height at ${viewport.width}px`,
+    );
+    const closeBox = await box(tokenDialog.getByRole("button", { name: "Close selector" }));
+    assert.ok(closeBox.width >= 40 && closeBox.height >= 40, "Dialog close target below 44px");
+    assert.ok(
+      closeBox.top >= 0 && closeBox.bottom <= viewport.height + 0.5,
+      `Dialog close control outside the viewport at ${viewport.width}px`,
+    );
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+
+    // A saved recovery identity with a long hash and amount keeps its action and copy control
+    // separate from the wrapping text.
+    await page.evaluate((router) => {
+      localStorage.setItem(
+        "hyperion.testnet.pending-transfer",
+        JSON.stringify({
+          router,
+          account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          recipient: "0x" + "b".repeat(40),
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "123456789012345",
+          stage: "bridge",
+          txHash: "a".repeat(64),
+        }),
+      );
+      window.dispatchEvent(new Event("hyperion:pending-transfer"));
+    }, router);
+    const recovery = page.getByRole("region", { name: "Transfer recovery" });
+    await recovery.waitFor();
+    const hashBox = await box(recovery.locator("code").first());
+    const copyBox = await box(recovery.getByRole("button", { name: "Copy transaction hash" }));
+    assert.ok(
+      copyBox.top >= hashBox.bottom - 0.5 || copyBox.left >= hashBox.right - 0.5,
+      `Transaction hash overlaps its copy control at ${viewport.width}px`,
+    );
+    const statusAction = recovery.getByRole("button", { name: "Check status" });
+    await statusAction.scrollIntoViewIfNeeded();
+    const statusBox = await box(statusAction);
+    assert.ok(statusBox.height >= 40, "Recovery action below the touch target minimum");
+    assert.ok(
+      statusBox.top >= 0 && statusBox.bottom <= viewport.height + 0.5,
+      `Recovery action stays out of reach at ${viewport.width}px`,
+    );
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+      `Horizontal overflow with a long hash at ${viewport.width}px`,
+    );
+    await page.evaluate(() => {
+      localStorage.removeItem("hyperion.testnet.pending-transfer");
+      window.dispatchEvent(new Event("hyperion:pending-transfer"));
+    });
+  }
   assert.deepEqual(errors, [], "Uncaught browser errors");
+  assert.deepEqual(
+    submissionCalls,
+    [],
+    "This read-only smoke check must never submit or broadcast a signed transaction.",
+  );
   console.log(
-    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history and mobile layout.",
+    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history, mobile layout and no live submission calls.",
   );
 } finally {
   await browser.close();
