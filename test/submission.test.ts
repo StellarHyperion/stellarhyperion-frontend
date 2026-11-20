@@ -242,18 +242,23 @@ describe("Signed Stellar submission failure boundaries", () => {
       .build();
     const envelope = xdr.TransactionEnvelope.fromXdr(transaction.toXdr(), "base64");
     if (envelope.type !== "envelopeTypeTx") throw new Error("Expected a v1 transaction");
-    const body = envelope.v1.tx.operations[0]!.body;
+    const operationBody = envelope.v1.tx.operations[0];
+    if (!operationBody) throw new Error("Expected a router operation");
+    const body = operationBody.body;
     if (body.type !== "invokeHostFunction") throw new Error("Expected a contract operation");
     const hostFunction = body.invokeHostFunctionOp.hostFunction;
     if (hostFunction.type !== "hostFunctionTypeInvokeContract")
       throw new Error("Expected a contract invocation");
     const args = hostFunction.invokeContract.args;
-    expect(scValToNative(args[1]!)).toMatchObject({
+    const request = args[1];
+    const budget = args[2];
+    if (!request || !budget) throw new Error("Expected router request and relay budget");
+    expect(scValToNative(request)).toMatchObject({
       amount: 10000000n,
       destination_decimals: 6,
       min_destination_amount: 946999n,
     });
-    expect(scValToNative(args[2]!)).toBe(500000n);
+    expect(scValToNative(budget)).toBe(500000n);
     expect(cctpPayoutBreakdown(value.representableAmount, value.relayGas).minimumReceived).toBe(
       946999n,
     );
