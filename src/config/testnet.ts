@@ -251,6 +251,66 @@ export const DESTINATIONS = (["sepolia", "base-sepolia", "arc-testnet"] as const
     transmitter: contracts.cctp.messageTransmitterV2,
   };
 });
+
+function publicHttpUrl(endpoint: string): URL {
+  if (endpoint.length > 2048) throw new Error("A public provider endpoint is too long.");
+  const url = new URL(endpoint);
+  if (
+    (url.protocol !== "https:" && url.protocol !== "http:") ||
+    url.hostname.includes("*") ||
+    url.username ||
+    url.password ||
+    url.hash
+  )
+    throw new Error("Public provider endpoints must be unauthenticated HTTP(S) URLs.");
+  return url;
+}
+
+export function stellarTransactionReadUrls(
+  configuration = process.env.NEXT_PUBLIC_STELLAR_READ_RPC_URLS ?? "",
+): string[] {
+  if (configuration.length > 4096)
+    throw new Error("Stellar transaction read source configuration is too large.");
+  const configured = configuration
+    .split(",")
+    .map((endpoint) => endpoint.trim())
+    .filter(Boolean);
+  const sources: string[] = [];
+  const origins = new Set<string>();
+  for (const endpoint of [TESTNET.rpcUrl, ...configured]) {
+    const url = publicHttpUrl(endpoint);
+    if (origins.has(url.origin)) continue;
+    origins.add(url.origin);
+    sources.push(url.toString());
+    if (sources.length === 3) break;
+  }
+  return sources;
+}
+
+function walletOrigins(): string[] {
+  const origins = deployment.browserResources.walletOrigins;
+  for (const origin of origins) {
+    const url = new URL(origin);
+    if (url.protocol !== "https:" || url.hostname.includes("*") || url.origin !== origin)
+      throw new Error("Wallet origins must be explicit HTTPS origins.");
+  }
+  return origins;
+}
+
+const indexerUrl =
+  process.env.NEXT_PUBLIC_HYPERION_API_URL ?? process.env.NEXT_PUBLIC_HYPERION_INDEXER_URL ?? "";
+const connectOrigins = new Set([
+  ...stellarTransactionReadUrls().map((endpoint) => publicHttpUrl(endpoint).origin),
+  publicHttpUrl(TESTNET.horizonUrl).origin,
+  ...DESTINATIONS.map((destination) => publicHttpUrl(destination.rpcUrl).origin),
+]);
+if (indexerUrl.trim()) connectOrigins.add(publicHttpUrl(indexerUrl.trim()).origin);
+
+export const BROWSER_RESOURCE_ORIGINS = {
+  wallet: walletOrigins(),
+  connect: [...connectOrigins],
+} as const;
+
 export const destinationDecimals = (route: number) => (route === 0 ? 6 : 7);
 export type DestinationKey = (typeof DESTINATIONS)[number]["key"];
 export function destinationFor(key: string) {

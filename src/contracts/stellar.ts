@@ -31,6 +31,7 @@ import {
   deploymentIdentityMismatch,
   type BridgeRoute,
   type DestinationKey,
+  stellarTransactionReadUrls,
 } from "../config/testnet";
 import type { TransferCheckpoint } from "./checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
@@ -829,33 +830,8 @@ export function bridgeOperation(sender: string, quote: LiveQuote, recipientInput
   );
 }
 
-const MAX_TRANSACTION_READ_SOURCES = 3;
 function transactionReadSources(): string[] {
-  const configuration = process.env.NEXT_PUBLIC_STELLAR_READ_RPC_URLS ?? "";
-  if (configuration.length > 4096)
-    throw new Error("Stellar transaction read source configuration is too large.");
-  const configured = configuration
-    .split(",")
-    .map((url) => url.trim())
-    .filter(Boolean);
-  const sources: string[] = [];
-  const origins = new Set<string>();
-  for (const endpoint of [TESTNET.rpcUrl, ...configured]) {
-    const url = new URL(endpoint);
-    if (
-      endpoint.length > 2048 ||
-      (url.protocol !== "https:" && url.protocol !== "http:") ||
-      url.username ||
-      url.password ||
-      url.hash
-    )
-      throw new Error("Stellar transaction read sources must be public HTTP(S) endpoints.");
-    if (origins.has(url.origin)) continue;
-    origins.add(url.origin);
-    sources.push(url.toString());
-    if (sources.length === MAX_TRANSACTION_READ_SOURCES) break;
-  }
-  return sources;
+  return stellarTransactionReadUrls();
 }
 class ConflictingTransactionEvidence extends Error {}
 interface RpcReadEvidence {

@@ -28,6 +28,13 @@ try {
   });
   const errors = [];
   await page.addInitScript(() => {
+    window.__hyperionCspViolations = [];
+    document.addEventListener("securitypolicyviolation", (event) => {
+      window.__hyperionCspViolations.push({
+        directive: event.effectiveDirective,
+        blockedURI: event.blockedURI,
+      });
+    });
     if (sessionStorage.getItem("wallet-preference-smoke-seeded")) return;
     sessionStorage.setItem("wallet-preference-smoke-seeded", "true");
     localStorage.setItem("hyperion.stellar.walletId", "albedo");
@@ -36,6 +43,29 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+  await page.evaluate(() => {
+    const script = document.createElement("script");
+    script.src = "https://unexpected-script.invalid/fixture.js";
+    document.head.append(script);
+    const inline = document.createElement("script");
+    inline.textContent = "window.__hyperionUnexpectedInlineScript = true";
+    document.head.append(inline);
+    void fetch("https://unexpected-connect.invalid/fixture", { mode: "no-cors" }).catch(() => {});
+  });
+  await page.waitForFunction(
+    () =>
+      window.__hyperionCspViolations.some((violation) =>
+        violation.blockedURI.includes("unexpected-script.invalid"),
+      ) &&
+      window.__hyperionCspViolations.some(
+        (violation) =>
+          violation.directive === "script-src-elem" || violation.directive === "script-src",
+      ) &&
+      window.__hyperionCspViolations.some((violation) =>
+        violation.blockedURI.includes("unexpected-connect.invalid"),
+      ),
+  );
+  assert.equal(await page.evaluate(() => window.__hyperionUnexpectedInlineScript), undefined);
   const identityDetails = page
     .locator("details")
     .filter({ hasText: "Inspect canonical USDC identity" });
