@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { createPublicClient, http, parseAbi } from "viem";
 import { fetchTransferByTx } from "../src/api/backend";
@@ -19,7 +18,7 @@ import {
   assertPaymentReceipt,
   assertSignedSource,
 } from "./support/acceptance";
-import { defaultProofFile, lockProof, saveProof } from "./support/proof-file";
+import { defaultProofFile, lockProof, readProof, saveProof } from "./support/proof-file";
 
 interface Proof {
   network: "stellar-testnet";
@@ -35,6 +34,30 @@ interface Proof {
   sourceEnvelope?: string;
   destinationHash?: string;
   status: string;
+}
+
+function isProof(value: Record<string, unknown>): value is Record<string, unknown> & Proof {
+  return (
+    value.network === "stellar-testnet" &&
+    ["router", "sender", "recipient", "grossAmount", "status"].every(
+      (field) =>
+        typeof value[field] === "string" && value[field].length > 0 && value[field].length <= 2048,
+    ) &&
+    [
+      "fee",
+      "destinationAmount",
+      "balanceBefore",
+      "recipientBalanceBefore",
+      "sourceHash",
+      "sourceEnvelope",
+      "destinationHash",
+    ].every(
+      (field) =>
+        value[field] === undefined ||
+        (typeof value[field] === "string" &&
+          value[field].length <= (field === "sourceEnvelope" ? 200000 : 2048)),
+    )
+  );
 }
 
 // Explicit opt-in only: this test signs and spends 0.1 testnet USDC plus testnet XLM fees.
@@ -57,16 +80,17 @@ it.skipIf(!enabled)(
     console.log(`Live transfer proof: ${file}`);
     const amount = parseSendAmount("0.1");
     const releaseProof = lockProof(file);
-    const proof = existsSync(file)
-      ? (JSON.parse(readFileSync(file, "utf8")) as Proof)
-      : {
-          network: "stellar-testnet" as const,
-          router: TESTNET.router,
-          sender,
-          recipient,
-          grossAmount: String(amount),
-          status: "preparing",
-        };
+    const savedProof = readProof(file);
+    if (savedProof && !isProof(savedProof))
+      throw new Error("The saved live proof has invalid fields; retain it for manual recovery.");
+    const proof: Proof = savedProof ?? {
+      network: "stellar-testnet" as const,
+      router: TESTNET.router,
+      sender,
+      recipient,
+      grossAmount: String(amount),
+      status: "preparing",
+    };
     expect(proof.network).toBe("stellar-testnet");
     expect(proof.router).toBe(TESTNET.router);
     expect(proof.sender).toBe(sender);

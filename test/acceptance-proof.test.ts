@@ -1,6 +1,6 @@
 import { Account, Asset, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { encodeAbiParameters, encodeEventTopics, parseAbi, type TransactionReceipt } from "viem";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,7 +11,7 @@ import {
   assertPaymentReceipt,
   assertSignedSource,
 } from "./support/acceptance";
-import { lockProof, saveProof } from "./support/proof-file";
+import { lockProof, readProof, saveProof } from "./support/proof-file";
 
 const signer = Keypair.random();
 const intent = {
@@ -189,6 +189,25 @@ describe("Independent public acceptance evidence", () => {
 });
 
 describe("Interrupted and concurrent live proof recovery", () => {
+  it("rejects symlinks and public-readable proof records before loading their content", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hyperion-proof-safety-"));
+    const file = join(dir, "proof.json");
+    const link = join(dir, "link.json");
+    try {
+      expect(readProof(file)).toBeNull();
+      saveProof(file, { sourceHash: intent.sourceHash });
+      symlinkSync(file, link);
+      expect(() => readProof(link)).toThrow("safely");
+      chmodSync(file, 0o644);
+      expect(() => readProof(file)).toThrow("private regular file");
+      expect(() => {
+        saveProof(file, { sourceHash: intent.sourceHash });
+      }).toThrow("private regular file");
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
   it("keeps public hashes after failed replacement and refuses dropping a pending hash", () => {
     const dir = mkdtempSync(join(tmpdir(), "hyperion-proof-test-")),
       file = join(dir, "proof.json"),
@@ -200,15 +219,13 @@ describe("Interrupted and concurrent live proof recovery", () => {
           throw Error("simulated interruption");
         });
       }).toThrow("interruption");
-      expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(proof);
+      expect(readProof(file)).toEqual(proof);
       expect(() => {
         saveProof(file, { status: "preparing" });
       }).toThrow("Never overwrite");
       expect(statSync(file).mode & 0o077).toBe(0);
       saveProof(file, { ...proof, status: "source-confirmed" });
-      expect((JSON.parse(readFileSync(file, "utf8")) as { sourceHash: string }).sourceHash).toBe(
-        intent.sourceHash,
-      );
+      expect(readProof(file)?.sourceHash).toBe(intent.sourceHash);
     } finally {
       rmSync(dir, { recursive: true });
     }
@@ -223,9 +240,7 @@ describe("Interrupted and concurrent live proof recovery", () => {
       release();
       const retry = lockProof(file);
       retry();
-      expect((JSON.parse(readFileSync(file, "utf8")) as { sourceHash: string }).sourceHash).toBe(
-        intent.sourceHash,
-      );
+      expect(readProof(file)?.sourceHash).toBe(intent.sourceHash);
     } finally {
       rmSync(dir, { recursive: true });
     }
