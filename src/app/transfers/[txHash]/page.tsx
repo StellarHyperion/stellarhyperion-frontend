@@ -8,6 +8,7 @@ import { STELLAR_DEPLOYMENT } from "../../../config/testnet";
 import { formatTokenAmount, formatTokenIdentity, getExplorerUrl } from "../../../lib/format";
 import { hasVerifiedDestinationEvidence } from "../../../lib/evidence";
 import { EvidenceTimeline } from "../../../components/transfers/EvidenceTimeline";
+import { useVisibilityPoll } from "../../../lib/visibility-poll";
 import { ActivityRequestGuard } from "../../../lib/activity-request";
 import styles from "./page.module.css";
 export default function TransferDetailPage({ params }: { params: Promise<{ txHash: string }> }) {
@@ -32,44 +33,53 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
   const [error, setError] = useState<string | null>(null);
   const [indexerError, setIndexerError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [indexerFresh, setIndexerFresh] = useState(false);
   const requestGuard = useRef(new ActivityRequestGuard());
   useEffect(() => {
     const guard = requestGuard.current;
     guard.setIdentity(txHash);
     guard.invalidate();
-    const load = async () => {
+    return () => {
+      guard.invalidate();
+    };
+  }, [txHash]);
+  const refreshing = useVisibilityPoll(
+    async (signal) => {
+      setIndexerFresh(false);
+      const guard = requestGuard.current;
       const token = guard.begin();
+      const current = () => !signal.aborted && guard.isCurrent(token);
       await Promise.allSettled([
-        readTransaction(txHash)
+        readTransaction(txHash, signal)
           .then((result) => {
-            if (guard.isCurrent(token)) {
+            if (current()) {
               setOrigin(result);
               setError(null);
             }
           })
           .catch((cause: unknown) => {
-            if (guard.isCurrent(token)) setError(errorMessage(cause));
+            if (current()) setError(errorMessage(cause));
           }),
-        fetchTransferByTx(txHash)
+        fetchTransferByTx(txHash, signal)
           .then((result) => {
-            if (guard.isCurrent(token)) {
+            if (current()) {
               setRecord(result);
               setIndexerError(null);
+              setIndexerFresh(true);
             }
           })
           .catch((cause: unknown) => {
-            if (guard.isCurrent(token)) setIndexerError(errorMessage(cause));
+            if (current()) setIndexerError(errorMessage(cause));
           }),
       ]);
-      if (guard.isCurrent(token)) setLoading(false);
-    };
-    void load();
-    const timer = setInterval(() => void load(), 5000);
-    return () => {
-      guard.invalidate();
-      clearInterval(timer);
-    };
-  }, [txHash, retry]);
+      if (current()) setLoading(false);
+    },
+    5_000,
+    60_000,
+    JSON.stringify([txHash, retry]),
+    0,
+  );
+
   return (
     <Column>
       <Link href="/transfers">Back to transfer history</Link>
@@ -77,7 +87,7 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
       <p className="mono" style={{ overflowWrap: "anywhere" }}>
         {txHash}
       </p>
-      {loading && <p role="status">Checking chain and indexer...</p>}
+      {(loading || refreshing) && <p role="status">Checking fresh chain and indexer status...</p>}
       {error && (
         <>
           <p role="alert">Source lookup is unavailable: {error}</p>
@@ -185,7 +195,10 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
                   : `Funds are parked on the ${record.destination.chain} router for the recorded recipient.`}
               </p>
               {!record.claim.settled &&
-                (record.claim.deployment?.chain === STELLAR_DEPLOYMENT.chain &&
+                (indexerFresh &&
+                !refreshing &&
+                !indexerError &&
+                record.claim.deployment?.chain === STELLAR_DEPLOYMENT.chain &&
                 record.claim.deployment.router === STELLAR_DEPLOYMENT.router &&
                 record.claim.deployment.revision === STELLAR_DEPLOYMENT.wasmHash ? (
                   <Link href="/#claim-recovery">Recover Stellar claim {record.claim.id}</Link>
