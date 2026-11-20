@@ -1,4 +1,5 @@
 "use client";
+import { rememberLocalTransfer } from "../../lib/local-transfers";
 import { cctpPayoutBreakdown } from "../../lib/relay-budget";
 
 import Link from "next/link";
@@ -88,7 +89,8 @@ import {
   checkpointForAsset,
   acquireOperationOwnership,
   getOperationOwnership,
-  saveCheckpoint,
+  commitCheckpoint,
+  useCheckpointStorageError,
   getClaimSettlementCheckpoint,
   saveClaimSettlementCheckpoint,
   useClaimSettlementCheckpoint,
@@ -616,11 +618,13 @@ function PendingTransferCard({
         !controller.signal.aborted &&
         ownerRef.current === owner &&
         saved !== null &&
-        checkpointIdentity(saved) === checkpointIdentity(checkpoint)
+        checkpointIdentity(saved) === checkpointIdentity(checkpoint) &&
+        (saved.revision ?? 0) === (checkpoint.revision ?? 0)
       );
     };
     setChecking(true);
     setError(null);
+    let conversionConfirmed = false;
     try {
       const result = await resolveCheckpointTransaction(checkpoint, controller.signal);
       if (!active()) return;
@@ -629,11 +633,18 @@ function PendingTransferCard({
       setCardSimulation(null);
       setCardDiff(null);
       setChecked({ ...result, txHash: checkpoint.txHash, owner });
+      if (checkpoint.stage === "bridge")
+        await rememberLocalTransfer({
+          checkpoint,
+          sourceStatus:
+            result.status === "confirmed" || result.status === "failed" ? result.status : "unknown",
+        });
       if (result.status === "unknown") {
         setError(result.message);
         return;
       }
       if (result.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+        conversionConfirmed = true;
         await requireRecoveredUsdc(
           checkpoint.account,
           BigInt(checkpoint.bridgeAmount),
@@ -676,7 +687,12 @@ function PendingTransferCard({
         }
       }
     } catch (cause) {
-      if (active()) setError(errorMessage(cause));
+      if (active())
+        setError(
+          conversionConfirmed
+            ? `Conversion confirmed on Stellar; its USDC remains in your wallet. Fresh bridge preparation failed: ${errorMessage(cause)}. No new bridge was submitted.`
+            : errorMessage(cause),
+        );
     } finally {
       if (requestRef.current === controller) requestRef.current = null;
       // Busy UI state is safe to release even when identity invalidated this read.
@@ -713,7 +729,8 @@ function PendingTransferCard({
         !controller.signal.aborted &&
         ownerRef.current === owner &&
         saved !== null &&
-        checkpointIdentity(saved) === checkpointIdentity(checkpoint)
+        checkpointIdentity(saved) === checkpointIdentity(checkpoint) &&
+        (saved.revision ?? 0) === (checkpoint.revision ?? 0)
       );
     };
     setChecking(true);
@@ -730,17 +747,19 @@ function PendingTransferCard({
         review,
         checkpoint.recipient,
         (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "bridge" }),
-        (_phase, hash) => {
-          if (hash) saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
-        },
+        undefined,
         { account: checkpoint.account, network: TESTNET.networkPassphrase, operation: "bridge" },
         {
           expectedAccount: checkpoint.account,
           reviewedIntent,
           getCurrentAccount: () => currentAccount.current,
           isSuperseded: () => !active(),
-          onSigned: (hash) => {
-            saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: hash });
+          onSigned: async (hash) => {
+            const saved = await commitCheckpoint(
+              { ...checkpoint, stage: "bridge", txHash: hash },
+              checkpoint,
+            );
+            if (saved) await rememberLocalTransfer({ checkpoint: saved, sourceStatus: "unknown" });
           },
         },
         cardSimulation,
@@ -772,7 +791,7 @@ function PendingTransferCard({
         setError(null);
       } else if (active()) {
         const message = errorMessage(cause);
-        if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(checkpoint);
+
         setError(message);
       }
     } finally {
@@ -1015,6 +1034,7 @@ function PendingTransferCard({
 export function Bridge() {
   const wallet = useStellarWallet();
   const checkpoint = useTransferCheckpoint();
+  const checkpointStorageError = useCheckpointStorageError();
   const [source, setSource] = useState<SourceAsset>(USDC);
   const [destination, setDestination] = useState<DestinationKey>("sepolia");
   const [route, setRoute] = useState<BridgeRoute>(1);
@@ -1185,7 +1205,7 @@ export function Bridge() {
           trustlineOk,
         });
 
-  const locked = busy || checkpoint !== null;
+  const locked = busy || checkpoint !== null || checkpointStorageError !== null;
   let inputError: string | null = null;
   let valid = false;
   const amountValidation = validateAmount(amount);
@@ -1507,11 +1527,11 @@ export function Bridge() {
       reviewedIntent: reviewed.intent,
       getCurrentAccount: () => liveReview.current.account ?? null,
       isSuperseded,
-      onSigned: (hash) => {
-        saveCheckpoint(pending("conversion", hash));
+      onSigned: async (hash) => {
+        await commitCheckpoint(pending("conversion", hash));
       },
-      onAccountSwitch: (hash) => {
-        saveCheckpoint(pending("conversion", hash));
+      onAccountSwitch: async (hash) => {
+        await commitCheckpoint(pending("conversion", hash));
       },
     };
     const bridgeReconcile: SubmissionReconciliation = {
@@ -1519,11 +1539,13 @@ export function Bridge() {
       reviewedIntent: reviewed.intent,
       getCurrentAccount: () => liveReview.current.account ?? null,
       isSuperseded,
-      onSigned: (hash) => {
-        saveCheckpoint(pending("bridge", hash));
+      onSigned: async (hash) => {
+        const saved = await commitCheckpoint(pending("bridge", hash));
+        if (saved) await rememberLocalTransfer({ checkpoint: saved, sourceStatus: "unknown" });
       },
-      onAccountSwitch: (hash) => {
-        saveCheckpoint(pending("bridge", hash));
+      onAccountSwitch: async (hash) => {
+        const saved = await commitCheckpoint(pending("bridge", hash));
+        if (saved) await rememberLocalTransfer({ checkpoint: saved, sourceStatus: "unknown" });
       },
     };
     try {
@@ -1533,9 +1555,8 @@ export function Bridge() {
           wallet.address,
           reviewedQuote.conversion,
           (xdr, opts) => wallet.signTransaction(xdr, { ...opts, operation: "conversion" }),
-          (next, hash) => {
+          (next) => {
             setPhase(next);
-            if (hash) saveCheckpoint(pending("conversion", hash));
           },
           { ...reviewApproval, operation: "conversion" },
           conversionReconcile,
@@ -1549,7 +1570,7 @@ export function Bridge() {
           return;
         }
         converted = pending("conversion", swap.txHash);
-        saveCheckpoint(converted);
+        await commitCheckpoint(converted);
         setResult(swap);
         return;
       }
@@ -1563,7 +1584,6 @@ export function Bridge() {
         (next, hash) => {
           setPhase(next);
           if (hash) {
-            saveCheckpoint(pending("bridge", hash));
             setResult({ status: "pending", txHash: hash });
           }
         },
@@ -1576,6 +1596,9 @@ export function Bridge() {
         },
       );
       if (generation !== waitGeneration.current) return;
+      const saved = getTransferCheckpoint();
+      if (saved && (submitted.status === "confirmed" || submitted.status === "failed"))
+        await rememberLocalTransfer({ checkpoint: saved, sourceStatus: submitted.status });
       setResult(submitted);
     } catch (cause) {
       if (cause instanceof QuoteChangedError) {
@@ -1585,7 +1608,7 @@ export function Bridge() {
         setError(null);
       } else {
         const message = errorMessage(cause);
-        if (/network rejected|Nothing was accepted/.test(message)) saveCheckpoint(converted);
+
         setError(message);
       }
     } finally {
@@ -1594,10 +1617,10 @@ export function Bridge() {
       setPhase(null);
     }
   };
-  const reset = () => {
+  const reset = async () => {
     if (!checkpoint) return;
     try {
-      saveCheckpoint(null, checkpoint);
+      await commitCheckpoint(null, checkpoint);
       setResult(null);
       setError(null);
       setReviewed(null);
@@ -1716,7 +1739,9 @@ export function Bridge() {
           key={JSON.stringify([checkpoint, wallet.address])}
           checkpoint={checkpoint}
           busy={busy}
-          onReset={reset}
+          onReset={() => {
+            void reset();
+          }}
         />
       )}
       <section
@@ -2096,6 +2121,11 @@ export function Bridge() {
               ))}
             </ul>
           </nav>
+        )}
+        {checkpointStorageError && (
+          <p role="alert" className={styles.error}>
+            {checkpointStorageError}
+          </p>
         )}
         {!error && !wallet.error && quoteError && quoteDiagnostic ? (
           <div role="alert" className={styles.limitDiagnostic}>
