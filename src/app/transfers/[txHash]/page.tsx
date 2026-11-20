@@ -116,6 +116,7 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
       {!loading && (error !== null || indexerError !== null || !record) && (
         <button
           type="button"
+          className={styles.readAction}
           onClick={() => {
             setLoading(true);
             setRetry((value) => value + 1);

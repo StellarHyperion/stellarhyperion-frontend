@@ -242,7 +242,7 @@ function TransfersPageContent({ address }: { address?: string | null }) {
         is unavailable from this indexer. Continue through the pages to inspect more records.
       </p>
       {(asset || deployment || filterError) && (
-        <button type="button" onClick={clearFilters}>
+        <button type="button" className={styles.readAction} onClick={clearFilters}>
           Clear identity filters
         </button>
       )}

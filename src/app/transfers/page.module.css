@@ -32,7 +32,7 @@
   border-radius: var(--radius-control);
   color: var(--text-primary);
   font-family: var(--face-mono);
-  font-size: var(--type-mono-size);
+  font-size: max(1rem, var(--type-mono-size));
   transition: border-color var(--motion-state) var(--ease-enter);
 }
 
@@ -50,18 +50,21 @@
 .filterControls {
   justify-content: space-between;
 }
-.filterControls button {
+.filterControls button,
+.readAction {
   border: 1px solid var(--edge-color);
   border-radius: 999px;
   background: var(--surface-raised);
   color: var(--text-primary);
   padding: var(--space-2) var(--space-4);
+  min-block-size: var(--tap-target);
   cursor: pointer;
   transition:
     background var(--motion-state),
     border-color var(--motion-state);
 }
-.filterControls button:not(:disabled):hover {
+.filterControls button:not(:disabled):hover,
+.readAction:not(:disabled):hover {
   background: var(--surface-panel);
   border-color: var(--edge-color-strong);
 }
