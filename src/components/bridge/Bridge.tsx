@@ -248,13 +248,15 @@ function PendingTransferCard({
         <h2>
           {current?.status === "failed"
             ? "Transaction failed on Stellar"
-            : checkpoint.stage === "conversion"
-              ? current?.status === "confirmed"
-                ? "Conversion confirmed"
-                : "Conversion submitted"
-              : current?.status === "confirmed"
-                ? "Transfer confirmed on Stellar"
-                : "Transfer submitted"}
+            : current?.status === "pending"
+              ? "Transaction outcome unknown"
+              : checkpoint.stage === "conversion"
+                ? current?.status === "confirmed"
+                  ? "Conversion confirmed"
+                  : "Conversion submitted"
+                : current?.status === "confirmed"
+                  ? "Transfer confirmed on Stellar"
+                  : "Transfer submitted"}
         </h2>
       </div>
       <p>

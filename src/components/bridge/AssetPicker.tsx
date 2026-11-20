@@ -68,6 +68,7 @@ export function SourceAssetPicker({
         <Search size={17} aria-hidden="true" />
         <input
           aria-label="Search Stellar assets"
+          autoFocus
           placeholder="Token code or issuer address"
           value={query}
           onChange={(event) => {

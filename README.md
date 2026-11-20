@@ -58,7 +58,7 @@ Vercel's installed Git integration publishes `main` after pushes. GitHub Actions
 
 ## Verification
 
-`npm run check` runs formatting, interface rules, contrast checks, unit tests, lint, types and the production build. Start the app and run `npm run test:browser` for the real wallet picker, theme persistence, native selectors and mobile layout. Chromium must be installed with `npx playwright install chromium`.
+`npm run check` runs formatting, interface rules, contrast checks, unit tests, lint, types and the production build. Start the app and run `npm run test:browser` for the assistive-technology audit of dialog names and focus, cancelled selections, issuer-specific assets, configured testnet lanes, and successful, failed, unresolved, and unknown-router recovery states. Transaction-status and Horizon asset-search responses are deterministic; the audit does not connect or sign with a wallet. It saves screenshots and semantic snapshots plus a regression report in the system temporary directory under `hyperion-browser-audit`; set `HYPERION_BROWSER_ARTIFACTS` to choose another output folder. Chromium must be installed with `npx playwright install chromium`.
 
 Set `HYPERION_BROWSER=firefox` to check Firefox, or `HYPERION_BROWSER_EXECUTABLE` to use a specific installed browser executable.
 
