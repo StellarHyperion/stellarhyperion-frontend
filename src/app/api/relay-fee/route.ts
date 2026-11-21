@@ -1,3 +1,4 @@
+import { fetchWithDeadline } from "../../../lib/provider-request";
 import { DESTINATIONS } from "../../../config/testnet";
 import { NextResponse } from "next/server";
 import { feeRouteCapabilityResponse } from "../../../lib/runtime-capabilities";
@@ -56,7 +57,7 @@ export async function GET(request: Request) {
   }
   try {
     const quote = await loadRelayFee(`axelar:XLM:${relayDestination.key}:${relayDestination.axelarName}`, async () => {
-    const response = await fetch("https://testnet.api.gmp.axelarscan.io", {
+    const response = await fetchWithDeadline("https://testnet.api.gmp.axelarscan.io", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -65,7 +66,6 @@ export async function GET(request: Request) {
         destinationChain: "ethereum-sepolia",
         event: "InterchainTransfer",
       }),
-      signal: AbortSignal.timeout(15_000),
       cache: "no-store",
     });
     if (response.status === 429 || response.status === 503) {

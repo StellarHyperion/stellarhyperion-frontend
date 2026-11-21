@@ -1,3 +1,4 @@
+import { fetchWithDeadline } from "../../../lib/provider-request";
 import { NextResponse } from "next/server";
 import { feeRouteCapabilityResponse } from "../../../lib/runtime-capabilities";
 import { destinationFor } from "../../../config/testnet";
@@ -69,7 +70,7 @@ export async function GET(request: Request) {
   }
   try {
     const quote = await loadCircleFee(`circle:USDC:${destination.key}:${destination.cctpDomain}`, async () => {
-    const response = await fetch(
+    const response = await fetchWithDeadline(
       `https://iris-api-sandbox.circle.com/v2/burn/USDC/fees/27/${destination.cctpDomain}?forward=true`,
       {
         signal: AbortSignal.timeout(15_000),
