@@ -23,6 +23,12 @@ export interface TransferCheckpoint {
   /** The exact source asset (code + issuer) this recovery data was converted from. */
   source?: CheckpointSource;
 }
+
+/** A confirmed conversion may produce less USDC than the original quote. */
+export function hasVerifiedBridgeBalance(available: bigint, bridgeAmount: string): boolean {
+  if (available < 0n || !/^\d+$/.test(bridgeAmount)) return false;
+  return available >= BigInt(bridgeAmount);
+}
 const key = "hyperion.testnet.pending-transfer";
 const event = "hyperion:pending-transfer";
 const revisionKey = `${key}.revision`;

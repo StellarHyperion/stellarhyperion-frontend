@@ -32,6 +32,7 @@ import {
 } from "../src/contracts/assets";
 import {
   checkpointForAsset,
+  hasVerifiedBridgeBalance,
   parseCheckpoint,
   type TransferCheckpoint,
 } from "../src/contracts/checkpoint";
@@ -824,6 +825,11 @@ describe("Interrupted transfer recovery", () => {
       txHash: "b".repeat(64),
     };
     expect(parseCheckpoint(JSON.stringify(archived))).toEqual(archived);
+  });
+  it("requires the confirmed conversion balance to cover the planned bridge", () => {
+    expect(hasVerifiedBridgeBalance(1000000n, checkpoint.bridgeAmount)).toBe(true);
+    expect(hasVerifiedBridgeBalance(999999n, checkpoint.bridgeAmount)).toBe(false);
+    expect(hasVerifiedBridgeBalance(1000000n, "not-an-amount")).toBe(false);
   });
   it.each([
     { router: "different" },
