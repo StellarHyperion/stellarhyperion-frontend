@@ -14,7 +14,7 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import { fetchClaims } from "../../api";
 import { useVisibilityPoll } from "../../lib/visibility-poll";
@@ -1087,7 +1087,8 @@ export function Bridge() {
   const [source, setSource] = useState<SourceAsset>(USDC);
   const [destination, setDestination] = useState<DestinationKey>("sepolia");
   const [route, setRoute] = useState<BridgeRoute>(1);
-  const runtimeReady = runtimeSigningAvailable(runtime.capabilities, route);
+  const runtimeReady =
+    runtime.deploymentReady && runtimeSigningAvailable(runtime.capabilities, route);
   const [amount, setAmount] = useState("");
   const [recipient, setRecipient] = useState("");
   const [touched, setTouched] = useState(false);
@@ -1374,14 +1375,19 @@ export function Bridge() {
     }
   };
 
-  const invalidateQuote = () => {
+  const invalidateQuote = useCallback(() => {
     setQuoteVersion((version) => version + 1);
     setQuoted(null);
     setReviewing(false);
     setReviewApproval(null);
     setReviewed(null);
     setQuoteDiff(null);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!runtime.deploymentUpdateAvailable) return;
+    invalidateQuote();
+  }, [runtime.deploymentUpdateAvailable, invalidateQuote]);
 
   useEffect(() => {
     if (!wallet.address) return;

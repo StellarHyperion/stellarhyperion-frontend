@@ -30,7 +30,8 @@
     "check": "npm run fmt:check && npm run house && npm run contrast && npm run test && npm run lint && npm run typecheck && npm run build",
     "test:browser": "node scripts/browser-smoke.mjs",
     "test:browser:faults": "node scripts/browser-fault-harness.mjs",
-    "test:browser:assistive": "node scripts/browser-assistive-audit.mjs"
+    "test:browser:assistive": "node scripts/browser-assistive-audit.mjs",
+    "test:browser:deployment": "node scripts/browser-deployment-revision.mjs"
   },
   "dependencies": {
     "@albedo-link/intent": "^0.12.0",

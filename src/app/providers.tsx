@@ -57,9 +57,62 @@ export function DeploymentRevisionNotice(): ReactElement | null {
 
 export function Providers({ children, translations }: ProvidersProps): ReactElement {
   const [capabilities, setCapabilities] = useState<RuntimeCapabilities>(initialRuntimeCapabilities);
+  const [deploymentCheck, setDeploymentCheck] = useState<
+    "checking" | "current" | "changed" | "unavailable"
+  >("checking");
+  const [deploymentRetry, setDeploymentRetry] = useState(0);
   const controller = useRef<AbortController | null>(null);
   const inFlight = useRef(false);
   const admission = publicConfigurationAdmission();
+  useEffect(() => {
+    if (!admission.available) return;
+    const owned = new AbortController();
+    let active = true;
+    let checking = false;
+    let deploymentChanged = false;
+    const check = async () => {
+      if (!active || checking || deploymentChanged) return;
+      checking = true;
+      try {
+        const response = await fetch("/api/deployment", {
+          cache: "no-store",
+          redirect: "error",
+          signal: owned.signal,
+        });
+        if (!response.ok) throw new Error("The active deployment could not be checked.");
+        const body: unknown = await response.json();
+        const identity =
+          body && typeof body === "object" && !Array.isArray(body)
+            ? (body as { identity?: unknown }).identity
+            : undefined;
+        if (!parsePublicDeploymentIdentity(identity))
+          throw new Error("The active deployment identity is invalid.");
+        if (deploymentIdentityMatches(identity)) setDeploymentCheck("current");
+        else {
+          deploymentChanged = true;
+          setDeploymentCheck("changed");
+        }
+      } catch {
+        if (active && !owned.signal.aborted) setDeploymentCheck("unavailable");
+      } finally {
+        checking = false;
+      }
+    };
+    const checkWhenVisible = () => {
+      if (document.visibilityState === "visible") void check();
+    };
+    void check();
+    const timer = window.setInterval(checkWhenVisible, 30_000);
+    document.addEventListener("visibilitychange", checkWhenVisible);
+    window.addEventListener("focus", checkWhenVisible);
+    return () => {
+      active = false;
+      owned.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", checkWhenVisible);
+      window.removeEventListener("focus", checkWhenVisible);
+    };
+  }, [admission.available, deploymentRetry]);
   useEffect(() => {
     if (!admission.available) return;
     const owned = new AbortController();
@@ -111,14 +164,60 @@ export function Providers({ children, translations }: ProvidersProps): ReactElem
     : states.includes("missing")
       ? "staticFeeUnavailable"
       : "runtimeUnknown";
+  const deploymentReady = deploymentCheck === "current";
   return (
     <RuntimeCapabilitiesProvider
-      value={{ capabilities, refresh }}
+      value={{
+        capabilities,
+        refresh,
+        deploymentReady,
+        deploymentUpdateAvailable: deploymentCheck === "changed",
+      }}
       {...(translations ? { translations } : {})}
     >
       <WalletProvider>
         <DeploymentRevisionNotice />
         {children}
+        {deploymentCheck !== "current" && (
+          <section
+            className={styles.deploymentNotice}
+            role={deploymentCheck === "changed" ? "alert" : "status"}
+            aria-label="Deployment revision"
+          >
+            <p>
+              {deploymentCheck === "changed"
+                ? "A newer testnet deployment is active. Unsigned quotes and reviews are no longer valid."
+                : deploymentCheck === "unavailable"
+                  ? "The active deployment could not be verified. Transfer quotes and signing are paused."
+                  : "Checking the active testnet deployment before enabling transfer quotes."}
+            </p>
+            <p>
+              Reload to use the active deployment. Saved transaction hashes are kept and must be
+              checked before another approval. Source confirmation and destination delivery remain
+              separate.
+            </p>
+            {deploymentCheck === "changed" ? (
+              <button
+                className={styles.retry}
+                type="button"
+                onClick={() => window.location.reload()}
+              >
+                Reload active deployment
+              </button>
+            ) : deploymentCheck === "unavailable" ? (
+              <button
+                className={styles.retry}
+                type="button"
+                onClick={() => {
+                  setDeploymentCheck("checking");
+                  setDeploymentRetry((value) => value + 1);
+                }}
+              >
+                Retry deployment check
+              </button>
+            ) : null}
+          </section>
+        )}
         {states.some((state) => state !== "available") && (
           <section className={styles.diagnostic} aria-label="Live fee availability">
             <p role="status">{formatMessage(translations, diagnostic)}</p>

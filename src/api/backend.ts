@@ -317,7 +317,8 @@ export function localTransferMatches(
     record.origin.chain === "stellar-testnet" &&
     record.origin.sender === checkpoint.account &&
     record.origin.txHash.toLowerCase() === checkpoint.txHash &&
-    record.origin.token === (checkpoint.token ?? TESTNET.token) &&
+    record.origin.token ===
+      (checkpoint.token ?? (checkpoint.router === TESTNET.router ? TESTNET.token : "")) &&
     record.origin.router === checkpoint.router &&
     record.route === checkpoint.route &&
     record.destination.recipient.toLowerCase() === checkpoint.recipient.toLowerCase() &&

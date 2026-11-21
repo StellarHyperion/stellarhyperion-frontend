@@ -150,8 +150,9 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       typeof value.recipient !== "string" ||
       typeof value.bridgeAmount !== "string" ||
       typeof value.txHash !== "string" ||
-      (value.router !== TESTNET.router && !archivedRouterFor(value.router)) ||
-      (value.token !== undefined && value.token !== TESTNET.token) ||
+      !StrKey.isValidContract(value.router) ||
+      (value.token !== undefined &&
+        (typeof value.token !== "string" || !StrKey.isValidContract(value.token))) ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
       !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||
       /^0x0{40}$/.test(value.recipient) ||
@@ -169,7 +170,11 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       router: value.router,
       ...(schemaVersion === undefined ? {} : { schemaVersion: 1 as const }),
       ...(revision === undefined ? {} : { revision }),
-      token: TESTNET.token,
+      ...(typeof value.token === "string"
+        ? { token: value.token }
+        : value.router === TESTNET.router
+          ? { token: TESTNET.token }
+          : {}),
       account: value.account,
       recipient: value.recipient,
       bridgeAmount: value.bridgeAmount,
@@ -234,7 +239,7 @@ function checkpointSourceIdentity(source: CheckpointSource | undefined): string 
 export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
   return JSON.stringify([
     checkpoint.router,
-    checkpoint.token ?? TESTNET.token,
+    checkpoint.token ?? (checkpoint.router === TESTNET.router ? TESTNET.token : null),
     checkpoint.account,
     checkpoint.recipient,
     checkpoint.destination,

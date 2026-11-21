@@ -7,11 +7,15 @@ import { formatMessage, type MessageFormatter, type TranslationCatalog } from ".
 export interface RuntimeContextValue {
   readonly capabilities: RuntimeCapabilities;
   readonly refresh: () => void;
+  readonly deploymentReady: boolean;
+  readonly deploymentUpdateAvailable: boolean;
 }
 
 const RuntimeContext = createContext<RuntimeContextValue>({
   capabilities: initialRuntimeCapabilities,
   refresh: () => undefined,
+  deploymentReady: true,
+  deploymentUpdateAvailable: false,
 });
 const MessagesContext = createContext<TranslationCatalog | undefined>(undefined);
 
