@@ -415,6 +415,52 @@ describe("Real indexer client", () => {
       cursorFreshness(payload.cursors[0] ?? null, Date.parse("2026-11-18T12:31:00.000Z")),
     ).toBe("stale");
   });
+
+  it("revalidates transfer history with ETags and uses updated payloads", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://etag.example");
+    const first = { transfers: [], count: 0, limit: 20, offset: 0 };
+    const second = { transfers: [{ id: "new" }], count: 1, limit: 20, offset: 0 };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(first), { headers: { ETag: '"v1"' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(second), { headers: { ETag: '"v2"' } }));
+    vi.stubGlobal("fetch", fetcher);
+
+    await expect(fetchTransfers()).resolves.toEqual(first);
+    await expect(fetchTransfers()).resolves.toEqual(second);
+    expect(fetcher.mock.calls[1]?.[1]).toMatchObject({
+      headers: { Accept: "application/json", "If-None-Match": '"v1"' },
+    });
+  });
+
+  it("uses a 304 payload but does not cache a missing transfer", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://etag-missing.example");
+    const payload = { transfers: [], count: 0, limit: 20, offset: 0 };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(payload), { headers: { ETag: '"v1"' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 304 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 404 }));
+    vi.stubGlobal("fetch", fetcher);
+
+    await expect(fetchTransfers()).resolves.toEqual(payload);
+    await expect(fetchTransfers()).resolves.toEqual(payload);
+    await expect(fetchTransferByTx("missing")).resolves.toBeNull();
+    expect(fetcher.mock.calls[1]?.[1]).toMatchObject({
+      headers: { "If-None-Match": '"v1"' },
+    });
+  });
+
+  it("passes an abort signal to polling requests", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://abort.example");
+    const controller = new AbortController();
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ transfers: [] })));
+    vi.stubGlobal("fetch", fetcher);
+
+    await fetchTransfers(undefined, { signal: controller.signal });
+    const init = fetcher.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.signal).toBeDefined();
+  });
 });
 
 describe("transfer evidence", () => {

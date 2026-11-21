@@ -208,6 +208,17 @@ export function filterTransfers(
   });
 }
 
+export interface TransferRequestOptions {
+  readonly signal?: AbortSignal | TransferRequestOptions;
+}
+
+interface CachedResponse {
+  readonly etag: string;
+  readonly value: unknown;
+}
+
+const responseCache = new Map<string, CachedResponse>();
+
 export function getRouteName(route: number): string {
   switch (route) {
     case 0:
@@ -231,19 +242,24 @@ function getApiBaseUrl(): string {
   ).replace(/\/$/, "");
 }
 
-function request<T>(path: string, notFoundIsNull?: false, signal?: AbortSignal): Promise<T>;
-function request<T>(path: string, notFoundIsNull: true, signal?: AbortSignal): Promise<T | null>;
+function request<T>(path: string, notFoundIsNull?: false, signal?: AbortSignal | TransferRequestOptions): Promise<T>;
+function request<T>(path: string, notFoundIsNull: true, signal?: AbortSignal | TransferRequestOptions): Promise<T | null>;
 async function request<T>(
   path: string,
   notFoundIsNull = false,
-  signal?: AbortSignal,
+  signal?: AbortSignal | TransferRequestOptions,
 ): Promise<T | null> {
+  signal = signal && "signal" in signal ? signal.signal : signal as AbortSignal | undefined;
   const base = getApiBaseUrl();
   if (!base) throw new Error("Transfer history is unavailable: no indexer is configured.");
+  const url = `${base}${path}`;
+  const cached = responseCache.get(url);
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (cached) headers["If-None-Match"] = cached.etag;
   let response: Response;
   try {
-    response = await fetch(`${base}${path}`, {
-      headers: { Accept: "application/json" },
+    response = await fetch(url, {
+      headers,
       signal: signal
         ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
         : AbortSignal.timeout(15_000),
@@ -254,12 +270,20 @@ async function request<T>(
       "The transfer indexer is unreachable. On-chain transfers and claims still work.",
     );
   }
-  if (response.status === 404 && notFoundIsNull) return null;
+  if (response.status === 304 && cached) return cached.value as T;
+  if (response.status === 404 && notFoundIsNull) {
+    responseCache.delete(url);
+    return null;
+  }
   if (!response.ok)
     throw new Error(
       `The transfer indexer returned HTTP ${response.status}. No sample records are shown.`,
     );
-  return (await response.json()) as T;
+  const value = (await response.json()) as T;
+  const etag = response.headers.get("ETag");
+  if (etag) responseCache.set(url, { etag, value });
+  else responseCache.delete(url);
+  return value;
 }
 
 function params(query?: object): string {
@@ -271,7 +295,7 @@ function params(query?: object): string {
 }
 export async function fetchTransfers(
   query?: TransfersQuery,
-  signal?: AbortSignal,
+  signal?: AbortSignal | TransferRequestOptions,
 ): Promise<TransfersResponse> {
   return await request<TransfersResponse>(`/v1/transfers${params(query)}`, false, signal);
 }
@@ -279,13 +303,13 @@ export async function fetchClaims(query?: ClaimsQuery): Promise<ClaimsResponse> 
   return await request<ClaimsResponse>(`/v1/claims${params(query)}`);
 }
 
-export async function fetchIndexerMetrics(signal?: AbortSignal): Promise<IndexerMetrics> {
+export async function fetchIndexerMetrics(signal?: AbortSignal | TransferRequestOptions): Promise<IndexerMetrics> {
   return await request<IndexerMetrics>("/v1/metrics", false, signal);
 }
 
 export function fetchTransferByTx(
   hash: string,
-  signal?: AbortSignal,
+  signal?: AbortSignal | TransferRequestOptions,
 ): Promise<FormattedTransfer | null> {
   if (!/^[0-9a-f]{64}$/i.test(hash))
     return Promise.reject(new Error("Enter a 64-character Stellar transaction hash."));
@@ -294,7 +318,7 @@ export function fetchTransferByTx(
 
 export async function fetchTransferEvidence(
   transfer: FormattedTransfer,
-  signal?: AbortSignal,
+  signal?: AbortSignal | TransferRequestOptions,
 ): Promise<TransferProof> {
   if (!/^[1-9][0-9]{0,18}$/.test(transfer.id) || BigInt(transfer.id) > 9223372036854775807n)
     throw new Error("Detailed proof lookup is unavailable for this transfer identifier.");
@@ -330,7 +354,7 @@ export function localTransferMatches(
 export async function reconcileTransfers(
   account: string,
   references: readonly LocalTransferReference[],
-  signal?: AbortSignal,
+  signal?: AbortSignal | TransferRequestOptions,
 ): Promise<ReconciliationResult[]> {
   const selected = references
     .filter(
