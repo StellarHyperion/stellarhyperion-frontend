@@ -2,6 +2,7 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import styles from "../bridge/AssetPicker.module.css";
+import { usePrefersReducedMotion } from "./motion";
 
 export function Dialog({
   title,
@@ -18,6 +19,7 @@ export function Dialog({
   const ref = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const titleId = useId();
+  const reducedMotion = usePrefersReducedMotion();
   useEffect(() => {
     const dialog = ref.current;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -44,6 +46,7 @@ export function Dialog({
       className={styles.dialog}
       aria-labelledby={titleId}
       aria-modal="true"
+      data-reduced-motion={reducedMotion ? "true" : undefined}
       onCancel={(event) => {
         event.preventDefault();
         event.stopPropagation();

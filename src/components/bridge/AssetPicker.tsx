@@ -157,7 +157,13 @@ export function SourceAssetPicker({
         </p>
       )}
       <div className={styles.list} aria-busy={loading}>
-        {loading && <p role="status">Searching Stellar assets...</p>}
+        <p className={styles.listStatus} role="status">
+          {loading
+            ? "Searching Stellar assets..."
+            : query.trim()
+              ? `${assets.length} matching assets for ${query.trim()}.`
+              : "Showing USDC, XLM and wallet assets."}
+        </p>
         {remote?.key === query && remote.version === queryVersion && remote.error && (
           <p role="alert">{remote.error}</p>
         )}

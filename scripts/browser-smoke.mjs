@@ -205,6 +205,22 @@ try {
   await page.getByLabel("Search Stellar assets").fill("USDC");
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "hidden" });
+  // Reduced motion: the dialog opens as a static state and its status text stays readable.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.getByRole("button", { name: "Choose source token", exact: true }).click();
+  const reducedDialog = page.getByRole("dialog", { name: "Choose a token" });
+  await reducedDialog.waitFor();
+  assert.equal(
+    await reducedDialog.evaluate((node) => getComputedStyle(node).animationName),
+    "none",
+  );
+  await reducedDialog
+    .getByRole("status")
+    .filter({ hasText: "Showing USDC, XLM and wallet assets." })
+    .waitFor();
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.getByRole("button", { name: "Choose destination network and token" }).click();
   const destinationDialog = page.getByRole("dialog", { name: "Choose a destination" });
   for (const name of ["Ethereum Sepolia", "Base Sepolia", "Arc Testnet"])

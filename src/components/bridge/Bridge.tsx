@@ -2015,7 +2015,10 @@ export function Bridge() {
           </div>
           <div className={styles.amountRow}>
             {fetching ? (
-              <div className={styles.skeleton} aria-hidden="true" />
+              <>
+                <span className={styles.skeleton} data-motion="decorative" aria-hidden="true" />
+                <span className="visuallyHidden">Receive amount pending route quote.</span>
+              </>
             ) : (
               <output aria-label="Minimum received" className={styles.receiveAmount}>
                 {runtimeReady && quote ? (
@@ -2165,14 +2168,14 @@ export function Bridge() {
         </div>
         {fetching ? (
           <div className={styles.fetching} role="status">
-            <span className={styles.fetchOrbit} aria-hidden="true">
+            <span className={styles.fetchOrbit} data-motion="decorative" aria-hidden="true">
               <LoaderCircle size={22} />
             </span>
             <div>
               <strong>Finding your route</strong>
               <span>{message("routeLoading")}</span>
             </div>
-            <span className={styles.fetchDots} aria-hidden="true">
+            <span className={styles.fetchDots} data-motion="decorative" aria-hidden="true">
               <i />
               <i />
               <i />

@@ -100,6 +100,13 @@
   padding: 20px 0;
   font-size: 0.875rem;
 }
+.list > .listStatus {
+  padding: 0 0 6px;
+  font-family: var(--face-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
 .assetChoice {
   display: grid;
   gap: 6px;
@@ -284,7 +291,7 @@
   }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .dialog[open] {
+  .dialog[open]:not([data-reduced-motion="true"]) {
     animation: open var(--motion-state) var(--ease-enter) both;
   }
   @keyframes open {
