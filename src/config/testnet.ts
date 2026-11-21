@@ -1,5 +1,6 @@
 import { CHAINS, RAIL_CONTRACTS, assetOn } from "@hyperion/protocol";
 import deployment from "./testnet-deployment.json";
+import { publicEndpoint } from "./public-boundary";
 import { StrKey } from "@stellar/stellar-sdk";
 const configured = (value: string | undefined, fallback: string) =>
   value?.trim() ? value.trim() : fallback;
@@ -144,9 +145,9 @@ export const TESTNET = {
   reader: stellar.admin,
   usdcCode: stellar.tokens.USDC.code,
   usdcIssuer: stellar.tokens.USDC.issuer,
-  rpcUrl: configured(
-    process.env.NEXT_PUBLIC_STELLAR_RPC_URL,
-    "https://soroban-testnet.stellar.org",
+  rpcUrl: publicEndpoint(
+    "NEXT_PUBLIC_STELLAR_RPC_URL",
+    configured(process.env.NEXT_PUBLIC_STELLAR_RPC_URL, "https://soroban-testnet.stellar.org"),
   ),
   networkPassphrase: "Test SDF Network ; September 2015",
   horizonUrl: configured(
