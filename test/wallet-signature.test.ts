@@ -7,7 +7,12 @@ import {
   Operation,
   TransactionBuilder,
 } from "@stellar/stellar-sdk";
-import { assertWalletApproval, verifyWalletSignature } from "../src/wallets/stellar/signature";
+import {
+  assertSigningAuthorized,
+  assertWalletApproval,
+  verifyWalletSignature,
+  WalletSigningError,
+} from "../src/wallets/stellar/signature";
 
 const signer = Keypair.random();
 function transaction(
@@ -144,6 +149,169 @@ describe("Wallet signature verification", () => {
     const original = transaction().toXdr();
     expect(() => verifyWalletSignature(original, original, signer.publicKey())).toThrow(
       "did not sign",
+    );
+  });
+  it("rejects a fee-bump envelope as the returned XDR with 'unsupported'", () => {
+    const tx = transaction();
+    const original = tx.toXdr();
+    tx.sign(signer);
+    const feeSource = Keypair.random();
+    const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+      feeSource,
+      "200",
+      tx,
+      Networks.TESTNET,
+    );
+    feeBump.sign(feeSource);
+    expect(() => verifyWalletSignature(original, feeBump.toXdr(), signer.publicKey())).toThrow(
+      "unsupported",
+    );
+  });
+  it("rejects a fee-bump envelope as the original XDR with 'unsupported'", () => {
+    const tx = transaction();
+    tx.sign(signer);
+    const feeSource = Keypair.random();
+    const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+      feeSource,
+      "200",
+      tx,
+      Networks.TESTNET,
+    );
+    feeBump.sign(feeSource);
+    expect(() => verifyWalletSignature(feeBump.toXdr(), tx.toXdr(), signer.publicKey())).toThrow(
+      "unsupported",
+    );
+  });
+  it("rejects garbage, empty, and truncated XDR with 'unreadable'", () => {
+    const tx = transaction();
+    const original = tx.toXdr();
+    tx.sign(signer);
+    const signed = tx.toXdr();
+    expect(() =>
+      verifyWalletSignature(original, "not-valid-xdr-at-all", signer.publicKey()),
+    ).toThrow("unreadable");
+    expect(() => verifyWalletSignature(original, "", signer.publicKey())).toThrow("unreadable");
+    expect(() => verifyWalletSignature(original, signed.slice(0, 20), signer.publicKey())).toThrow(
+      "unreadable",
+    );
+    expect(() => verifyWalletSignature("not-valid-xdr-at-all", signed, signer.publicKey())).toThrow(
+      "unreadable",
+    );
+    expect(() => verifyWalletSignature("", signed, signer.publicKey())).toThrow("unreadable");
+    expect(() => verifyWalletSignature(original.slice(0, 20), signed, signer.publicKey())).toThrow(
+      "unreadable",
+    );
+  });
+
+  describe("Read-only signing guard and reconciliation checks", () => {
+    it("never permits signing for typed read-only accounts", () => {
+      const typedKey = Keypair.random().publicKey();
+
+      expect(() => {
+        assertSigningAuthorized({
+          account: typedKey,
+          walletId: null,
+          isReadOnly: true,
+        });
+      }).toThrow(WalletSigningError);
+
+      try {
+        assertSigningAuthorized({
+          account: typedKey,
+          walletId: null,
+          isReadOnly: true,
+        });
+      } catch (err) {
+        expect(err).toBeInstanceOf(WalletSigningError);
+        expect((err as WalletSigningError).code).toBe("READ_ONLY_MODE");
+      }
+
+      expect(() => {
+        assertSigningAuthorized({
+          account: typedKey,
+          walletId: "freighter",
+          isReadOnly: true,
+        });
+      }).toThrow("A typed public address cannot sign transactions. Connect a Stellar wallet.");
+
+      expect(() => {
+        assertWalletApproval(
+          {
+            account: signer.publicKey(),
+            network: Networks.TESTNET,
+            operation: "bridge",
+          },
+          signer.publicKey(),
+          { isReadOnly: true, walletId: "freighter" },
+        );
+      }).toThrow("A typed public address cannot sign transactions. Connect a Stellar wallet.");
+    });
+
+    it("requires explicit reconciliation when connected wallet differs from viewed address", () => {
+      const connectedKey = signer.publicKey();
+      const viewedKey = Keypair.random().publicKey();
+
+      expect(() => {
+        assertSigningAuthorized({
+          account: viewedKey,
+          walletId: "freighter",
+          isReadOnly: false,
+          connectedAccount: connectedKey,
+          viewedAddress: viewedKey,
+        });
+      }).toThrow(WalletSigningError);
+
+      try {
+        assertSigningAuthorized({
+          account: viewedKey,
+          walletId: "freighter",
+          isReadOnly: false,
+          connectedAccount: connectedKey,
+          viewedAddress: viewedKey,
+        });
+      } catch (err) {
+        expect(err).toBeInstanceOf(WalletSigningError);
+        expect((err as WalletSigningError).code).toBe("ACCOUNT_MISMATCH");
+      }
+
+      expect(() => {
+        assertSigningAuthorized({
+          account: connectedKey,
+          walletId: "freighter",
+          isReadOnly: false,
+          connectedAccount: connectedKey,
+          viewedAddress: connectedKey,
+        });
+      }).not.toThrow();
+    });
+  });
+
+  it("rejects a signature from a stale, overlapping session whose sequence has moved on", () => {
+    // Session A prepares and signs a transaction while session B, overlapping it, prepares a
+    // fresh transaction for the same account after its sequence number has already advanced. A
+    // wallet that mixes the two up must never have the stale signature accepted as current.
+    const stale = transaction();
+    const staleUnsigned = stale.toXdr();
+    stale.sign(signer);
+    const current = new TransactionBuilder(new Account(signer.publicKey(), "1"), {
+      fee: "100",
+      networkPassphrase: Networks.TESTNET,
+    })
+      .addOperation(
+        Operation.payment({
+          destination: Keypair.random().publicKey(),
+          asset: Asset.native(),
+          amount: "1",
+        }),
+      )
+      .setTimeout(60)
+      .build();
+    expect(() => verifyWalletSignature(current.toXdr(), stale.toXdr(), signer.publicKey())).toThrow(
+      "changed the transaction",
+    );
+    // The stale envelope is only ever valid against the session that actually requested it.
+    expect(verifyWalletSignature(staleUnsigned, stale.toXdr(), signer.publicKey())).toBe(
+      stale.toXdr(),
     );
   });
 });

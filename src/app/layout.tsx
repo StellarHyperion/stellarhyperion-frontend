@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import { archivo, plexMono } from "./fonts";
 import { PAGE_INK } from "./tokens";
+import { STELLAR_DEPLOYMENT } from "../config/testnet";
 import { Providers } from "./providers";
 import { Footer, Header, Main, Shell } from "../components/chrome";
 import "./globals.css";
@@ -44,6 +45,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       className={`${archivo.variable} ${plexMono.variable}`}
     >
       <head>
+        <meta name="hyperion-deployment-commit" content={STELLAR_DEPLOYMENT.commit} />
         <script
           nonce={nonce}
           dangerouslySetInnerHTML={{

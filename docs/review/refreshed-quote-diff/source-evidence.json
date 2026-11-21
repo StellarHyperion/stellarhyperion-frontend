@@ -1,0 +1,18 @@
+{
+  "sources": {
+    "src/components/bridge/Bridge.tsx": "68b0db28d6dede961cb2cbf61b3f78365edfbd4a49cc825e3c6219aab67061a6",
+    "src/components/bridge/Bridge.module.css": "ed608551203f293274f137e863addde5b1d420149ca0f46dd9453c04806da748",
+    "src/contracts/stellar.ts": "e704e473dc0e4c77480ec6c12dadd4646ee74fd86d8e8f02d5435e8a8dc159b5",
+    "src/contracts/assets.ts": "e51dc4c5f0f049342151b5065730718014100a3468d5ad1b0848821b2b7dca14",
+    "src/contracts/checkpoint.ts": "ff2255d4b2b00c82e2810ff568376c1fc1c4d96205655bb36dec548f69c781bb",
+    "src/config/testnet.ts": "66f0b7bcf73c30ec00ce360388f634331529eeda7d0018d9ac81d7a4391b4fbb",
+    "src/config/testnet-deployment.json": "672e6946b4e4aea346bb8c9a4393c955e0666d67119b2805a45192962c5e6d06",
+    "src/wallets/stellar/sdk.ts": "9137c2e2da4eeea709ccc1145b2f79d49fd640d2bdb62307b0f9118abdda30f8",
+    "src/wallets/stellar/context.tsx": "792e4bf49ffe3f981939adc536b07afd2765dd1cfce97ab765edf3aeda5fe10c",
+    "src/wallets/stellar/signature.ts": "5e698dea0d64e708845ed3b511fc8d68adbadd73102b2cb1f0e7d1df8b168b11",
+    "src/app/globals.css": "15024b300b2d45decdc9a3c333fa3c7935d609bc3f7dd9c62664cbbef5fffc21",
+    "src/lib/quote-diff.ts": "1c44285092578f4d9848c4dfdbe6412dc4a4ed149d46d83da5863cac901f35f2",
+    "src/lib/relay-budget.ts": "0b2d1515a5602d39b83a9281c375d10c3ac25570712c499862b5adfebe6246b1"
+  },
+  "fixture": "Complete production Bridge/Providers/quote/contract-simulation/intent/submission/checkpoint/wallet SDK/signature verifier. Mocked RPC/Horizon/EVM/provider/Freighter transports; synthetic zero-funded local signer. No external broadcast/payment."
+}

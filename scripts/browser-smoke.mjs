@@ -41,6 +41,65 @@ try {
     localStorage.setItem("hyperion.testnet.pending-transfer", "unresolved-checkpoint");
   });
   page.on("pageerror", (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    window.freighter = true;
+    window.addEventListener("message", (event) => {
+      if (
+        typeof event.data === "object" &&
+        event.data !== null &&
+        event.data.source === "FREIGHTER_EXTERNAL_MSG_REQUEST"
+      ) {
+        if (event.data.type === "REQUEST_CONNECTION_STATUS") {
+          window.postMessage(
+            {
+              source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
+              messagedId: event.data.messageId,
+              isConnected: true,
+            },
+            "*",
+          );
+        } else if (
+          event.data.type === "REQUEST_ACCESS" ||
+          event.data.type === "REQUEST_PUBLIC_KEY"
+        ) {
+          window.postMessage(
+            {
+              source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
+              messagedId: event.data.messageId,
+              publicKey: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+              address: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+            },
+            "*",
+          );
+        }
+      }
+    });
+  });
+  // This smoke check only reads and never signs. Catch any accidental live submission network
+  // call (a Soroban RPC POST or an outbound Horizon transaction broadcast) so a change that makes
+  // this read-only pass start spending testnet funds fails loudly instead of going unnoticed.
+  // Matching is done against the parsed hostname (never an unanchored substring test against the
+  // full URL), so an attacker-controlled URL like https://evil.com/soroban-testnet.stellar.org or
+  // https://soroban-testnet.stellar.org.evil.com cannot be mistaken for the real testnet host.
+  const submissionCalls = [];
+  const submissionHostname = (url) => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return null;
+    }
+  };
+  page.on("request", (request) => {
+    const url = request.url();
+    const hostname = submissionHostname(url);
+    if (
+      request.method() === "POST" &&
+      (hostname === "soroban-testnet.stellar.org" ||
+        (hostname === "horizon-testnet.stellar.org" &&
+          new URL(url).pathname.includes("/transactions")))
+    )
+      submissionCalls.push(url);
+  });
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
   await page.evaluate(() => {
@@ -167,7 +226,65 @@ try {
   await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
   await page.getByText("Freighter", { exact: true }).waitFor();
   await page.getByText("Albedo", { exact: true }).waitFor();
+  for (const walletName of ["Freighter", "Albedo", "xBull", "LOBSTR"])
+    await page.getByRole("dialog").getByText(walletName, { exact: true }).waitFor();
   await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  const pickerDialog = page.getByRole("dialog", { name: "Connect a Stellar wallet" });
+  await pickerDialog.waitFor();
+  await pickerDialog.getByText("Freighter", { exact: true }).waitFor();
+  await pickerDialog.getByText("Albedo", { exact: true }).waitFor();
+
+  // Test typing a read-only address in the wallet picker dialog
+  const readOnlyInput = pickerDialog.getByLabel("Stellar public address for read-only inspection");
+  await readOnlyInput.waitFor();
+  await readOnlyInput.fill("GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+  await pickerDialog.getByRole("button", { name: "Inspect", exact: true }).click();
+  await pickerDialog.waitFor({ state: "hidden" });
+  const readOnlyButton = page.getByRole("button", { name: /GBBD47.*read-only/i });
+  await readOnlyButton.waitFor();
+  await readOnlyButton.click();
+  const readOnlyDetails = page.getByRole("region", { name: "Wallet details" });
+  await readOnlyDetails.waitFor();
+  await readOnlyDetails.getByText("read-only inspection").waitFor();
+  await readOnlyDetails.getByRole("button", { name: "Exit inspection" }).click();
+  await readOnlyDetails.waitFor({ state: "hidden" });
+
+  // Connect wallet and test mode mismatch prompt
+  await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
+  await pickerDialog.waitFor();
+  await pickerDialog.getByRole("button", { name: "Freighter", exact: true }).click();
+  await pickerDialog.waitFor({ state: "hidden" });
+  const connectedButton = page.getByRole("button", { name: /GA5ZSE.*testnet/i });
+  await connectedButton.waitFor();
+  await connectedButton.click();
+  const connectedDetails = page.getByRole("region", { name: "Wallet details" });
+  await connectedDetails.waitFor();
+
+  // Type a different address while connected to trigger mode mismatch reconciliation prompt
+  const menuInspectInput = connectedDetails.getByLabel("Stellar address to inspect");
+  await menuInspectInput.waitFor();
+  await menuInspectInput.fill("GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+  await connectedDetails.getByRole("button", { name: "Inspect", exact: true }).click();
+
+  const reconciliationRegion = page.getByRole("region", { name: "Mode reconciliation" });
+  await reconciliationRegion.waitFor();
+  await reconciliationRegion.getByText("Mode reconciliation required").waitFor();
+  assert.equal(
+    await reconciliationRegion.getByRole("button", { name: "Use connected wallet" }).count(),
+    1,
+  );
+  assert.equal(
+    await reconciliationRegion.getByRole("button", { name: "Keep read-only" }).count(),
+    1,
+  );
+
+  // Keep read-only mode to reconcile
+  await reconciliationRegion.getByRole("button", { name: "Keep read-only" }).click();
+  assert.equal(await page.getByRole("region", { name: "Mode reconciliation" }).count(), 0);
+  await connectedDetails.getByText("read-only inspection").waitFor();
+  await connectedDetails.getByRole("button", { name: "Exit inspection" }).click();
+  await connectedDetails.waitFor({ state: "hidden" });
   await page.evaluate((router) => {
     localStorage.setItem(
       "hyperion.testnet.pending-transfer",
@@ -296,9 +413,181 @@ try {
       `Horizontal overflow on ${route}`,
     );
   }
+  // Verify wallet network change detection and wrong network blocking in browser.
+  const networkPage = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  networkPage.on("pageerror", (error) => errors.push(error.message));
+  await networkPage.addInitScript(() => {
+    window.freighter = true;
+    window.__freighterNetwork = "Public Global Stellar Network ; September 2015";
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if (data && data.source === "FREIGHTER_EXTERNAL_MSG_REQUEST") {
+        if (data.type === "REQUEST_CONNECTION_STATUS") {
+          window.postMessage(
+            {
+              source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
+              messagedId: data.messageId,
+              isConnected: true,
+              data: { isConnected: true },
+            },
+            window.location.origin,
+          );
+        } else if (data.type === "REQUEST_ACCESS" || data.type === "REQUEST_PUBLIC_KEY") {
+          window.postMessage(
+            {
+              source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
+              messagedId: data.messageId,
+              publicKey: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+              address: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+              data: {
+                publicKey: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                address: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+              },
+            },
+            window.location.origin,
+          );
+        } else if (data.type === "REQUEST_NETWORK_DETAILS") {
+          const details = {
+            network: window.__freighterNetwork.includes("Test") ? "TESTNET" : "PUBLIC",
+            networkPassphrase: window.__freighterNetwork,
+            networkUrl: "https://horizon-testnet.stellar.org",
+          };
+          window.postMessage(
+            {
+              source: "FREIGHTER_EXTERNAL_MSG_RESPONSE",
+              messagedId: data.messageId,
+              networkDetails: details,
+              ...details,
+              data: {
+                networkDetails: details,
+                ...details,
+              },
+            },
+            window.location.origin,
+          );
+        }
+      }
+    });
+  });
+  await networkPage.goto(origin, { waitUntil: "networkidle" });
+  await networkPage.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
+  await networkPage.getByRole("button", { name: "Freighter" }).click();
+  await networkPage.getByText("(wrong network)").waitFor();
+  await networkPage
+    .getByText("Switch Freighter to Stellar Testnet before signing.")
+    .first()
+    .waitFor();
+  // Switching wallet network to Testnet updates the status and clears the warning.
+  await networkPage.evaluate(() => {
+    window.__freighterNetwork = "Test SDF Network ; September 2015";
+  });
+  await networkPage.getByText("(testnet)").waitFor();
+  await networkPage.close();
+
+  // Touch targets and small screens. The dialog body scrolls while its close control and the
+  // recovery action stay inside the viewport, long amounts and hashes never overlap the controls
+  // beside them, and 320 by 640 CSS pixels stands in for a 640 pixel window at 200 percent zoom.
+  const box = (locator) =>
+    locator.evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        width: rect.width,
+        height: rect.height,
+        top: rect.top,
+        bottom: rect.bottom,
+        left: rect.left,
+        right: rect.right,
+      };
+    });
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 320, height: 640 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(origin, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+    await page.getByLabel("Amount to send").fill("123456789.1234567");
+    const amountBox = await box(page.getByLabel("Amount to send"));
+    const tokenBox = await box(
+      page.getByRole("button", { name: "Choose source token", exact: true }),
+    );
+    assert.ok(
+      amountBox.bottom <= tokenBox.top + 0.5 || amountBox.right <= tokenBox.left + 0.5,
+      `Long amount overlaps the token selector at ${viewport.width}px`,
+    );
+    await page.getByRole("button", { name: "Choose source token", exact: true }).click();
+    const tokenDialog = page.getByRole("dialog", { name: "Choose a token" });
+    await tokenDialog.waitFor();
+    const tokenDialogBox = await box(tokenDialog);
+    assert.ok(
+      tokenDialogBox.left >= 0 && tokenDialogBox.right <= viewport.width + 0.5,
+      `Dialog overflows the narrow viewport at ${viewport.width}px`,
+    );
+    assert.ok(
+      tokenDialogBox.top >= 0 && tokenDialogBox.bottom <= viewport.height + 0.5,
+      `Dialog exceeds the viewport height at ${viewport.width}px`,
+    );
+    const closeBox = await box(tokenDialog.getByRole("button", { name: "Close selector" }));
+    assert.ok(closeBox.width >= 40 && closeBox.height >= 40, "Dialog close target below 44px");
+    assert.ok(
+      closeBox.top >= 0 && closeBox.bottom <= viewport.height + 0.5,
+      `Dialog close control outside the viewport at ${viewport.width}px`,
+    );
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+
+    // A saved recovery identity with a long hash and amount keeps its action and copy control
+    // separate from the wrapping text.
+    await page.evaluate((router) => {
+      localStorage.setItem(
+        "hyperion.testnet.pending-transfer",
+        JSON.stringify({
+          router,
+          account: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          recipient: "0x" + "b".repeat(40),
+          destination: "sepolia",
+          route: 1,
+          bridgeAmount: "123456789012345",
+          stage: "bridge",
+          txHash: "a".repeat(64),
+        }),
+      );
+      window.dispatchEvent(new Event("hyperion:pending-transfer"));
+    }, router);
+    const recovery = page.getByRole("region", { name: "Transfer recovery" });
+    await recovery.waitFor();
+    const hashBox = await box(recovery.locator("code").first());
+    const copyBox = await box(recovery.getByRole("button", { name: "Copy transaction hash" }));
+    assert.ok(
+      copyBox.top >= hashBox.bottom - 0.5 || copyBox.left >= hashBox.right - 0.5,
+      `Transaction hash overlaps its copy control at ${viewport.width}px`,
+    );
+    const statusAction = recovery.getByRole("button", { name: "Check status" });
+    await statusAction.scrollIntoViewIfNeeded();
+    const statusBox = await box(statusAction);
+    assert.ok(statusBox.height >= 40, "Recovery action below the touch target minimum");
+    assert.ok(
+      statusBox.top >= 0 && statusBox.bottom <= viewport.height + 0.5,
+      `Recovery action stays out of reach at ${viewport.width}px`,
+    );
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+      `Horizontal overflow with a long hash at ${viewport.width}px`,
+    );
+    await page.evaluate(() => {
+      localStorage.removeItem("hyperion.testnet.pending-transfer");
+      window.dispatchEvent(new Event("hyperion:pending-transfer"));
+    });
+  }
   assert.deepEqual(errors, [], "Uncaught browser errors");
+  assert.deepEqual(
+    submissionCalls,
+    [],
+    "This read-only smoke check must never submit or broadcast a signed transaction.",
+  );
   console.log(
-    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, history and mobile layout.",
+    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, network detection, history, mobile layout and no live submission calls.",
   );
 } finally {
   await browser.close();

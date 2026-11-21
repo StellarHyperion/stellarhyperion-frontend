@@ -4,11 +4,13 @@
   padding: 0;
   background: var(--surface-raised);
   color: var(--text-primary);
-  width: min(440px, calc(100vw - 16px));
-  max-block-size: min(90dvh, 60rem);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  width: min(440px, calc(100vw - 24px));
+  max-height: min(85dvh, calc(100dvh - 24px));
   margin: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 .dialog::backdrop {
   background: color-mix(in srgb, var(--surface-page) 65%, transparent);
@@ -29,20 +31,21 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding-block: 4px;
-  background: var(--surface-raised);
+  flex-shrink: 0;
 }
 .heading h2 {
   min-width: 0;
   font-size: 1.125rem;
   font-weight: 600;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 .heading button {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: var(--tap-target);
+  height: var(--tap-target);
+  flex-shrink: 0;
   border: 0;
   border-radius: 50%;
   background: var(--surface-panel);
@@ -177,6 +180,9 @@
   font-size: 0.6875rem;
 }
 .issuerDetails summary {
+  min-block-size: var(--tap-target);
+  display: flex;
+  align-items: center;
   cursor: pointer;
   width: fit-content;
 }
@@ -261,6 +267,21 @@
   font-size: 0.625rem;
   color: var(--text-secondary);
   margin-top: 4px;
+}
+@media (width <= 30rem) {
+  .dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+  .content {
+    padding: 16px;
+  }
+  .footer {
+    padding-inline: 16px;
+  }
+  .footer > button {
+    flex-basis: 100%;
+  }
 }
 @media (prefers-reduced-motion: no-preference) {
   .dialog[open] {

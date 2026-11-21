@@ -28,16 +28,34 @@ import {
   CIRCLE_STELLAR,
   destinationFor,
   destinationDecimals,
+  supportedLanes,
   deploymentIdentityMismatch,
   type BridgeRoute,
   type DestinationKey,
   stellarTransactionReadUrls,
+  type SupportedLane,
 } from "../config/testnet";
 import type { TransferCheckpoint } from "./checkpoint";
+import {
+  claimSettlementIdentities,
+  parseClaimSettlementCheckpoint,
+  type ClaimSettlementCheckpoint,
+} from "./claim-checkpoint";
 import type { WalletApprovalProvenance } from "../wallets/stellar/types";
-import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
-import { validateProviderFee } from "../lib/fee-schema";
+import { compareQuotes, type QuoteDiff } from "../lib/quote-diff";
+import {
+  isFreshFeeObservation,
+  validateFeeObservation,
+  type FeeObservation,
+} from "../lib/relay-budget";
 
+export type { QuoteDiff } from "../lib/quote-diff";
+import { Client as ContractClient } from "@stellar/stellar-sdk/contract";
+import { CapabilityCache } from "../lib/capability-cache";
+import { validateProviderFee } from "../lib/fee-schema";
+import { cctpPayoutBreakdown, createFeeCooldown, FeeUnavailableError } from "../lib/relay-budget";
+
+const clientFeeCooldown = createFeeCooldown();
 const ITS_ROUTE = 1;
 const I128_MAX = (1n << 127n) - 1n;
 export const TRANSACTION_TIMEOUT_SECONDS = 180;
@@ -100,7 +118,7 @@ export interface CheckpointRecoveryResult {
   message: string;
 }
 export interface LiveQuote {
-  route: number;
+  route: BridgeRoute;
   grossAmount: bigint;
   fee: bigint;
   netAmount: bigint;
@@ -131,13 +149,17 @@ export interface LiveQuote {
   };
   resourceFee?: bigint;
   networkFee?: bigint;
+  validUntil?: string;
+  provider?: string;
+  readonly feeObservation?: FeeObservation;
 }
 export type QuoteFreshness = "current" | "stale" | "unknown";
 const QUOTE_MAX_AGE_MS = 30_000;
 export function quoteFreshness(
-  quote: Pick<LiveQuote, "observedAt">,
+  quote: Pick<LiveQuote, "observedAt" | "feeObservation">,
   now = Date.now(),
 ): QuoteFreshness {
+  if (quote.feeObservation && !isFreshFeeObservation(quote.feeObservation, now)) return "stale";
   const observed = Date.parse(quote.observedAt ?? "");
   if (!Number.isFinite(observed) || observed > now) return "unknown";
   return now - observed <= QUOTE_MAX_AGE_MS ? "current" : "stale";
@@ -327,6 +349,143 @@ async function claimPayoutEligibility(id: bigint, token: string): Promise<ClaimP
   }
 }
 
+/** The coarse family a binding limit falls into, used to pick an actionable next step. */
+export type LimitKind =
+  "flow" | "liquidity" | "routeMax" | "paused" | "disabled" | "input" | "other";
+
+/**
+ * Which specific limit blocked a requested transfer, its current value when the router reports
+ * one exactly, and what to actually do about it. Built from the same quote the router returns
+ * before anybody signs, never from a guess at what a contract might be configured with.
+ */
+export interface FlowLimitDiagnostic {
+  /** The Hyperion error name the router attached to this quote, when this build recognizes it. */
+  code: string | null;
+  kind: LimitKind;
+  /** The specific limit that is binding, named for display (e.g. "Axelar ITS flow window to Sepolia"). */
+  limitLabel: string;
+  /** A sentence naming the limit and, where known exactly, its current value. */
+  summary: string;
+  /** The exact amount still available under this limit right now, when the router reports one. */
+  available: bigint | null;
+  /** The amount that was requested and blocked. */
+  requested: bigint;
+  /** A concrete next step: an amount to try, a lane to switch to, or a reason to wait. */
+  nextStep: string;
+  /** Whether the same request could succeed later without any change. */
+  retryable: boolean;
+  /** Other lanes this testnet deployment actually carries to the same destination. */
+  alternateLanes: readonly SupportedLane[];
+}
+
+/** Raised when a live quote reports the transfer is blocked by a specific, binding limit. */
+export class TransferLimitError extends Error {
+  readonly diagnostic: FlowLimitDiagnostic;
+  constructor(diagnostic: FlowLimitDiagnostic) {
+    super(`${diagnostic.summary} ${diagnostic.nextStep}`.trim());
+    this.name = "TransferLimitError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+/**
+ * Turn a blocked `quote_routes` result into a diagnostic naming the binding limit, its exact
+ * value where the contract reports one, and an actionable next step. Pure and offline: it never
+ * queries the chain, so it can be exercised directly against any reason code a router could
+ * return.
+ */
+export function describeBindingLimit(
+  reasonCode: unknown,
+  requested: bigint,
+  flowAvailable: bigint | null,
+  destinationKey: DestinationKey,
+  route: BridgeRoute,
+): FlowLimitDiagnostic {
+  const destination = destinationFor(destinationKey);
+  const laneLabel = route === 0 ? "Circle CCTP" : "Axelar ITS";
+  const alternateLanes = supportedLanes(destinationKey).filter((lane) => lane.route !== route);
+  const laneSuggestion = alternateLanes.length
+    ? ` ${destination.name} also supports ${alternateLanes.map((lane) => lane.provider).join(" and ")} on this deployment; you can switch routes and try that lane instead.`
+    : "";
+  const candidate = typeof reasonCode === "bigint" ? reasonCode.toString() : reasonCode;
+  const parsedCode =
+    typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string" && /^\d{1,10}$/.test(candidate)
+        ? Number(candidate)
+        : NaN;
+  const name =
+    Number.isSafeInteger(parsedCode) && parsedCode >= 0 && parsedCode <= 0xffffffff
+      ? sorobanErrorName(parsedCode)
+      : null;
+  const help = name ? describeError(name) : null;
+  if (name === "FlowLimitExceeded") {
+    if (flowAvailable === null || flowAvailable < 0n || flowAvailable > I128_MAX)
+      return {
+        code: name,
+        kind: "flow",
+        limitLabel: `${laneLabel} flow window to ${destination.name}`,
+        summary: `The ${laneLabel} flow limit blocked ${formatUnits(requested, 7)} USDC. Current capacity is unavailable.`,
+        available: null,
+        requested,
+        nextStep: `Refresh the quote to check current capacity.${laneSuggestion}`,
+        retryable: true,
+        alternateLanes,
+      };
+    return {
+      code: name,
+      kind: "flow",
+      limitLabel: `${laneLabel} flow window to ${destination.name}`,
+      summary: `The ${laneLabel} lane to ${destination.name} has ${formatUnits(flowAvailable, 7)} USDC left in its current flow window, short of the ${formatUnits(requested, 7)} USDC requested.`,
+      available: flowAvailable,
+      requested,
+      nextStep:
+        flowAvailable > 0n
+          ? `Reduce the amount to ${formatUnits(flowAvailable, 7)} USDC or less, or wait for the window to roll forward and try again.${laneSuggestion}`
+          : `This window is fully used right now. Wait for it to roll forward and try again.${laneSuggestion}`,
+      retryable: true,
+      alternateLanes,
+    };
+  }
+  const kind: LimitKind =
+    name === "InsufficientLiquidity"
+      ? "liquidity"
+      : name === "ExceedsRouteLimit"
+        ? "routeMax"
+        : name === "Paused" || name === "RouteDisabled"
+          ? "paused"
+          : name === "TokenNotRegistered" || name === "TokenNotMapped"
+            ? "disabled"
+            : name === "InvalidAmount" || name === "AmountNotRepresentable"
+              ? "input"
+              : "other";
+  const nextStep =
+    kind === "liquidity"
+      ? `Try a smaller amount, or wait for liquidity on this lane to recover.${laneSuggestion}`
+      : kind === "routeMax"
+        ? `This exceeds the maximum single transfer this route allows. Split it into smaller transfers.${laneSuggestion}`
+        : kind === "paused"
+          ? `The operator must resume this lane before it can be used. Refresh its status before trying again.${laneSuggestion}`
+          : kind === "disabled"
+            ? `This asset or route is not enabled in the current configuration. Wait for a verified configuration change before trying this lane.${laneSuggestion}`
+            : kind === "input"
+              ? "Adjust the requested amount and try again."
+              : help?.retryable
+                ? `Try again shortly.${laneSuggestion}`
+                : `Review the amount or destination and try again.${laneSuggestion}`;
+  return {
+    code: name,
+    kind,
+    limitLabel: name ?? "Unrecognized limit",
+    summary: help ? `${name}: ${help.summary}` : "The router declined this amount.",
+    available: null,
+    requested,
+    nextStep,
+    retryable: help?.retryable ?? false,
+    alternateLanes,
+  };
+}
+
 function server() {
   return new rpc.Server(TESTNET.rpcUrl, { timeout: 15_000 });
 }
@@ -368,28 +527,33 @@ async function readWithRetry<T>(read: () => Promise<T>): Promise<T> {
   try {
     return await read();
   } catch (error) {
+    if (error instanceof FeeUnavailableError) throw error;
     if (!/fetch failed|timeout|timed out|429|502|503|504|ECONN/i.test(String(error))) throw error;
     await new Promise((resolve) => setTimeout(resolve, 300));
     return read();
   }
 }
-const capabilityCache = new Map<
-  string,
-  { expires: number; promise: ReturnType<rpc.Server["getContractMethods"]> }
->();
+const capabilityCache = new CapabilityCache<Awaited<ReturnType<rpc.Server["getContractMethods"]>>>(
+  60_000,
+  Date.now,
+  64,
+  (methods) => methods.length > 0 && methods.every((method) => !!method.name),
+);
+export function invalidateCapabilityDiscovery(): void {
+  capabilityCache.invalidate();
+}
 function contractMethods(contract: string) {
-  const key = `${TESTNET.rpcUrl}:${contract}`;
-  const cached = capabilityCache.get(key);
-  if (cached && cached.expires > Date.now()) return cached.promise;
   // Capability discovery downloads WASM. Keep it separate from fresh state and pricing reads.
-  const promise = readWithRetry(() => server().getContractMethods(contract)).catch(
-    (error: unknown) => {
-      capabilityCache.delete(key);
-      throw error;
+  return capabilityCache.get(
+    {
+      network: `${TESTNET.rpcUrl}:${STELLAR_DEPLOYMENT.networkPassphrase}`,
+      router: STELLAR_DEPLOYMENT.router,
+      adapter: contract,
+      resource: "contract-methods",
+      revision: `${STELLAR_DEPLOYMENT.commit}:${STELLAR_DEPLOYMENT.wasmHash}`,
     },
+    () => readWithRetry(() => server().getContractMethods(contract)),
   );
-  capabilityCache.set(key, { expires: Date.now() + 60000, promise });
-  return promise;
 }
 
 export function errorMessage(error: unknown): string {
@@ -733,12 +897,34 @@ export async function quoteTransfer(
   const quote = response.value.map(object).find((q) => q.route === route);
   if (!quote) throw new Error("The router did not quote this bridge.");
   if (quote.available !== true) {
-    const name = sorobanErrorName(Number(quote.reason));
-    throw new Error(
-      name ? `${name}: ${describeError(name).summary}` : "The router declined this amount.",
+    throw new TransferLimitError(
+      describeBindingLimit(
+        quote.reason,
+        amount,
+        typeof quote.flow_available === "bigint" &&
+          quote.flow_available >= 0n &&
+          quote.flow_available <= I128_MAX
+          ? quote.flow_available
+          : typeof quote.flow_available === "number" &&
+              Number.isSafeInteger(quote.flow_available) &&
+              quote.flow_available >= 0
+            ? BigInt(quote.flow_available)
+            : typeof quote.flow_available === "string" &&
+                /^\d{1,39}$/.test(quote.flow_available) &&
+                BigInt(quote.flow_available) <= I128_MAX
+              ? BigInt(quote.flow_available)
+              : null,
+        destinationKey,
+        route,
+      ),
     );
   }
+  const providerKey = route === 0 ? "cctp" : "relay";
+  const cooldown = clientFeeCooldown.remaining(providerKey);
+  if (cooldown > 0) throw new FeeUnavailableError(cooldown);
   const feeResponse = await readWithRetry(async () => {
+    const pendingCooldown = clientFeeCooldown.remaining(providerKey);
+    if (pendingCooldown > 0) throw new FeeUnavailableError(pendingCooldown);
     const response = await fetch(
       route === 0 ? `/api/cctp-fee?destination=${destinationKey}` : "/api/relay-fee",
       {
@@ -746,8 +932,10 @@ export async function quoteTransfer(
         cache: "no-store",
       },
     );
-    if (response.status === 503)
-      throw new Error("503: Live bridge pricing is temporarily unavailable. Try again.");
+    if (response.status === 429 || response.status === 503)
+      throw new FeeUnavailableError(
+        clientFeeCooldown.block(providerKey, response.headers.get("retry-after")),
+      );
     return response;
   });
   if (!feeResponse.ok) throw new Error("Bridge fee pricing is unavailable. Try again later.");
@@ -759,8 +947,13 @@ export async function quoteTransfer(
     destination: providerDestination,
   });
   const providerAt = new Date().toISOString();
-  const relayGas = integer(object(fee).amount);
-  const estimatedRelayGas = integer(object(fee).estimatedAmount ?? relayGas);
+  const observation = validateFeeObservation(fee, {
+    token: route === 0 ? "USDC" : "XLM",
+    destination: providerDestination,
+    route,
+  });
+  const relayGas = integer(fee.amount);
+  const estimatedRelayGas = integer(fee.estimatedAmount);
   if (estimatedRelayGas <= 0n || estimatedRelayGas > relayGas)
     throw new Error("Invalid live fee estimate.");
   if (relayGas <= 0n || relayGas > I128_MAX) throw new Error("Invalid relay gas estimate.");
@@ -780,11 +973,17 @@ export async function quoteTransfer(
     grossAmount: integer(quote.gross_amount),
     fee: integer(quote.fee),
     netAmount: integer(quote.net_amount),
-    destinationAmount: representableAmount - (route === 0 ? relayGas / quantum : 0n),
+    destinationAmount:
+      route === 0
+        ? cctpPayoutBreakdown(representableAmount, relayGas).minimumReceived
+        : representableAmount,
     representableAmount,
     flowAvailable: integer(quote.flow_available),
     ledger: response.ledger,
     observedAt: providerAt,
+    validUntil: observation.clientValidUntil,
+    feeObservation: observation,
+    ...(typeof fee.provider === "string" ? { provider: fee.provider } : {}),
     observations: { contractAt, providerAt },
     scope: {
       destination: destinationKey,
@@ -953,6 +1152,9 @@ function matchesConversion(checkpoint: TransferCheckpoint, operations: ParsedOpe
     payment?.type === "pathPaymentStrictReceive" &&
     (!payment.source || payment.source === checkpoint.account) &&
     payment.destination === checkpoint.account &&
+    (!checkpoint.source ||
+      (payment.sendAsset.getCode() === checkpoint.source.code &&
+        (payment.sendAsset.getIssuer() ?? null) === checkpoint.source.issuer)) &&
     payment.destAsset.getCode() === TESTNET.usdcCode &&
     payment.destAsset.getIssuer() === TESTNET.usdcIssuer &&
     parseUnits(payment.destAmount, 7) === BigInt(checkpoint.bridgeAmount)
@@ -1240,8 +1442,166 @@ export interface ReviewSnapshot {
   networkFee?: bigint;
 }
 
+export interface ReviewedIntentSnapshot {
+  readonly network: string;
+  readonly router: string;
+  readonly token: string;
+  readonly account: string;
+  readonly asset: Readonly<{ id: string; code: string; issuer: string | null }>;
+  readonly destination: DestinationKey;
+  readonly route: BridgeRoute;
+  readonly recipient: string;
+  readonly amount: bigint;
+  readonly sourceDebit: bigint;
+  readonly protocolFee: bigint;
+  readonly netAmount: bigint;
+  readonly representableAmount: bigint;
+  readonly adapter: string;
+  readonly minimum: bigint;
+  readonly providerBudget: bigint;
+  readonly estimatedProviderBudget: bigint;
+  readonly sourceAmount: bigint;
+  readonly sourceMaximum: bigint | null;
+  readonly stage: "conversion" | "bridge";
+}
+
+export function createReviewedIntentSnapshot(
+  intent: Omit<ReviewedIntentSnapshot, "network" | "router" | "token">,
+): ReviewedIntentSnapshot {
+  const exactAmounts = [
+    intent.amount,
+    intent.sourceDebit,
+    intent.netAmount,
+    intent.representableAmount,
+    intent.minimum,
+    intent.sourceAmount,
+  ];
+  const budgets = [intent.protocolFee, intent.providerBudget, intent.estimatedProviderBudget];
+  if (
+    !StrKey.isValidEd25519PublicKey(intent.account) ||
+    !StrKey.isValidContract(intent.adapter) ||
+    !supportedLanes(intent.destination).some((lane) => lane.route === intent.route) ||
+    !["bridge", "conversion"].includes(intent.stage) ||
+    exactAmounts.some(
+      (amount) => typeof amount !== "bigint" || amount <= 0n || amount > I128_MAX,
+    ) ||
+    budgets.some((amount) => typeof amount !== "bigint" || amount < 0n || amount > I128_MAX) ||
+    (intent.sourceMaximum !== null &&
+      (typeof intent.sourceMaximum !== "bigint" ||
+        intent.sourceMaximum <= 0n ||
+        intent.sourceMaximum > I128_MAX)) ||
+    (intent.asset.issuer === null
+      ? intent.asset.id !== "native" || intent.asset.code !== "XLM"
+      : !StrKey.isValidEd25519PublicKey(intent.asset.issuer) ||
+        !/^[a-zA-Z0-9]{1,12}$/.test(intent.asset.code) ||
+        intent.asset.id !== `${intent.asset.code}:${intent.asset.issuer}`)
+  )
+    throw new Error("The reviewed transfer intent is invalid.");
+  return Object.freeze({
+    network: TESTNET.networkPassphrase,
+    router: TESTNET.router,
+    token: TESTNET.token,
+    account: intent.account,
+    asset: Object.freeze({
+      id: intent.asset.id,
+      code: intent.asset.code,
+      issuer: intent.asset.issuer,
+    }),
+    destination: intent.destination,
+    route: intent.route,
+    recipient: validateRecipient(intent.recipient),
+    amount: intent.amount,
+    sourceDebit: intent.sourceDebit,
+    protocolFee: intent.protocolFee,
+    netAmount: intent.netAmount,
+    representableAmount: intent.representableAmount,
+    adapter: intent.adapter,
+    minimum: intent.minimum,
+    providerBudget: intent.providerBudget,
+    estimatedProviderBudget: intent.estimatedProviderBudget,
+    sourceAmount: intent.sourceAmount,
+    sourceMaximum: intent.sourceMaximum,
+    stage: intent.stage,
+  });
+}
+
+export function reviewedIntentMatches(
+  original: ReviewedIntentSnapshot,
+  current: ReviewedIntentSnapshot,
+): boolean {
+  return (
+    original.network === current.network &&
+    original.router === current.router &&
+    original.token === current.token &&
+    original.account === current.account &&
+    original.asset.id === current.asset.id &&
+    original.asset.code === current.asset.code &&
+    original.asset.issuer === current.asset.issuer &&
+    original.destination === current.destination &&
+    original.route === current.route &&
+    original.recipient === current.recipient &&
+    original.amount === current.amount &&
+    original.sourceDebit === current.sourceDebit &&
+    original.protocolFee === current.protocolFee &&
+    original.netAmount === current.netAmount &&
+    original.representableAmount === current.representableAmount &&
+    original.adapter === current.adapter &&
+    original.minimum === current.minimum &&
+    original.providerBudget === current.providerBudget &&
+    original.estimatedProviderBudget === current.estimatedProviderBudget &&
+    original.sourceAmount === current.sourceAmount &&
+    original.sourceMaximum === current.sourceMaximum &&
+    original.stage === current.stage
+  );
+}
+
+export function reviewedBridgeMatches(
+  intent: ReviewedIntentSnapshot,
+  current: {
+    account: string;
+    recipient: string;
+    destination: DestinationKey;
+    route: BridgeRoute;
+    amount: bigint;
+    sourceDebit: bigint;
+    protocolFee: bigint;
+    netAmount: bigint;
+    representableAmount: bigint;
+    adapter: string;
+    minimum: bigint;
+    providerBudget: bigint;
+    estimatedProviderBudget: bigint;
+  },
+): boolean {
+  return (
+    intent.network === TESTNET.networkPassphrase &&
+    intent.router === TESTNET.router &&
+    intent.token === TESTNET.token &&
+    intent.stage === "bridge" &&
+    intent.asset.id === `${TESTNET.usdcCode}:${TESTNET.usdcIssuer}` &&
+    intent.asset.code === TESTNET.usdcCode &&
+    intent.asset.issuer === TESTNET.usdcIssuer &&
+    intent.sourceAmount === current.amount &&
+    intent.sourceMaximum === null &&
+    intent.account === current.account &&
+    intent.recipient === current.recipient &&
+    intent.destination === current.destination &&
+    intent.route === current.route &&
+    intent.amount === current.amount &&
+    intent.sourceDebit === current.sourceDebit &&
+    intent.protocolFee === current.protocolFee &&
+    intent.netAmount === current.netAmount &&
+    intent.representableAmount === current.representableAmount &&
+    intent.adapter === current.adapter &&
+    intent.minimum === current.minimum &&
+    intent.providerBudget === current.providerBudget &&
+    intent.estimatedProviderBudget === current.estimatedProviderBudget
+  );
+}
+
 export interface SubmissionReconciliation {
   expectedAccount: string;
+  reviewedIntent?: ReviewedIntentSnapshot;
   getCurrentAccount?: () => string | null;
   isSuperseded?: () => boolean;
   onAccountSwitch?: (
@@ -1249,6 +1609,8 @@ export interface SubmissionReconciliation {
     signedTx: Transaction | FeeBumpTransaction,
   ) => void | Promise<void>;
   validate?: (hash: string, signedTx: Transaction | FeeBumpTransaction) => void | Promise<void>;
+  /** Runs after signing but before broadcast. Throw to block a broadcast that cannot be checkpointed. */
+  onSigned?: (hash: string, signedTx: Transaction | FeeBumpTransaction) => void | Promise<void>;
 }
 
 export function validateReviewMatch(original: ReviewSnapshot, current: ReviewSnapshot): boolean {
@@ -1561,7 +1923,9 @@ async function signAndSubmit(
   const hash = toHex(prepared.hash()).slice(2);
   await submissionStage("checkpoint", async () => {
     if (reconcile) {
-      if (reconcile.isSuperseded?.()) {
+      const superseded = reconcile.isSuperseded?.() === true;
+      if (reconcile.onSigned) await reconcile.onSigned(hash, signedTransaction);
+      if (superseded) {
         throw new Error(
           "The review was superseded before signing completed. Nothing was submitted.",
         );
@@ -1630,6 +1994,18 @@ async function signAndSubmit(
   return { status: "pending", txHash: hash };
 }
 
+/** Raised before signing when a refreshed quote materially changes the reviewed transfer. */
+export class QuoteChangedError extends Error {
+  readonly diff: QuoteDiff;
+  constructor(diff: QuoteDiff) {
+    super(
+      "The refreshed quote differs from the reviewed quote. Review the exact differences before signing.",
+    );
+    this.name = "QuoteChangedError";
+    this.diff = diff;
+  }
+}
+
 export async function submitBridgeOut(
   sender: string,
   quoted: LiveQuote,
@@ -1640,27 +2016,49 @@ export async function submitBridgeOut(
   reconcile?: SubmissionReconciliation,
   simulated?: SimulatedOperation,
   signal?: AbortSignal,
+  onQuoteDiff?: (diff: QuoteDiff) => void,
 ): Promise<TransactionResult> {
+  const reviewedQuote: LiveQuote = { ...quoted };
   validateRecipient(recipient);
-  const refreshed = await quoteTransfer(
-    quoted.destination,
-    quoted.requestedAmount,
-    quoted.route as BridgeRoute,
-  );
+  const reviewedIntent = reconcile?.reviewedIntent;
   if (
-    refreshed.grossAmount !== quoted.grossAmount ||
-    refreshed.destinationAmount < quoted.destinationAmount ||
-    refreshed.fee !== quoted.fee ||
-    (refreshed.estimatedRelayGas ?? refreshed.relayGas) > quoted.relayGas
-  ) {
-    throw new Error("The quote changed. Review a fresh quote before signing.");
+    reviewedIntent &&
+    !reviewedBridgeMatches(reviewedIntent, {
+      account: sender,
+      recipient: validateRecipient(recipient),
+      destination: reviewedQuote.destination,
+      route: reviewedQuote.route,
+      amount: reviewedQuote.requestedAmount,
+      sourceDebit: reviewedQuote.grossAmount,
+      protocolFee: reviewedQuote.fee,
+      netAmount: reviewedQuote.netAmount,
+      representableAmount: reviewedQuote.representableAmount,
+      adapter: reviewedQuote.adapter,
+      minimum: reviewedQuote.destinationAmount,
+      providerBudget: reviewedQuote.relayGas,
+      estimatedProviderBudget: reviewedQuote.estimatedRelayGas ?? reviewedQuote.relayGas,
+    })
+  )
+    throw new Error("The reviewed transfer intent changed. Review it again before signing.");
+  const refreshed = await quoteTransfer(
+    reviewedQuote.destination,
+    reviewedQuote.requestedAmount,
+    reviewedQuote.route,
+  );
+  quoteBreakdown(reviewedQuote);
+  quoteBreakdown(refreshed);
+  const diff = compareQuotes(reviewedQuote, refreshed);
+  if (diff.changed) {
+    const requiresReview = diff.materialWorsening;
+    onQuoteDiff?.(diff);
+    if (requiresReview) throw new QuoteChangedError(diff);
   }
   const balance = await readBalance(sender);
   if (balance < refreshed.grossAmount)
     throw new Error(`Insufficient testnet USDC. Your balance is ${formatUnits(balance, 7)} USDC.`);
   return submitOperation(
     sender,
-    bridgeOperation(sender, quoted, recipient),
+    bridgeOperation(sender, reviewedQuote, recipient),
     sign,
     progress,
     approval,
@@ -1668,6 +2066,23 @@ export async function submitBridgeOut(
     simulated,
     signal,
   );
+}
+
+/** A fresh read can confirm the bound but cannot silently replace the reviewed budget. */
+export function assertReviewedFeeCurrent(reviewed: LiveQuote, refreshed: LiveQuote): void {
+  quoteBreakdown(reviewed);
+  quoteBreakdown(refreshed);
+  if (
+    refreshed.route !== reviewed.route ||
+    refreshed.destination !== reviewed.destination ||
+    refreshed.adapter !== reviewed.adapter ||
+    refreshed.requestedAmount !== reviewed.requestedAmount ||
+    refreshed.grossAmount !== reviewed.grossAmount ||
+    refreshed.fee !== reviewed.fee ||
+    refreshed.destinationAmount < reviewed.destinationAmount ||
+    (refreshed.estimatedRelayGas ?? refreshed.relayGas) > reviewed.relayGas
+  )
+    throw new Error("The quote changed. Review a fresh quote before signing.");
 }
 
 export async function getClaim(id: bigint): Promise<PendingClaim> {
@@ -1721,6 +2136,98 @@ export function settleClaimsOperation(sender: string, ids: readonly bigint[]) {
   );
 }
 
+/** Read-only reconciliation requires the saved settlement call and every original claim identity. */
+export async function resolveClaimSettlementCheckpoint(
+  checkpoint: ClaimSettlementCheckpoint,
+  signal?: AbortSignal,
+): Promise<CheckpointRecoveryResult> {
+  const unknown = (message: string) =>
+    unknownRecovery(message + " The saved settlement is unchanged.");
+  if (!parseClaimSettlementCheckpoint(JSON.stringify(checkpoint)))
+    return unknown("The saved claim identity is invalid.");
+  try {
+    const evidence = await collectTransactionEvidence(checkpoint.txHash, signal);
+    const final = evidence.results.filter((result) => result.transaction.status !== "pending");
+    if (evidence.invalid || !evidence.agreed || final.length === 0)
+      return unknown("Settlement execution has not been independently established.");
+    const identities = claimSettlementIdentities(checkpoint);
+    const firstIdentity = identities[0];
+    if (!firstIdentity) return unknown("No claim identity is available.");
+    const operation =
+      identities.length === 1
+        ? new Contract(checkpoint.router).call(
+            "settle_claim",
+            new Address(checkpoint.account).toScVal(),
+            nativeToScVal(BigInt(firstIdentity.claimId), { type: "u64" }),
+          )
+        : settleClaimsOperation(
+            checkpoint.account,
+            identities.map((claim) => BigInt(claim.claimId)),
+          );
+    for (const item of final) {
+      if (item.response.status === rpc.Api.GetTransactionStatus.NOT_FOUND)
+        return unknown("Settlement history is incomplete.");
+      const transaction = TransactionBuilder.fromXdr(
+        item.response.envelopeXdr.toXdr("base64"),
+        TESTNET.networkPassphrase,
+      );
+      if (
+        "innerTransaction" in transaction ||
+        transaction.source !== checkpoint.account ||
+        transaction.signatures.length === 0 ||
+        !validateEnvelopeOperation(operation, transaction)
+      )
+        return unknown("The source transaction does not match this settlement.");
+      if (item.transaction.status === "confirmed") {
+        const result = item.response.resultXdr.result;
+        if (result.type !== "txSuccess" || result.results.length !== 1)
+          return unknown("Settlement execution results are incomplete.");
+        const executed = result.results[0];
+        if (
+          executed?.type !== "opInner" ||
+          executed.tr.type !== "invokeHostFunction" ||
+          executed.tr.invokeHostFunctionResult.type !== "invokeHostFunctionSuccess"
+        )
+          return unknown("The settlement call did not execute successfully.");
+      }
+    }
+    const deployment = await verifyRouterDeployment();
+    if (checkpoint.deploymentHash && deployment.wasmHash !== checkpoint.deploymentHash)
+      return unknown("The router changed since settlement was reviewed.");
+    const claims = await getClaims(identities.map((claim) => BigInt(claim.claimId)));
+    const status = final[0]?.transaction.status;
+    if (!status || status === "pending") return unknown("Settlement execution is unresolved.");
+    if (
+      claims.length !== identities.length ||
+      claims.some((claim, index) => {
+        const saved = identities[index];
+        if (!saved) return true;
+        return (
+          claim.id.toString() !== saved.claimId ||
+          claim.recipient !== saved.recipient ||
+          claim.token !== saved.token ||
+          claim.amount.toString() !== saved.amount ||
+          claim.deployment.router !== checkpoint.router ||
+          claim.deployment.wasmHash !== deployment.wasmHash ||
+          (status === "confirmed" && !claim.settled)
+        );
+      })
+    )
+      return unknown("The on-chain claims do not establish the saved settlement identities.");
+    return {
+      status: status === "confirmed" ? "confirmed" : "failed",
+      source: "rpc",
+      message:
+        status === "confirmed"
+          ? "The saved settlement executed on Stellar and every matching claim is settled on chain."
+          : "The matching settlement transaction failed on Stellar. Review the refreshed claims before signing again.",
+    };
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    return unknown("The settlement transaction and on-chain claims could not be verified.");
+  }
+}
+
 export async function submitSettleClaim(
   sender: string,
   id: bigint,
@@ -1728,9 +2235,25 @@ export async function submitSettleClaim(
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
+  reviewed?: PendingClaim,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
 ): Promise<TransactionResult> {
   const claim = await getClaim(id);
   if (claim.settled) throw new Error("This claim is already settled.");
+  if (
+    reviewed &&
+    (claim.recipient !== reviewed.recipient ||
+      claim.token !== reviewed.token ||
+      claim.amount !== reviewed.amount ||
+      claim.deployment.router !== reviewed.deployment.router ||
+      claim.deployment.chain !== reviewed.deployment.chain ||
+      claim.deployment.wasmHash !== reviewed.deployment.wasmHash)
+  )
+    throw new Error("The claim changed. Review it again before signing.");
+  if (reviewed && claim.eligibility.status === "unknown")
+    throw new Error(
+      "Claim payout eligibility is unavailable. Look up the claim again before signing.",
+    );
   if (claim.eligibility.status === "ineligible")
     throw new Error(`Claim payout is ineligible: ${claim.eligibility.reason}`);
   const deployment = await verifyRouterDeployment();
@@ -1746,7 +2269,7 @@ export async function submitSettleClaim(
       nativeToScVal(id, { type: "u64" }),
     ),
     sign,
-    undefined,
+    progress,
     approval,
     reconcile,
     undefined,
@@ -1761,6 +2284,7 @@ export async function submitSettleClaims(
   approval?: WalletApprovalProvenance,
   reconcile?: SubmissionReconciliation,
   signal?: AbortSignal,
+  progress?: (phase: TransactionPhase, hash?: string) => void,
 ): Promise<TransactionResult> {
   if (claims.length < 2) throw new Error("Batch settlement requires at least two claims.");
   if (claims.length > MAX_BATCH_CLAIMS)
@@ -1799,7 +2323,7 @@ export async function submitSettleClaims(
       claims.map((claim) => claim.id),
     ),
     sign,
-    undefined,
+    progress,
     approval,
     reconcile,
     undefined,

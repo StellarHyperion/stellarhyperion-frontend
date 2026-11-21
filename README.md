@@ -38,11 +38,30 @@ Connect Freighter, Albedo, xBull or LOBSTR for Stellar Testnet through the nativ
 
 The checked-in deployment supplies the default router and canonical USDC asset. Public overrides are documented in `.env.example`. The app is testnet only.
 
+Live fee routes require the supported Next.js server deployment with both `/api/relay-fee`
+and `/api/cctp-fee` handlers. Their explicit `HEAD` capability responses make no provider requests
+and expose only fixed public runtime and route markers. Discovery shares a five-second deadline,
+checks each rail independently, and supports cancellation and explicit retry. Missing endpoints,
+HTML fallbacks, failed responses and unrecognized markers cannot admit priced review or approval.
+An available endpoint still requires a fresh validated fee, simulation and explicit wallet approval;
+its capability response never supplies a fee. A static-only host preserves configured read-only
+history, public metadata and saved source-status recovery while priced signing stays unavailable.
+Server credentials remain server-only; public variables cannot enable a missing fee route.
+
+At startup, the public configuration admission check compares the network,
+router and canonical token against the checked-in testnet deployment and
+requires an HTTPS RPC endpoint. A mismatch renders an unavailable state with
+safe diagnostic labels; it never prints environment values or server secrets.
+
 `NEXT_PUBLIC_STELLAR_READ_RPC_URLS` may list up to two additional, independently operated Stellar Testnet RPC origins, comma-separated. Duplicate origins are collapsed; invalid or over-budget values fail configuration instead of being silently ignored. Browser provider URLs must use HTTPS, except localhost HTTP endpoints during development. RPC transaction status is accepted only when every configured source identifies as Stellar Testnet and agrees on the signed hash, outcome, encoded result and return value. Reads share a five-second deadline and support cancellation. Disagreement or an unavailable source alongside final evidence leaves the saved transaction unknown; historical fallback cannot override conflicting RPC evidence. When RPC history is absent, the independently network-checked Horizon recovery path remains available. Reset compares the complete saved checkpoint so a change in another tab cannot discard a different intent.
 
 The browser policy is nonce-based for scripts and permits connections only to the configured public Stellar RPC, Horizon, EVM testnet RPC and optional public indexer origins. Wallet frame origins are explicitly listed in `src/config/testnet-deployment.json`; scripts and connections from unlisted origins are blocked. Axelar and Circle fee providers are called only by same-origin server routes, so their provider credentials and endpoints are not exposed as browser configuration.
 
 `NEXT_PUBLIC_HYPERION_API_URL` supplies transfer activity and destination verification. The backend must run its indexer and rail pollers regularly. The public testnet uses a five-minute GitHub Actions schedule, subject to runner queueing; destination Activity can take several minutes to update. Unreachable history is shown explicitly. A confirmed Stellar transaction proves source execution; destination delivery requires matching confirmed bridge and token-payment events.
+
+Transfer history refreshes every 10 seconds and transaction details every 5 seconds while visible; hidden tabs reduce those reads to once per minute. Each poll owns one timer and one request, aborts obsolete lookups, and obtains fresh status immediately when visibility returns. Pagination and claim recovery wait for that refresh; a failed indexer refresh keeps claim actions blocked. Public source hashes remain in the URL and pending checkpoint regardless of polling activity. No visibility event signs or resubmits a transaction.
+
+The public Axelar and Circle fee routes share a fixed process budget of 120 admitted requests per minute and at most four concurrent provider calls. The budget does not trust caller forwarding headers or allocate per-address maps. A saturated route returns `429` with `code: RATE_LIMITED`, an integer `retryAfter`, and `Retry-After`; retry after that delay. Upstream429/503 also sets one bounded cooldown per provider, shared across destinations on both the server process and client. The composer preserves inputs, shows unavailable pricing and disables explicit fee retry until the cooldown expires. Expiry never automatically signs, sends or retries a quote. Every provider call has a 15-second timeout and an 8192-byte response limit. Request URLs are limited to 2048 characters, unknown or repeated parameters are rejected, and Circle destinations must match the configured testnet allowlist. These budgets apply to each server process; replicas each have their own budget. Failed provider estimates stay unavailable instead of becoming zero or fixed prices.
 
 Next serves `/api/relay-fee` for Axelar's live ITS estimate and `/api/cctp-fee` for Circle's finalized forwarding estimate. Static export cannot serve these endpoints. There are no fixed relay prices, generated transaction hashes, sample claims or fabricated history.
 
@@ -51,6 +70,8 @@ Relay budgets include 10% headroom over the live estimate. The Axelar XLM budget
 Hyperion charges 30 basis points (0.3%) on the bridged USDC amount. The source transaction sends that protocol fee to the router's configured Stellar treasury. Bridge forwarding, relay and network fees are separate and shown before signing.
 
 Claim recovery reads `get_claim` and signs `settle_claim` on the Stellar router. It pays the recorded recipient. A claim exists only when a destination router has parked funds for recovery; completed transfers have no claim number. Activity displays genuine claim numbers and settlement status, while transfer details explain when no claim exists. A delayed outbound transfer does not automatically become a Stellar claim.
+
+Transfer history keeps destination token identity, precision and the actual paid amount separate from the source net amount and quote minimum. If an indexer record omits token metadata, the UI shows base units and the raw token address rather than guessing a symbol or decimal precision. Claim approval performs a final on-chain refresh immediately before building the wallet request; settled or changed claims remain visible but cannot be signed. A live operation lock prevents a second browser tab from replacing an unresolved signing intent. Run `npm run test:browser:faults` to build the actual production modules in an isolated browser fixture. Two real tabs compete during delayed approval, one generated signed transaction reaches the controlled RPC boundary, and its public hash survives tab closure. The harness also renders exact CCTP/ITS and unknown-precision destination records; no network transaction is sent. Set `HYPERION_RECOVERY_EVIDENCE_DIR` to save inspected captures and source hashes.
 
 ## Deploy
 
@@ -93,3 +114,29 @@ As of October 29, 2026, `npm audit` reports zero known vulnerabilities after pat
 The layout study used [Jumper](https://jumper.xyz/), [Relay](https://relay.link/bridge) and [Stargate](https://stargate.finance/) as reference points for focused asset selection and progressive route details. Hyperion adds explicit receive-token identity, quote request feedback, review and interruption recovery. Decorative orbital paths provide background motion without implying that funds are moving. One theme button switches between light and dark; all motion honors reduced-motion preferences.
 
 MIT.
+
+## Independent acceptance proof checks
+
+Live ITS and route runners save the public signed source envelope and hash before broadcast, use atomic proof-file replacement and permit one runner per proof. An interrupted lock stays in place for manual inspection. Pending source and conversion hashes cannot be overwritten by a retry.
+
+Acceptance requires matching source account, canonical token contract, route, destination, recipient and exact integer amounts; origin gross, fee and net must agree. A successful destination receipt must match the indexed hash and block and contain the exact token Transfer payment to the recipient. A balance increase or provider reference alone cannot satisfy this check.
+
+Set `HYPERION_LIVE_PROOF=1` to inspect an existing ITS proof without signing. It uses `HYPERION_TESTNET_PROOF` or the same private default proof path as the ITS runner, verifies the public signature and source confirmation, then independently reads the Sepolia receipt. It does not enable the spending suites. Existing proofs without their public signed envelope remain available for manual recovery and cannot pass acceptance automatically.
+
+Deterministic checks cover source-only evidence, wrong chains, recipient or token, missing and inexact amounts, unrelated receipts, interrupted writes, retained hashes and competing proof owners. Application source and dependencies match the fully validated binding-limit head. Its diagnostic browser evidence and the included conversion-recovery evidence are retained under `docs/review/`. Live spending remained disabled during this repair.
+
+## Client bundle budgets
+
+`npm run build` retains the minified Turbopack production build and runs its native analysis, then checks actual emitted client chunks. The budget check joins each emitted JavaScript source map to installed modules and the native sync/async import graph, and uses Next's route first-load manifest. Missing or stale attribution fails the build. Per-route diagnostics identify the responsible chunk, package and import chain; unique chunks are counted once across routes. Optional wallet adapters are capped at 450,000 uncompressed JavaScript bytes and transaction code at 1,200,000 bytes. Wallet adapter chunks must remain asynchronous on the landing route. Client source maps are generated for this measurement.
+
+The complete report is `.next/diagnostics/bundle-attribution.json`; [bundle validation](docs/review/provider-cooldown-budget/README.md) records final measured totals and browser checks.
+
+### Typed transaction copy
+
+`src/lib/messages.ts` defines complete English fallbacks and typed variable arguments for submission,
+source recovery, claim settlement and exact amount labels. `Providers` optionally accepts a partial
+`TranslationCatalog`; missing, empty or failed translations use the English fallback for the same
+state. Amount-label translators receive an already formatted exact decimal string and its immutable
+unit label. They do not receive or replace transaction parsing, asset identity, quote budgets or
+signed intent. Source input remains an exact decimal string with a dot and at most seven decimal
+places; changing translated labels cannot change the underlying integer amount or units.

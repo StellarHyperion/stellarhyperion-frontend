@@ -1,8 +1,55 @@
-import { Keypair, Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
+import { FeeBumpTransaction, Keypair, Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
 import { TESTNET } from "../../config/testnet";
 import type { WalletApprovalProvenance } from "./types";
 
-export function assertWalletApproval(approval: WalletApprovalProvenance, account: string): void {
+export type WalletSigningErrorCode = "READ_ONLY_MODE" | "ACCOUNT_MISMATCH";
+
+export class WalletSigningError extends Error {
+  readonly code: WalletSigningErrorCode;
+
+  constructor(code: WalletSigningErrorCode, message: string) {
+    super(message);
+    this.name = "WalletSigningError";
+    this.code = code;
+    Object.setPrototypeOf(this, WalletSigningError.prototype);
+  }
+}
+
+export interface SigningAuthorizationCheck {
+  account?: string | undefined;
+  walletId?: string | null | undefined;
+  isReadOnly?: boolean | undefined;
+  connectedAccount?: string | null | undefined;
+  viewedAddress?: string | null | undefined;
+}
+
+export function assertSigningAuthorized(options: SigningAuthorizationCheck): void {
+  if (options.isReadOnly || !options.walletId) {
+    throw new WalletSigningError(
+      "READ_ONLY_MODE",
+      "A typed public address cannot sign transactions. Connect a Stellar wallet.",
+    );
+  }
+  if (
+    options.connectedAccount &&
+    options.viewedAddress &&
+    options.connectedAccount !== options.viewedAddress
+  ) {
+    throw new WalletSigningError(
+      "ACCOUNT_MISMATCH",
+      "Connected wallet differs from viewed address. Reconcile mode before signing.",
+    );
+  }
+}
+
+export function assertWalletApproval(
+  approval: WalletApprovalProvenance,
+  account: string,
+  options?: SigningAuthorizationCheck,
+): void {
+  if (options) {
+    assertSigningAuthorized(options);
+  }
   if (!(["conversion", "bridge", "claim-settlement"] as const).includes(approval.operation))
     throw new Error("The approval operation is unsupported. Review the transaction again.");
   if (approval.account !== account)
@@ -13,6 +60,22 @@ export function assertWalletApproval(approval: WalletApprovalProvenance, account
     );
 }
 
+/**
+ * Asserts that the wallet's reported network matches the required Stellar network.
+ *
+ * Throws a clear, actionable error identifying what the user must do to resolve the mismatch.
+ * A null network means the wallet does not expose a network query API (Albedo, xBull), so
+ * verification is deferred to the cryptographic signature check.
+ */
+export function assertWalletNetwork(
+  actualNetwork: string | null,
+  expectedNetwork: string = TESTNET.networkPassphrase,
+  walletName = "Your wallet",
+): void {
+  if (actualNetwork !== null && actualNetwork !== expectedNetwork)
+    throw new Error(`Switch ${walletName} to Stellar Testnet before signing.`);
+}
+
 // Re-exported here, next to the signature check it governs, so a reader of this file sees the
 // conservative-timeout type that applies to a signing response. Defined in "./timeout" (not here)
 // so that importing it never pulls in this file's "@stellar/stellar-sdk" dependency: sdk.ts needs
@@ -21,9 +84,25 @@ export { WalletSigningUncertainError } from "./timeout";
 
 export function verifyWalletSignature(original: string, signed: string, account: string): string {
   if (!signed)
-    throw new Error("The wallet did not return a signed transaction. Review the transfer again.");
-  const requested = TransactionBuilder.fromXdr(original, TESTNET.networkPassphrase);
-  const result = TransactionBuilder.fromXdr(signed, TESTNET.networkPassphrase);
+    throw new Error(
+      "The wallet did not return a signed transaction (unreadable). Review the transfer again.",
+    );
+  let requested: Transaction | FeeBumpTransaction;
+  let result: Transaction | FeeBumpTransaction;
+  try {
+    requested = TransactionBuilder.fromXdr(original, TESTNET.networkPassphrase);
+  } catch {
+    throw new Error("The transaction to sign is unreadable.");
+  }
+  try {
+    result = TransactionBuilder.fromXdr(signed, TESTNET.networkPassphrase);
+  } catch {
+    throw new Error("The wallet returned an unreadable transaction envelope.");
+  }
+  if (requested instanceof FeeBumpTransaction || result instanceof FeeBumpTransaction)
+    throw new Error(
+      "The wallet returned an unsupported fee-bump envelope. Hyperion signs standard transactions only.",
+    );
   if (!(requested instanceof Transaction) || !(result instanceof Transaction))
     throw new Error("The wallet returned an unsupported transaction envelope.");
   const requestedHash = requested.hash();
