@@ -289,6 +289,7 @@ try {
     await page.getByRole("dialog").getByText(walletName, { exact: true }).waitFor();
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
   const pickerDialog = page.getByRole("dialog", { name: "Connect a Stellar wallet" });
   await pickerDialog.waitFor();
   await pickerDialog.getByText("Freighter", { exact: true }).waitFor();

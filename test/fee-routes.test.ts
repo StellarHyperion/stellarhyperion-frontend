@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-let providerFeeCooldown: typeof import("../src/lib/fee-request-guard").providerFeeCooldown;
-let getRelayFee: typeof import("../src/app/api/relay-fee/route").GET;
-let getCctpFee: typeof import("../src/app/api/cctp-fee/route").GET;
+import type { providerFeeCooldown as ProviderFeeCooldown } from "../src/lib/fee-request-guard";
+import type { GET as RelayFeeGet } from "../src/app/api/relay-fee/route";
+import type { GET as CctpFeeGet } from "../src/app/api/cctp-fee/route";
+let providerFeeCooldown: typeof ProviderFeeCooldown;
+let getRelayFee: typeof RelayFeeGet;
+let getCctpFee: typeof CctpFeeGet;
 import { createFeeRequestGuard } from "../src/lib/fee-request-guard";
 import { createFeeCooldown } from "../src/lib/relay-budget";
 

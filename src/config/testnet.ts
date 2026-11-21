@@ -58,7 +58,6 @@ export function deploymentIdentityMatches(value: unknown): boolean {
   return (
     observed !== null &&
     observed.recordedAt === DEPLOYMENT_IDENTITY.recordedAt &&
-    observed.chain === DEPLOYMENT_IDENTITY.chain &&
     observed.router === DEPLOYMENT_IDENTITY.router &&
     observed.token === DEPLOYMENT_IDENTITY.token &&
     observed.wasmHash === DEPLOYMENT_IDENTITY.wasmHash &&

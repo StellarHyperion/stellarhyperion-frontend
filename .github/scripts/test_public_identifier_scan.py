@@ -45,9 +45,15 @@ class PublicIdentifierScanTests(unittest.TestCase):
         self.assertEqual(self.scan("test/other.test.ts",
                                    f'const destinationToken = "{PUBLIC_ADDRESS}";\n'), 1)
 
+    @staticmethod
+    def synthetic_api_key():
+        # Balanced synthetic characters make entropy-based detection deterministic.
+        characters = "".join(chr(code) for code in (*range(65, 91), *range(97, 123), *range(48, 58)))
+        return "".join(characters[(index * 17 + 5) % len(characters)] for index in range(48))
+
     def test_another_value_in_acceptance_path_remains_detected(self):
         self.assertEqual(self.scan("test/backend-api.test.ts",
-                                   f'const api_key = "{secrets.token_urlsafe(32)}";\n'), 1)
+                                   f'const api_key = "{self.synthetic_api_key()}";\n'), 1)
 
     def test_real_key_shape_is_detected_beside_the_public_identifier(self):
         body = (f'const destinationToken = "{PUBLIC_ADDRESS}";\n'

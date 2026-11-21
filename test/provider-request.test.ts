@@ -35,6 +35,28 @@ describe("provider request deadlines", () => {
     ).rejects.toThrow("aborted");
   });
 
+  it("keeps the deadline active while reading a stalled response body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = new ReadableStream({
+          start(controller) {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                controller.error(new DOMException("body aborted", "AbortError"));
+              },
+              { once: true },
+            );
+          },
+        });
+        return Promise.resolve(new Response(body));
+      }),
+    );
+    const response = await fetchWithDeadline("https://provider.example", {}, 10);
+    await expect(response.text()).rejects.toThrow("body aborted");
+  });
+
   it("passes caller cancellation to the provider", async () => {
     const controller = new AbortController();
     const fetcher = vi.fn().mockRejectedValue(new Error("cancelled"));

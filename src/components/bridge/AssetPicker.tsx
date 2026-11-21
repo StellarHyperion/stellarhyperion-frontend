@@ -96,7 +96,6 @@ export function SourceAssetPicker({
   const [query, setQuery] = useState("");
   const [queryVersion, setQueryVersion] = useState(0);
   const [pageLimit, setPageLimit] = useState(25);
-  const [selectedId] = useState(selected.id);
   const [remote, setRemote] = useState<{
     key: string;
     version: number;
@@ -144,7 +143,6 @@ export function SourceAssetPicker({
   const visibleAssets = assets.slice(0, pageLimit);
   const hasMore = assets.length > pageLimit;
   const exhausted = !loading && !hasMore && assets.length > 0;
-  void selectedId;
   return (
     <Dialog title="Choose a token" onClose={onClose}>
       <label className={styles.search}>
@@ -276,7 +274,12 @@ export function SourceAssetPicker({
           );
         })}
         {hasMore && (
-          <button type="button" onClick={() => setPageLimit((limit) => limit + 25)}>
+          <button
+            type="button"
+            onClick={() => {
+              setPageLimit((limit) => limit + 25);
+            }}
+          >
             Load more assets
           </button>
         )}

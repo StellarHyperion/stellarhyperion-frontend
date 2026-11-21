@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium, firefox } from "@playwright/test";
@@ -13,8 +13,9 @@ const browser = await { chromium, firefox }[engine].launch(
   executablePath ? { executablePath } : {},
 );
 const evidenceDir =
-  process.env.HYPERION_BROWSER_ARTIFACTS ?? path.join(tmpdir(), "hyperion-browser-audit");
-await mkdir(evidenceDir, { recursive: true });
+  process.env.HYPERION_BROWSER_ARTIFACTS ??
+  (await mkdtemp(path.join(tmpdir(), "hyperion-browser-audit-")));
+await mkdir(evidenceDir, { recursive: true, mode: 0o700 });
 const auditResults = [];
 let transactionFixture = "NOT_FOUND";
 

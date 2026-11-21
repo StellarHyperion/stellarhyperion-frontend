@@ -3,20 +3,8 @@ export async function fetchWithDeadline(
   init: RequestInit = {},
   timeoutMs = 15_000,
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
-  const signal = init.signal;
-  const cancel = () => {
-    controller.abort();
-  };
-  if (signal?.aborted) controller.abort(signal.reason);
-  signal?.addEventListener("abort", cancel, { once: true });
-  try {
-    return await fetch(input, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", cancel);
-  }
+  // The fetch signal also governs streaming response bodies after headers arrive.
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  return await fetch(input, { ...init, signal });
 }

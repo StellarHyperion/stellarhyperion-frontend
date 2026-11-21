@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { contentSecurityPolicy } from "./src/config/content-security-policy";
 
 export function proxy(request: NextRequest) {

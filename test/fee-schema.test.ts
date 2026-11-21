@@ -46,7 +46,7 @@ describe("provider fee single-flight cache", () => {
   it("shares only matching requests for its explicit lifetime", async () => {
     vi.useFakeTimers();
     const cache = createSingleFlightCache<number>(2_000);
-    const load = vi.fn(async () => 42);
+    const load = vi.fn(() => Promise.resolve(42));
 
     const first = cache("circle:USDC:sepolia", load);
     const concurrent = cache("circle:USDC:sepolia", load);
@@ -66,12 +66,12 @@ describe("provider fee single-flight cache", () => {
   it("does not retain rejected provider requests", async () => {
     const cache = createSingleFlightCache<number>(2_000);
     let fail = true;
-    const load = vi.fn(async () => {
+    const load = vi.fn(() => {
       if (fail) {
         fail = false;
-        throw new Error("provider unavailable");
+        return Promise.reject(new Error("provider unavailable"));
       }
-      return 7;
+      return Promise.resolve(7);
     });
 
     await expect(cache("axelar:XLM:ethereum-sepolia", load)).rejects.toThrow(
@@ -173,7 +173,8 @@ describe("live provider endpoint schema boundaries", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
         urls.push(url);
         if (init?.signal) upstreamSignals.push(init.signal);
         await waiting;

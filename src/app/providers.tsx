@@ -36,11 +36,10 @@ export function DeploymentRevisionNotice(): ReactElement | null {
       const cached = localStorage.getItem(DEPLOYMENT_STORAGE_KEY);
       // eslint-disable-next-line react-hooks/set-state-in-effect
       if (cached && cached !== STELLAR_DEPLOYMENT.commit) setChanged(true);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+
       if (observed && observed !== STELLAR_DEPLOYMENT.commit) setChanged(true);
       localStorage.setItem(DEPLOYMENT_STORAGE_KEY, STELLAR_DEPLOYMENT.commit);
     } catch {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (observed && observed !== STELLAR_DEPLOYMENT.commit) setChanged(true);
     }
   }, []);
@@ -98,7 +97,7 @@ export function Providers({ children, translations }: ProvidersProps): ReactElem
           setDeploymentCheck("changed");
         }
       } catch {
-        if (active && !owned.signal.aborted) setDeploymentCheck("unavailable");
+        if (!owned.signal.aborted) setDeploymentCheck("unavailable");
       } finally {
         checking = false;
       }
@@ -205,7 +204,9 @@ export function Providers({ children, translations }: ProvidersProps): ReactElem
               <button
                 className={styles.retry}
                 type="button"
-                onClick={() => window.location.reload()}
+                onClick={() => {
+                  window.location.reload();
+                }}
               >
                 Reload active deployment
               </button>

@@ -1509,7 +1509,10 @@ export function Bridge() {
 
   useEffect(() => {
     if (!runtime.deploymentUpdateAvailable) return;
-    invalidateQuote();
+    const frame = requestAnimationFrame(invalidateQuote);
+    return () => {
+      cancelAnimationFrame(frame);
+    };
   }, [runtime.deploymentUpdateAvailable, invalidateQuote]);
 
   useEffect(() => {
@@ -2793,7 +2796,7 @@ export function Bridge() {
           )}
           <RouteComparison
             routes={reviewed.quote.routes}
-            selected={reviewed.quote.bridge.route as BridgeRoute}
+            selected={reviewed.quote.bridge.route}
             onSelect={(next) => {
               setReviewing(false);
               setReviewed(null);
