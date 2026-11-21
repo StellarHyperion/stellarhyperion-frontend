@@ -11,6 +11,7 @@ import {
 } from "../../../lib/fee-request-guard";
 import { createSingleFlightCache } from "../../../lib/single-flight";
 import type { ProviderFeeQuote } from "../../../lib/fee-schema";
+import { selectFinalizedCctpFee } from "../../../lib/cctp-fee";
 import { validateProviderFee } from "../../../lib/fee-schema";
 
 const loadCircleFee = createSingleFlightCache<ProviderFeeQuote>(2_000);
@@ -85,27 +86,12 @@ export async function GET(request: Request) {
     const body: unknown = JSON.parse(await readFeeResponse(response));
     if (!response.ok || !Array.isArray(body) || body.length > 32)
       throw new Error("Invalid Circle fee response.");
-    const fee = body.find(
-      (
-        item: unknown,
-      ): item is { finalityThreshold: number; minimumFee: number; forwardFee: { med: number } } => {
-        if (!item || typeof item !== "object") return false;
-        const entry = item as Record<string, unknown>;
-        return (
-          entry.finalityThreshold === 2000 &&
-          entry.minimumFee === 0 &&
-          entry.forwardFee !== null &&
-          typeof entry.forwardFee === "object" &&
-          !Array.isArray(entry.forwardFee)
-        );
-      },
-    );
-    if (!fee || !Number.isSafeInteger(fee.forwardFee.med) || fee.forwardFee.med <= 0)
-      throw new Error("No finalized forwarding estimate.");
+    const fee = selectFinalizedCctpFee(body);
+    if (fee === null) throw new Error("No unambiguous finalized forwarding estimate.");
     return validateProviderFee(
       {
-        amount: String(relayBudget(BigInt(fee.forwardFee.med)) * 10n),
-        estimatedAmount: String(BigInt(fee.forwardFee.med) * 10n),
+        amount: String(relayBudget(fee.amount) * 10n),
+        estimatedAmount: String(fee.amount * 10n),
         token: "USDC",
         decimals: 7,
         destination: destination.key,

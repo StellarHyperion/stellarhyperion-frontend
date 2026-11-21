@@ -7,6 +7,7 @@ import { readTransaction, errorMessage, type TransactionResult } from "../../../
 import { STELLAR_DEPLOYMENT } from "../../../config/testnet";
 import { formatTokenAmount, formatTokenIdentity, getExplorerUrl } from "../../../lib/format";
 import { hasVerifiedDestinationEvidence, getEvidenceAwareStage } from "../../../lib/evidence";
+import { deliveryProofState } from "../../../lib/proof-state";
 import { EvidenceTimeline } from "../../../components/transfers/EvidenceTimeline";
 import { useVisibilityPoll } from "../../../lib/visibility-poll";
 import { ActivityRequestGuard } from "../../../lib/activity-request";
@@ -145,6 +146,7 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
         <section className={styles.legPanel} aria-label="Indexed transfer status">
           <h2>{getRouteName(record.route)}</h2>
           <p role="status">Status: {getEvidenceAwareStage(record)}</p>
+          <p role="status">Delivery proof: {deliveryProofState(record, origin)}</p>
           <EvidenceTimeline transfer={record} />
           <p>
             Sent from {record.origin.chain} to {record.destination.chain}
