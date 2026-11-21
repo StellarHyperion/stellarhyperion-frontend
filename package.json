@@ -32,7 +32,8 @@
     "test:browser:faults": "node scripts/browser-fault-harness.mjs",
     "test:browser:assistive": "node scripts/browser-assistive-audit.mjs",
     "test:browser:deployment": "node scripts/browser-deployment-revision.mjs",
-    "test:browser:firefox": "HYPERION_BROWSER=firefox node scripts/browser-smoke.mjs"
+    "test:browser:firefox": "HYPERION_BROWSER=firefox node scripts/browser-smoke.mjs",
+    "test:browser:trace": "HYPERION_PROVIDER_DELAY_MS=75 node scripts/browser-performance-trace.mjs"
   },
   "dependencies": {
     "@albedo-link/intent": "^0.12.0",
