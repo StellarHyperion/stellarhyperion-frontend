@@ -103,6 +103,7 @@ import {
   checkpointIdentity,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
+import { AsyncGeneration } from "../../lib/async-generation";
 import { useStellarWallet } from "../../wallets";
 import type { WalletApprovalProvenance } from "../../wallets/stellar";
 import {
@@ -1179,6 +1180,7 @@ export function Bridge() {
   const [phase, setPhase] = useState<TransactionPhase | null>(null);
   const [step, setStep] = useState<"conversion" | "bridge">("bridge");
   const [result, setResult] = useState<TransactionResult | null>(null);
+  const quoteGeneration = useRef(new AsyncGeneration());
   const [error, setError] = useState<string | null>(null);
   const [simulatedState, setSimulatedState] = useState<{
     key: string;
@@ -1460,17 +1462,18 @@ export function Bridge() {
   }, [wallet.address, result, refresh]);
   useEffect(() => {
     if (!runtimeReady || !valid || !lane?.available || locked) return;
+    const generation = quoteGeneration.current.next();
     let active = true;
     const timer = setTimeout(() => {
       void quoteTrade(destination, activeSource, amount, route)
         .then((value) => {
-          if (active) {
+          if (active && quoteGeneration.current.isCurrent(generation)) {
             setFeeCooldown(null);
             setQuoted({ key: quoteKey, value, error: null, diagnostic: null });
           }
         })
         .catch((cause: unknown) => {
-          if (active) {
+          if (active && quoteGeneration.current.isCurrent(generation)) {
             if (cause instanceof FeeUnavailableError)
               setFeeCooldown({ key: quoteKey, until: Date.now() + cause.retryAfterSeconds * 1000 });
             setQuoted({
