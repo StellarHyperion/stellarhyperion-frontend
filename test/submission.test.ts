@@ -12,9 +12,14 @@ import {
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
-import { sorobanErrorCode, toHex } from "@hyperion/protocol";
+import { formatUnits, sorobanErrorCode, toHex } from "@hyperion/protocol";
 import {
   QuoteChangedError,
+  INITIAL_SUBMISSION,
+  submissionTransition,
+  canEnableSendControl,
+  readCheckpointTransaction,
+  readTransaction,
   createReviewedIntentSnapshot,
   reviewedBridgeMatches,
   reviewedIntentMatches,
@@ -25,6 +30,7 @@ import {
   SubmissionFailure,
   quoteFreshness,
   quoteBreakdown,
+  parseSendAmount,
   type LiveQuote,
   submitBridgeOut,
   submitSettleClaim,
@@ -35,10 +41,23 @@ import {
 import { compareQuotes } from "../src/lib/quote-diff";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
-import { checkpointMatches, parseCheckpoint, saveCheckpoint } from "../src/contracts/checkpoint";
-
-import { DESTINATIONS, STELLAR_DEPLOYMENT, TESTNET, supportedLanes } from "../src/config/testnet";
-import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
+import {
+  checkpointMatches,
+  checkpointNetworkMatches,
+  compareCheckpoints,
+  exportCheckpoint,
+  importCheckpoint,
+  parseCheckpoint,
+  saveCheckpoint,
+  inspectCheckpointStorage,
+} from "../src/contracts/checkpoint";
+import {
+  archivedRouterFor,
+  DESTINATIONS,
+  STELLAR_DEPLOYMENT,
+  TESTNET,
+  supportedLanes,
+} from "../src/config/testnet";
 import {
   planMaxUsdcAmount,
   planMaxSourceAmount,
@@ -66,15 +85,17 @@ function setup() {
   vi.spyOn(rpc.Server.prototype, "getAccount").mockImplementation(() =>
     Promise.resolve(new Account(key.publicKey(), "0")),
   );
-  vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
-    executable: {
-      type: "contractExecutableWasm",
-      wasmHash: Uint8Array.from({ length: 32 }, (_, index) =>
-        parseInt(STELLAR_DEPLOYMENT.wasmHash.slice(index * 2, index * 2 + 2), 16),
-      ),
-    },
-    storage: null,
-  } as never);
+  const getContractInstance = vi
+    .spyOn(rpc.Server.prototype, "getContractInstance")
+    .mockResolvedValue({
+      executable: {
+        type: "contractExecutableWasm",
+        wasmHash: Uint8Array.from({ length: 32 }, (_, index) =>
+          parseInt(STELLAR_DEPLOYMENT.wasmHash.slice(index * 2, index * 2 + 2), 16),
+        ),
+      },
+      storage: null,
+    } as never);
   const simulation = vi.spyOn(rpc.Server.prototype, "simulateTransaction");
   simulation.mockResolvedValueOnce(
     success(
@@ -89,7 +110,7 @@ function setup() {
   );
   simulation.mockResolvedValue(success(nativeToScVal(1n)));
   const send = vi.spyOn(rpc.Server.prototype, "sendTransaction");
-  return { simulation, send };
+  return { simulation, send, getContractInstance };
 }
 // Unlike setup(), the claim read is answered the same way on every call. Each independent
 // submitSettleClaim call reads the claim before submitting its own operation, so a test that
@@ -404,6 +425,9 @@ describe("Signed Stellar submission failure boundaries", () => {
         token: TESTNET.token,
         amount: 20n,
         settled: false,
+        sourceTxHash: null,
+        sourceTransferId: null,
+        custody: { status: "unknown", routerBalance: null, reason: "Fixture" },
         eligibility: {
           status: "eligible",
           reason: "Generated fixture",
@@ -422,6 +446,39 @@ describe("Signed Stellar submission failure boundaries", () => {
     ).rejects.toThrow(/claim changed/);
     expect(wallet).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+  it("rejects invalid submission transitions and duplicate send controls", () => {
+    expect(() => submissionTransition(INITIAL_SUBMISSION, { type: "CHECKPOINTED" })).toThrow(
+      /Invalid submission transition/,
+    );
+    const prepared = submissionTransition(
+      submissionTransition(INITIAL_SUBMISSION, { type: "PREPARE" }),
+      { type: "PREPARED" },
+    );
+    expect(canEnableSendControl(prepared)).toBe(true);
+    const signing = submissionTransition(prepared, { type: "REVIEW_APPROVED" });
+    expect(canEnableSendControl(signing)).toBe(false);
+    const signed = submissionTransition(signing, {
+      type: "SIGNED",
+      account: key.publicKey(),
+      signedHash: "a".repeat(64),
+    });
+    const pending = submissionTransition(submissionTransition(signed, { type: "CHECKPOINTED" }), {
+      type: "BROADCAST_UNKNOWN",
+    });
+    expect(pending.state).toBe("pending");
+    expect(pending.binding).toEqual({ account: key.publicKey(), signedHash: "a".repeat(64) });
+    expect(() => submissionTransition(pending, { type: "PREPARE" })).toThrow(
+      /Invalid submission transition/,
+    );
+  });
+  it("handles cancellation without accepting delayed confirmation", () => {
+    const preparing = submissionTransition(INITIAL_SUBMISSION, { type: "PREPARE" });
+    const cancelled = submissionTransition(preparing, { type: "CANCEL" });
+    expect(cancelled.state).toBe("cancelled");
+    expect(() => submissionTransition(cancelled, { type: "CONFIRMED" })).toThrow(
+      /Invalid submission transition/,
+    );
   });
   it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
     const checkpointKey = "hyperion.testnet.pending-transfer";
@@ -801,6 +858,29 @@ describe("Signed Stellar submission failure boundaries", () => {
       failure: { stage: "broadcast", txHash: hash },
     });
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("never broadcasts again while checking an ambiguous signed transaction", async () => {
+    const { send } = setup();
+    send.mockRejectedValue(new Error("timeout"));
+    const first = await submitSettleClaim(key.publicKey(), 1n, sign);
+    expect(first.status).toBe("pending");
+    vi.spyOn(rpc.Server.prototype, "getTransaction").mockResolvedValue({
+      status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+    } as never);
+    expect(await readTransaction(first.txHash)).toMatchObject({ status: "pending" });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it("checks an archived transaction hash without reading the successor router", async () => {
+    const { send, getContractInstance } = setup();
+    const archived = archivedRouterFor("CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF");
+    if (!archived) throw new Error("Expected archived testnet router metadata.");
+    vi.spyOn(rpc.Server.prototype, "getTransaction").mockResolvedValue({
+      status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+    } as never);
+    const result = await readCheckpointTransaction(archived.router, "c".repeat(64));
+    expect(result).toMatchObject({ status: "pending", txHash: "c".repeat(64) });
+    expect(getContractInstance).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
   it("reports a known network rejection instead of source confirmation", async () => {
     const { send } = setup();
@@ -1260,6 +1340,83 @@ describe("Spendable-balance maximum amount planner", () => {
       // cap = min(988_999_999, 999_999_997) = 988_999_999
       expect(result).toBe(988_999_999n);
     });
+
+    it("round-trips generated source amounts and conserves six- and seven-decimal review quotes", () => {
+      let state = 0x159c0de;
+      const amounts = [
+        10_001n,
+        10_009n,
+        10_010n,
+        10_011n,
+        10_000_001n,
+        ...Array.from({ length: 48 }, () => {
+          state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+          return BigInt(state) * 100000000n + BigInt(state % 100000000) + 1n;
+        }),
+      ];
+      amounts.push(9007199254740993n);
+
+      const decimalOracle = (units: bigint, decimals: number): string => {
+        const scale = 10n ** BigInt(decimals);
+        const whole = units / scale;
+        const fraction = (units % scale).toString().padStart(decimals, "0").replace(/0+$/, "");
+        return fraction ? `${whole}.${fraction}` : whole.toString();
+      };
+
+      for (const [index, requestedAmount] of amounts.entries()) {
+        const sourceText = decimalOracle(requestedAmount, 7);
+        expect(parseSendAmount(sourceText)).toBe(requestedAmount);
+        expect(formatUnits(requestedAmount, 7)).toBe(sourceText);
+        expect(
+          parseBridgeFormParams(`?a=${sourceText}&r=0x${"1".repeat(40)}&d=sepolia&t=1&s=native`)
+            ?.amount,
+        ).toBe(sourceText);
+
+        const quantum = index % 2 === 0 ? 10n : 1n;
+        const route = quantum === 10n ? 0 : 1;
+        const retainedDust = requestedAmount % quantum;
+        const grossAmount = requestedAmount - retainedDust;
+        const fee = BigInt(index + 1) * quantum;
+        const netAmount = grossAmount - fee;
+        const representableAmount = netAmount / quantum;
+        const relayGas = route === 0 ? 1n : 0n;
+        const destinationAmount = representableAmount - relayGas;
+        const quote: LiveQuote = {
+          route,
+          requestedAmount,
+          grossAmount,
+          fee,
+          netAmount,
+          representableAmount,
+          destinationAmount,
+          relayGas,
+          flowAvailable: requestedAmount * 2n,
+          ledger: index + 1,
+          adapter: TESTNET.router,
+          destination: "sepolia",
+        };
+        const review = quoteBreakdown(quote);
+
+        expect(review.requestedSourceAmount).toBe(requestedAmount);
+        expect(review.actualSourceDebit + review.retainedDust).toBe(requestedAmount);
+        expect(review.actualSourceDebit).toBe(grossAmount);
+        expect(review.representableBridgeAmount).toBe(netAmount);
+        expect(review.representableBridgeAmount / quantum).toBe(representableAmount);
+        const destinationDecimals = route === 0 ? 6 : 7;
+        expect(destinationAmount).toBe(netAmount / quantum - relayGas);
+        expect(formatUnits(destinationAmount, destinationDecimals)).toBe(
+          decimalOracle(destinationAmount, destinationDecimals),
+        );
+      }
+    });
+
+    it("rejects amounts with precision beyond seven decimals", () => {
+      const invalid = "900719925.47409931";
+      expect(() => parseSendAmount(invalid)).toThrow();
+      expect(
+        parseBridgeFormParams(`?a=${invalid}&r=0x${"1".repeat(40)}&d=sepolia&t=1&s=native`),
+      ).toBeNull();
+    });
   });
 });
 
@@ -1391,6 +1548,36 @@ describe("Checkpoint staleness guards", () => {
   });
   it("rejects a stale confirmation when the stage changed", () => {
     expect(checkpointMatches(checkpoint, { ...sameIntent, stage: "conversion" })).toBe(false);
+  });
+
+  it("exports only bounded public recovery metadata and validates reimports", () => {
+    const validCheckpoint = { ...checkpoint, account: TESTNET.reader };
+    const exported = exportCheckpoint(validCheckpoint);
+    expect(exported).not.toContain("signature");
+    expect(importCheckpoint(exported)).toMatchObject(validCheckpoint);
+    expect(importCheckpoint(exported.replace('"exportVersion":1', '"exportVersion":2'))).toBeNull();
+  });
+
+  it("keeps divergent transaction hashes unresolved", () => {
+    expect(compareCheckpoints(checkpoint, { ...checkpoint, txHash: "1".repeat(64) })).toBe(
+      "conflict",
+    );
+    expect(
+      compareCheckpoints(checkpoint, {
+        ...checkpoint,
+        stage: "conversion",
+        txHash: "1".repeat(64),
+      }),
+    ).toBe("conflict");
+  });
+
+  it("blocks recovery metadata from another Stellar network", () => {
+    const other = parseCheckpoint(
+      JSON.stringify({ ...checkpoint, account: TESTNET.reader, networkPassphrase: "other" }),
+    );
+    expect(other).not.toBeNull();
+    if (!other) throw new Error("Expected a valid checkpoint fixture.");
+    expect(checkpointNetworkMatches(other)).toBe(false);
   });
 });
 

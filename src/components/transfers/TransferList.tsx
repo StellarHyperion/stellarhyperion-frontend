@@ -174,9 +174,15 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
               <strong>Claim number: {t.claim.id}</strong>
               <span>
                 {t.claim.settled
-                  ? "Settled. Funds paid to the recorded recipient."
-                  : `Funds parked on ${t.destination.chain}. Open transfer details to review recovery.`}
+                  ? "The indexer reports this claim as settled."
+                  : `The indexer reports a claim on ${t.destination.chain}. Open transfer details to verify its on-chain state.`}
               </span>
+            </p>
+          )}
+          {t.proofRevision && t.proofRevision.status !== "valid" && (
+            <p className={styles.claimInfo} role="status">
+              Evidence {t.proofRevision.status}: destination proof changed. This is not a duplicate
+              source transfer.
             </p>
           )}
 

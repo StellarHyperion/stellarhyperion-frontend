@@ -175,7 +175,7 @@ describe("Bounded source RPC consensus", () => {
   it("deduplicates origins and caps the total at three sources", async () => {
     vi.stubEnv(
       "NEXT_PUBLIC_STELLAR_READ_RPC_URLS",
-      `${TESTNET.rpcUrl}/other,https://second.example/rpc,https://second.example/another,https://third.example,https://fourth.example`,
+      `${TESTNET.rpcUrl}/other,https://second.example/rpc,https://second.example/another,https://third.example`,
     );
     const network = vi.spyOn(rpc.Server.prototype, "getNetwork");
     const reads = vi
@@ -184,6 +184,13 @@ describe("Bounded source RPC consensus", () => {
     await expect(readTransaction(hash)).resolves.toMatchObject({ status: "pending" });
     expect(reads).toHaveBeenCalledTimes(3);
     expect(network).toHaveBeenCalledTimes(3);
+  });
+  it("rejects excess RPC origins instead of silently ignoring a configured source", async () => {
+    vi.stubEnv(
+      "NEXT_PUBLIC_STELLAR_READ_RPC_URLS",
+      "https://second.example,https://third.example,https://fourth.example",
+    );
+    await expect(readTransaction(hash)).rejects.toThrow("at most two additional origins");
   });
   it("bounds stalled reads and cancels all waiting sources", async () => {
     const controller = new AbortController();

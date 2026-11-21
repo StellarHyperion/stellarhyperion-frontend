@@ -26,15 +26,17 @@ import {
   TESTNET,
   STELLAR_DEPLOYMENT,
   CIRCLE_STELLAR,
+  archivedRouterFor,
   destinationFor,
   destinationDecimals,
   supportedLanes,
   deploymentIdentityMismatch,
   type BridgeRoute,
   type DestinationKey,
+  stellarTransactionReadUrls,
   type SupportedLane,
 } from "../config/testnet";
-import type { TransferCheckpoint } from "./checkpoint";
+import { checkpointRecoveryDeploymentMatches, type TransferCheckpoint } from "./checkpoint";
 import {
   claimSettlementIdentities,
   parseClaimSettlementCheckpoint,
@@ -104,6 +106,84 @@ export type WalletSigner = (
   opts: { networkPassphrase: string; approval?: WalletApprovalProvenance },
 ) => Promise<{ signedTxXdr: string }>;
 export type TransactionPhase = "preparing" | "signing" | "submitting" | "pending" | "confirmed";
+
+/**
+ * Deterministic operation-state machine for prepare -> review -> sign -> checkpoint -> broadcast
+ * -> confirmation. Only the listed events are allowed; anything else is rejected so that duplicate
+ * send controls cannot be enabled from an invalid state. Unknown outcomes stay `pending`, bound to
+ * the signed hash and account, and are never automatically resubmitted.
+ */
+export type SubmissionState =
+  | "idle"
+  | "preparing"
+  | "reviewing"
+  | "signing"
+  | "checkpointed"
+  | "broadcasting"
+  | "pending"
+  | "confirmed"
+  | "failed"
+  | "cancelled";
+
+export type SubmissionEvent =
+  | { readonly type: "PREPARE" }
+  | { readonly type: "PREPARED" }
+  | { readonly type: "REVIEW_APPROVED" }
+  | { readonly type: "SIGNED"; readonly signedHash: string; readonly account: string }
+  | { readonly type: "CHECKPOINTED" }
+  | { readonly type: "BROADCAST_SENT" }
+  | { readonly type: "BROADCAST_UNKNOWN" }
+  | { readonly type: "CONFIRMED" }
+  | { readonly type: "FAILED" }
+  | { readonly type: "CANCEL" }
+  | { readonly type: "RESET" };
+
+export interface SubmissionMachineState {
+  readonly state: SubmissionState;
+  /** Set once signed; bound to the account and hash for unknown-outcome recovery. */
+  readonly binding: { readonly signedHash: string; readonly account: string } | null;
+}
+
+const SUBMISSION_TRANSITIONS: Readonly<
+  Record<SubmissionState, Partial<Record<SubmissionEvent["type"], SubmissionState>>>
+> = {
+  idle: { PREPARE: "preparing" },
+  preparing: { PREPARED: "reviewing", FAILED: "failed", CANCEL: "cancelled" },
+  reviewing: { REVIEW_APPROVED: "signing", CANCEL: "cancelled", FAILED: "failed" },
+  signing: { SIGNED: "checkpointed", CANCEL: "cancelled", FAILED: "failed" },
+  checkpointed: { CHECKPOINTED: "broadcasting", FAILED: "failed" },
+  broadcasting: { BROADCAST_SENT: "pending", BROADCAST_UNKNOWN: "pending", FAILED: "failed" },
+  pending: { CONFIRMED: "confirmed", FAILED: "failed" },
+  confirmed: { RESET: "idle" },
+  failed: { RESET: "idle" },
+  cancelled: { RESET: "idle" },
+};
+
+export const INITIAL_SUBMISSION: SubmissionMachineState = { state: "idle", binding: null };
+
+export function submissionTransition(
+  current: SubmissionMachineState,
+  event: SubmissionEvent,
+): SubmissionMachineState {
+  const next = SUBMISSION_TRANSITIONS[current.state][event.type];
+  if (!next) throw new Error(`Invalid submission transition: ${event.type} from ${current.state}.`);
+  if (event.type === "SIGNED") {
+    if (!event.signedHash || !event.account)
+      throw new Error("A signed submission must be bound to an account and hash.");
+    return { state: next, binding: { signedHash: event.signedHash, account: event.account } };
+  }
+  if (current.state === "pending" && event.type !== "CONFIRMED" && event.type !== "FAILED")
+    throw new Error(
+      "Pending submissions are bound to their signed hash and cannot change otherwise.",
+    );
+  if (event.type === "RESET") return INITIAL_SUBMISSION;
+  return { state: next, binding: current.binding };
+}
+
+/** Send controls may only be enabled from the reviewing state, and never while a binding is pending. */
+export function canEnableSendControl(current: SubmissionMachineState): boolean {
+  return current.state === "reviewing" && current.binding === null;
+}
 export interface TransactionResult {
   status: "confirmed" | "pending" | "failed";
   txHash: string;
@@ -151,6 +231,11 @@ export interface LiveQuote {
   validUntil?: string;
   provider?: string;
   readonly feeObservation?: FeeObservation;
+}
+export interface RouteComparison {
+  route: BridgeRoute;
+  quote: LiveQuote | null;
+  error: string | null;
 }
 export type QuoteFreshness = "current" | "stale" | "unknown";
 const QUOTE_MAX_AGE_MS = 30_000;
@@ -205,14 +290,26 @@ export interface LaneState {
   adapter: string | null;
   destinationToken?: string;
 }
+function optionalProvenance(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return value;
+}
 export interface PendingClaim {
   id: bigint;
   recipient: string;
   token: string;
   amount: bigint;
   settled: boolean;
+  sourceTxHash: string | null;
+  sourceTransferId: string | null;
   eligibility: ClaimPayoutEligibility;
+  custody: ClaimCustody;
   deployment: RouterDeploymentIdentity;
+}
+export interface ClaimCustody {
+  readonly status: "verified" | "unknown";
+  readonly routerBalance: bigint | null;
+  readonly reason: string | null;
 }
 export interface RouterDeploymentIdentity {
   chain: string;
@@ -484,6 +581,38 @@ export function describeBindingLimit(
     alternateLanes,
   };
 }
+async function claimRouterCustody(token: string): Promise<ClaimCustody> {
+  let methods: Awaited<ReturnType<typeof contractMethods>>;
+  try {
+    methods = await contractMethods(token);
+  } catch (error) {
+    return {
+      status: "unknown",
+      routerBalance: null,
+      reason: `The claim token's on-chain balance interface could not be verified: ${errorMessage(error)}`,
+    };
+  }
+  if (!methods.some((method) => method.name === "balance"))
+    return {
+      status: "unknown",
+      routerBalance: null,
+      reason: "The claim token does not expose a compatible on-chain balance view.",
+    };
+  try {
+    const result = await view(token, "balance", [new Address(TESTNET.router).toScVal()]);
+    return {
+      status: "verified",
+      routerBalance: parseOnChainInteger(result.value),
+      reason: null,
+    };
+  } catch (error) {
+    return {
+      status: "unknown",
+      routerBalance: null,
+      reason: `The router token balance could not be verified: ${errorMessage(error)}`,
+    };
+  }
+}
 
 function server() {
   return new rpc.Server(TESTNET.rpcUrl, { timeout: 15_000 });
@@ -621,12 +750,19 @@ function object(value: unknown): Record<string, unknown> {
   }
   return value as Record<string, unknown>;
 }
-function integer(value: unknown): bigint {
+export function parseOnChainInteger(value: unknown): bigint {
   if (typeof value !== "bigint" && typeof value !== "number" && typeof value !== "string") {
     throw new Error("The contract returned an invalid amount.");
   }
+  if (
+    (typeof value === "number" && !Number.isSafeInteger(value)) ||
+    (typeof value === "string" && !/^-?\d+$/.test(value))
+  ) {
+    throw new Error("The contract returned an amount that cannot be represented exactly.");
+  }
   return BigInt(value);
 }
+const integer = parseOnChainInteger;
 function address(value: unknown): string {
   if (typeof value !== "string") throw new Error("The contract returned an invalid address.");
   Address.fromString(value);
@@ -664,10 +800,15 @@ export function parseSendAmount(value: string): bigint {
   return amount;
 }
 
-export function validateRecipient(value: string): string {
+export function validateRecipient(value: string, destinationKey?: DestinationKey): string {
   const recipient = value.trim();
+  if (destinationKey) destinationFor(destinationKey);
   if (!/^0x[0-9a-fA-F]{40}$/.test(recipient) || /^0x0{40}$/.test(recipient)) {
-    throw new Error("Enter a nonzero, 20-byte EVM recipient address on the selected testnet.");
+    throw new Error(
+      destinationKey
+        ? `Enter a nonzero, 20-byte EVM recipient address for ${destinationFor(destinationKey).name}.`
+        : "Enter a nonzero, 20-byte EVM recipient address on the selected testnet.",
+    );
   }
   return recipient;
 }
@@ -995,6 +1136,22 @@ export async function quoteTransfer(
   return result;
 }
 
+/** Compare only live, independently validated lanes. A failed lane is retained as unavailable. */
+export async function compareTransferRoutes(
+  destinationKey: DestinationKey,
+  amount: bigint,
+): Promise<RouteComparison[]> {
+  return Promise.all(
+    ([0, 1] as const).map(async (route): Promise<RouteComparison> => {
+      try {
+        return { route, quote: await quoteTransfer(destinationKey, amount, route), error: null };
+      } catch (error) {
+        return { route, quote: null, error: errorMessage(error) };
+      }
+    }),
+  );
+}
+
 export async function readBalance(account: string): Promise<bigint> {
   return integer((await view(TESTNET.token, "balance", [new Address(account).toScVal()])).value);
 }
@@ -1028,33 +1185,8 @@ export function bridgeOperation(sender: string, quote: LiveQuote, recipientInput
   );
 }
 
-const MAX_TRANSACTION_READ_SOURCES = 3;
 function transactionReadSources(): string[] {
-  const configuration = process.env.NEXT_PUBLIC_STELLAR_READ_RPC_URLS ?? "";
-  if (configuration.length > 4096)
-    throw new Error("Stellar transaction read source configuration is too large.");
-  const configured = configuration
-    .split(",")
-    .map((url) => url.trim())
-    .filter(Boolean);
-  const sources: string[] = [];
-  const origins = new Set<string>();
-  for (const endpoint of [TESTNET.rpcUrl, ...configured]) {
-    const url = new URL(endpoint);
-    if (
-      endpoint.length > 2048 ||
-      (url.protocol !== "https:" && url.protocol !== "http:") ||
-      url.username ||
-      url.password ||
-      url.hash
-    )
-      throw new Error("Stellar transaction read sources must be public HTTP(S) endpoints.");
-    if (origins.has(url.origin)) continue;
-    origins.add(url.origin);
-    sources.push(url.toString());
-    if (sources.length === MAX_TRANSACTION_READ_SOURCES) break;
-  }
-  return sources;
+  return stellarTransactionReadUrls();
 }
 class ConflictingTransactionEvidence extends Error {}
 interface RpcReadEvidence {
@@ -1203,7 +1335,7 @@ function matchesBridge(checkpoint: TransferCheckpoint, operation: ParsedOperatio
   if (invocation.functionName.toString() !== "bridge_out_with_gas") return false;
   if (
     invocation.contractAddress.type !== "scAddressTypeContract" ||
-    StrKey.encodeContract(invocation.contractAddress.contractId.toBytes()) !== TESTNET.router
+    StrKey.encodeContract(invocation.contractAddress.contractId.toBytes()) !== checkpoint.router
   )
     return false;
   const args = invocation.args;
@@ -1239,7 +1371,7 @@ function inspectCheckpointEnvelope(
 ): "confirmed" | "failed" | null {
   try {
     if (
-      checkpoint.router !== TESTNET.router ||
+      (checkpoint.router !== TESTNET.router && !archivedRouterFor(checkpoint.router)) ||
       envelopeXdr.length > 200_000 ||
       resultXdr.length > 200_000
     )
@@ -1368,7 +1500,7 @@ export async function resolveCheckpointTransaction(
   signal?: AbortSignal,
 ): Promise<CheckpointRecoveryResult> {
   if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
-  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || checkpoint.router !== TESTNET.router)
+  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || !checkpointRecoveryDeploymentMatches(checkpoint))
     return unknownRecovery("The saved checkpoint does not match the configured Stellar Testnet.");
   const lookupSignal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
@@ -1451,6 +1583,16 @@ export async function resolveCheckpointTransaction(
       "Stellar Testnet history could not be checked. The saved checkpoint is unchanged.",
     );
   }
+}
+export async function readCheckpointTransaction(
+  router: string,
+  hash: string,
+): Promise<TransactionResult | null> {
+  if (router !== TESTNET.router && !archivedRouterFor(router))
+    throw new Error(
+      "This checkpoint does not match a known Stellar Testnet deployment. Its status cannot be checked safely.",
+    );
+  return readTransaction(hash);
 }
 
 export interface ReviewSnapshot {
@@ -2115,13 +2257,25 @@ export async function getClaim(id: bigint): Promise<PendingClaim> {
   const result = object(
     (await view(TESTNET.router, "get_claim", [nativeToScVal(id, { type: "u64" })])).value,
   );
+  const claimId = parseOnChainInteger(result.id);
+  if (claimId !== id) throw new Error("The router returned a different claim than requested.");
+  if (typeof result.settled !== "boolean")
+    throw new Error("The router returned an invalid claim settlement status.");
+  const token = address(result.token);
+  const [eligibility, custody] = await Promise.all([
+    claimPayoutEligibility(id, token),
+    claimRouterCustody(token),
+  ]);
   return {
-    id: integer(result.id),
+    id: claimId,
     recipient: address(result.recipient),
-    token: address(result.token),
-    amount: integer(result.amount),
-    settled: result.settled === true,
-    eligibility: await claimPayoutEligibility(id, address(result.token)),
+    token,
+    amount: parseOnChainInteger(result.amount),
+    settled: result.settled,
+    eligibility,
+    custody,
+    sourceTxHash: optionalProvenance(result.source_tx_hash ?? result.origin_tx_hash),
+    sourceTransferId: optionalProvenance(result.source_transfer_id ?? result.transfer_id),
     deployment,
   };
 }

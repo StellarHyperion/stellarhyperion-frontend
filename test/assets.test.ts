@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Account, Keypair, TransactionBuilder, rpc } from "@stellar/stellar-sdk";
+import { searchAssets as searchAssetsForDedupe } from "../src/contracts/assets";
 import {
   quoteConversion,
   accountAssets,
@@ -31,6 +32,7 @@ import {
 } from "../src/contracts/assets";
 import {
   checkpointForAsset,
+  hasVerifiedBridgeBalance,
   parseCheckpoint,
   type TransferCheckpoint,
 } from "../src/contracts/checkpoint";
@@ -42,9 +44,18 @@ import {
 } from "../src/config/testnet";
 import { boundedRetryAfter, cctpMinimumReceived, relayBudget } from "../src/lib/relay-budget";
 import { createReviewedIntentSnapshot } from "../src/contracts/stellar";
+import { formatTokenAmount } from "../src/lib/format";
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+function decimalOracle(units: bigint, decimals: number): string {
+  const scale = 10n ** BigInt(decimals);
+  const whole = units / scale;
+  const fraction = (units % scale).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole.toString();
+}
+
 const path = {
   source_asset_type: "native",
   source_amount: "1.0000000",
@@ -326,6 +337,19 @@ describe("Real Stellar conversion transaction boundaries", () => {
     expect(issuerVerificationLabel(first)).toContain("verify before signing");
     expect(trustlineLabel(first)).toBe("Trustline not checked for this asset");
   });
+
+  it("shows an asset returned in several Horizon records once", async () => {
+    answer([
+      { asset_code: USDC.code, asset_issuer: USDC.issuer },
+      { asset_code: USDC.code, asset_issuer: USDC.issuer },
+      { asset_code: "USDC", asset_issuer: TESTNET.reader },
+    ]);
+    const assets = await searchAssetsForDedupe("USDC");
+    expect(assets.map((asset) => asset.id)).toEqual([
+      `${USDC.code}:${USDC.issuer}`,
+      `USDC:${TESTNET.reader}`,
+    ]);
+  });
   it("records an authorized wallet trustline as present without calling it configured", async () => {
     const request = vi.fn().mockResolvedValue(
       new Response(
@@ -552,6 +576,29 @@ describe("Real Stellar conversion transaction boundaries", () => {
     expect(spendableBalance(precisionAsset)).toBe("0.0000001");
     expect(suggestSourceSpend(precisionAsset)).toBe("0.0000001");
   });
+  it("renders generated six- and seven-decimal integer amounts against an independent oracle", () => {
+    let state = 0x159c0de;
+    const amounts = [
+      1n,
+      9n,
+      10n,
+      9999999n,
+      9007199254740993n,
+      ...Array.from({ length: 64 }, () => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return BigInt(state) * 100000000n + BigInt(state % 100000000) + 1n;
+      }),
+    ];
+
+    for (const decimals of [6, 7]) {
+      for (const units of amounts) {
+        const displayed = decimalOracle(units, decimals);
+        expect(formatTokenAmount(units.toString(), decimals)).toBe(displayed);
+        const [whole = "0", fraction = ""] = displayed.split(".");
+        expect(BigInt(`${whole}${fraction.padEnd(decimals, "0")}`)).toBe(units);
+      }
+    }
+  });
 });
 describe("Independently verified testnet bridge lanes", () => {
   it("binds the configured Stellar asset identity to the checked-in deployment", () => {
@@ -769,6 +816,20 @@ describe("Interrupted transfer recovery", () => {
   };
   it("preserves a real conversion hash, the intended second leg and the originating asset", () => {
     expect(parseCheckpoint(JSON.stringify(checkpoint))).toEqual(checkpoint);
+  });
+  it("preserves signed transaction evidence for a known archived router", () => {
+    const archived = {
+      ...checkpoint,
+      router: "CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF",
+      bridgeAmount: "900719925474099312345",
+      txHash: "b".repeat(64),
+    };
+    expect(parseCheckpoint(JSON.stringify(archived))).toEqual(archived);
+  });
+  it("requires the confirmed conversion balance to cover the planned bridge", () => {
+    expect(hasVerifiedBridgeBalance(1000000n, checkpoint.bridgeAmount)).toBe(true);
+    expect(hasVerifiedBridgeBalance(999999n, checkpoint.bridgeAmount)).toBe(false);
+    expect(hasVerifiedBridgeBalance(1000000n, "not-an-amount")).toBe(false);
   });
   it.each([
     { router: "different" },

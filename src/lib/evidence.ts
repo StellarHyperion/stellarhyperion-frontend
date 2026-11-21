@@ -44,7 +44,11 @@ export function publicIdentifier(value: unknown): string | null {
 }
 
 export function hasVerifiedDestinationEvidence(transfer: FormattedTransfer): boolean {
-  return transfer.destination.delivered && Boolean(transfer.destination.txHash?.trim());
+  return (
+    transfer.destination.delivered &&
+    Boolean(transfer.destination.txHash?.trim()) &&
+    transfer.proofRevision?.status !== "invalidated"
+  );
 }
 
 export function getEvidenceTimeline(transfer: FormattedTransfer): readonly EvidenceStage[] {

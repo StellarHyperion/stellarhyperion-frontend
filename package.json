@@ -26,9 +26,14 @@
     "house": "node scripts/house-rules.mjs",
     "icons": "python3 scripts/render-icons.py",
     "test": "vitest run",
+    "test:exact-amounts": "vitest run test/submission.test.ts test/assets.test.ts test/backend-api.test.ts test/wallet-signature.test.ts",
     "check": "npm run fmt:check && npm run house && npm run contrast && npm run test && npm run lint && npm run typecheck && npm run build",
     "test:browser": "node scripts/browser-smoke.mjs",
-    "test:browser:faults": "node scripts/browser-fault-harness.mjs"
+    "test:browser:faults": "node scripts/browser-fault-harness.mjs",
+    "test:browser:assistive": "node scripts/browser-assistive-audit.mjs",
+    "test:browser:deployment": "node scripts/browser-deployment-revision.mjs",
+    "test:browser:firefox": "HYPERION_BROWSER=firefox node scripts/browser-smoke.mjs",
+    "test:browser:trace": "HYPERION_PROVIDER_DELAY_MS=75 node scripts/browser-performance-trace.mjs"
   },
   "dependencies": {
     "@albedo-link/intent": "^0.12.0",

@@ -1,9 +1,70 @@
 import { CHAINS, RAIL_CONTRACTS, assetOn } from "@hyperion/protocol";
 import deployment from "./testnet-deployment.json";
+import { publicEndpoint } from "./public-boundary";
 import { StrKey } from "@stellar/stellar-sdk";
 const configured = (value: string | undefined, fallback: string) =>
   value?.trim() ? value.trim() : fallback;
 const stellar = deployment.networks["stellar-testnet"];
+export interface PublicDeploymentIdentity {
+  readonly recordedAt: string;
+  readonly chain: "stellar-testnet";
+  readonly router: string;
+  readonly token: string;
+  readonly wasmHash: string;
+  readonly commit: string;
+  readonly deployedLedger: number;
+}
+export const DEPLOYMENT_IDENTITY: PublicDeploymentIdentity = {
+  recordedAt: deployment.generatedAt,
+  chain: "stellar-testnet",
+  router: stellar.router,
+  token: stellar.tokens.USDC.sacId,
+  wasmHash: stellar.wasmHashes.router,
+  commit: stellar.commit,
+  deployedLedger: stellar.deployedAt.ledger,
+};
+export function parsePublicDeploymentIdentity(value: unknown): PublicDeploymentIdentity | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const identity = value as Record<string, unknown>;
+  if (
+    typeof identity.recordedAt !== "string" ||
+    !Number.isFinite(Date.parse(identity.recordedAt)) ||
+    identity.chain !== "stellar-testnet" ||
+    typeof identity.router !== "string" ||
+    !StrKey.isValidContract(identity.router) ||
+    typeof identity.token !== "string" ||
+    !StrKey.isValidContract(identity.token) ||
+    typeof identity.wasmHash !== "string" ||
+    !/^[0-9a-f]{64}$/i.test(identity.wasmHash) ||
+    typeof identity.commit !== "string" ||
+    !/^[0-9a-f]{7,40}$/i.test(identity.commit) ||
+    typeof identity.deployedLedger !== "number" ||
+    !Number.isSafeInteger(identity.deployedLedger) ||
+    identity.deployedLedger < 0
+  )
+    return null;
+  return {
+    recordedAt: identity.recordedAt,
+    chain: identity.chain,
+    router: identity.router,
+    token: identity.token,
+    wasmHash: identity.wasmHash,
+    commit: identity.commit,
+    deployedLedger: identity.deployedLedger,
+  };
+}
+export function deploymentIdentityMatches(value: unknown): boolean {
+  const observed = parsePublicDeploymentIdentity(value);
+  return (
+    observed !== null &&
+    observed.recordedAt === DEPLOYMENT_IDENTITY.recordedAt &&
+    observed.router === DEPLOYMENT_IDENTITY.router &&
+    observed.token === DEPLOYMENT_IDENTITY.token &&
+    observed.wasmHash === DEPLOYMENT_IDENTITY.wasmHash &&
+    observed.commit === DEPLOYMENT_IDENTITY.commit &&
+    observed.deployedLedger === DEPLOYMENT_IDENTITY.deployedLedger
+  );
+}
 export interface PublicAssetMetadata {
   readonly key: string;
   readonly network: string;
@@ -83,9 +144,9 @@ export const TESTNET = {
   reader: stellar.admin,
   usdcCode: stellar.tokens.USDC.code,
   usdcIssuer: stellar.tokens.USDC.issuer,
-  rpcUrl: configured(
-    process.env.NEXT_PUBLIC_STELLAR_RPC_URL,
-    "https://soroban-testnet.stellar.org",
+  rpcUrl: publicEndpoint(
+    "NEXT_PUBLIC_STELLAR_RPC_URL",
+    configured(process.env.NEXT_PUBLIC_STELLAR_RPC_URL, "https://soroban-testnet.stellar.org"),
   ),
   networkPassphrase: "Test SDF Network ; September 2015",
   horizonUrl: configured(
@@ -93,6 +154,13 @@ export const TESTNET = {
     "https://horizon-testnet.stellar.org",
   ),
 } as const;
+export const TESTNET_CONFIGURATION_FINGERPRINT = [
+  TESTNET.router,
+  TESTNET.token,
+  TESTNET.networkPassphrase,
+  TESTNET.usdcCode,
+  TESTNET.usdcIssuer,
+].join(":");
 export const STELLAR_DEPLOYMENT = {
   chain: "stellar-testnet",
   router: stellar.router,
@@ -283,7 +351,14 @@ export function readCachedAssetMetadata(
   };
 }
 
-export function cachedPublicAssetMetadata(query: string, now = Date.now()): PublicAssetMetadata[] {
+export function cachedPublicAssetMetadata(
+  query: string,
+  now = Date.now(),
+  offset = 0,
+  limit = 40,
+): PublicAssetMetadata[] {
+  const boundedOffset = Number.isSafeInteger(offset) && offset > 0 ? offset : 0;
+  const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 40) : 40;
   const keys = new Set(assetMetadataMemory.keys());
   try {
     for (const key of metadataIndex()) keys.add(key);
@@ -309,9 +384,44 @@ export function cachedPublicAssetMetadata(query: string, now = Date.now()): Publ
     } catch {
       /* Malformed metadata never changes transfer configuration. */
     }
-    if (matches.length >= 40) break;
+    if (matches.length >= boundedOffset + boundedLimit) break;
   }
-  return matches;
+  const seen = new Set<string>();
+  const unique: PublicAssetMetadata[] = [];
+  for (const match of matches) {
+    const identity = `${match.code}:${match.issuer}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    unique.push(match);
+  }
+  return unique.slice(boundedOffset, boundedOffset + boundedLimit);
+}
+export interface ArchivedRouterDeployment {
+  chain: "stellar-testnet";
+  router: string;
+  networkPassphrase: string;
+  wasmHash: string;
+  commit: string;
+  deployedLedger: number;
+  successor: {
+    router: string;
+    wasmHash: string;
+    commit: string;
+    deployedLedger: number;
+  };
+}
+export const ARCHIVED_STELLAR_DEPLOYMENTS: readonly ArchivedRouterDeployment[] =
+  stellar.archivedDeployments.map((archived) => ({
+    chain: "stellar-testnet",
+    router: archived.router,
+    networkPassphrase: stellar.networkPassphrase,
+    wasmHash: archived.wasmHash,
+    commit: archived.commit,
+    deployedLedger: archived.deployedAt.ledger,
+    successor: archived.successor,
+  }));
+export function archivedRouterFor(router: string): ArchivedRouterDeployment | null {
+  return ARCHIVED_STELLAR_DEPLOYMENTS.find((deployment) => deployment.router === router) ?? null;
 }
 export type BridgeRoute = 0 | 1;
 const cctpDestinations = new Set(
@@ -365,6 +475,75 @@ export const DESTINATIONS = (["sepolia", "base-sepolia", "arc-testnet"] as const
     transmitter: contracts.cctp.messageTransmitterV2,
   };
 });
+
+function publicHttpUrl(endpoint: string): URL {
+  if (endpoint.length > 2048) throw new Error("A public provider endpoint is too long.");
+  const url = new URL(endpoint);
+  const localDevelopmentEndpoint =
+    process.env.NODE_ENV === "development" &&
+    url.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (
+    (url.protocol !== "https:" && !localDevelopmentEndpoint) ||
+    url.hostname.includes("*") ||
+    url.username ||
+    url.password ||
+    url.hash
+  ) {
+    throw new Error(
+      "Public provider endpoints must be unauthenticated HTTPS URLs (HTTP is limited to localhost in development).",
+    );
+  }
+  return url;
+}
+
+export function stellarTransactionReadUrls(
+  configuration = process.env.NEXT_PUBLIC_STELLAR_READ_RPC_URLS ?? "",
+): string[] {
+  if (configuration.length > 4096)
+    throw new Error("Stellar transaction read source configuration is too large.");
+  const configured = configuration
+    .split(",")
+    .map((endpoint) => endpoint.trim())
+    .filter(Boolean);
+  const primary = publicHttpUrl(TESTNET.rpcUrl);
+  const sources = [primary.toString()];
+  const origins = new Set([primary.origin]);
+  for (const endpoint of configured) {
+    const url = publicHttpUrl(endpoint);
+    if (origins.has(url.origin)) continue;
+    if (sources.length >= 3)
+      throw new Error("Stellar transaction read sources allow at most two additional origins.");
+    origins.add(url.origin);
+    sources.push(url.toString());
+  }
+  return sources;
+}
+
+function walletOrigins(): string[] {
+  const origins = deployment.browserResources.walletOrigins;
+  for (const origin of origins) {
+    const url = new URL(origin);
+    if (url.protocol !== "https:" || url.hostname.includes("*") || url.origin !== origin)
+      throw new Error("Wallet origins must be explicit HTTPS origins.");
+  }
+  return origins;
+}
+
+const indexerUrl =
+  process.env.NEXT_PUBLIC_HYPERION_API_URL ?? process.env.NEXT_PUBLIC_HYPERION_INDEXER_URL ?? "";
+const connectOrigins = new Set([
+  ...stellarTransactionReadUrls().map((endpoint) => publicHttpUrl(endpoint).origin),
+  publicHttpUrl(TESTNET.horizonUrl).origin,
+  ...DESTINATIONS.map((destination) => publicHttpUrl(destination.rpcUrl).origin),
+]);
+if (indexerUrl.trim()) connectOrigins.add(publicHttpUrl(indexerUrl.trim()).origin);
+
+export const BROWSER_RESOURCE_ORIGINS = {
+  wallet: walletOrigins(),
+  connect: [...connectOrigins],
+} as const;
+
 export const destinationDecimals = (route: number) => (route === 0 ? 6 : 7);
 export type DestinationKey = (typeof DESTINATIONS)[number]["key"];
 export function destinationFor(key: string) {

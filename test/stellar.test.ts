@@ -27,6 +27,7 @@ import {
   parseSendAmount,
   settleClaimsOperation,
   supportsBatchClaimSettlement,
+  parseOnChainInteger,
   readTransaction,
   transactionDeadline,
   reconcileSignatureReturn,
@@ -234,8 +235,20 @@ describe("Real Stellar transaction encoding", () => {
     for (const value of ["", "0", "-1", "1.12345678", "1e3", "NaN", "1,000"])
       expect(() => parseSendAmount(value)).toThrow();
   });
+  it("parses on-chain integer amounts exactly and rejects imprecise representations", () => {
+    expect(parseOnChainInteger(900719925474099312345n)).toBe(900719925474099312345n);
+    expect(parseOnChainInteger("900719925474099312345")).toBe(900719925474099312345n);
+    expect(() => parseOnChainInteger(Number.MAX_SAFE_INTEGER + 1)).toThrow(
+      "cannot be represented exactly",
+    );
+    expect(() => parseOnChainInteger("1.5")).toThrow("cannot be represented exactly");
+  });
   it("requires a real nonzero EVM destination", () => {
     expect(validateRecipient("0x70997970C51812dc3A010C7d01b50e0d17dc79C8")).toMatch(/^0x/);
+    expect(validateRecipient(" 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 ", "sepolia")).toBe(
+      "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    );
+    expect(() => validateRecipient("0x123", "base-sepolia")).toThrow("Base Sepolia");
     for (const value of ["", "0x123", "0x" + "0".repeat(40), TESTNET.reader])
       expect(() => validateRecipient(value)).toThrow();
   });
@@ -514,6 +527,28 @@ describe("Real Stellar transaction encoding", () => {
       };
       expect(validateReviewMatch(snapshot1, { ...snapshot1 })).toBe(true);
       expect(validateReviewMatch(snapshot1, snapshot2)).toBe(false);
+    });
+    it("does not rewrite or continue a checkpoint from an archived router", () => {
+      const checkpoint: TransferCheckpoint = {
+        router: "CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF",
+        account: TESTNET.reader,
+        recipient: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        destination: "sepolia",
+        route: 1,
+        bridgeAmount: "900719925474099312345",
+        stage: "conversion",
+        txHash: "5".repeat(64),
+      };
+      saveCheckpoint(null);
+      saveCheckpoint(checkpoint);
+
+      expect(() => saveCheckpoint({ ...checkpoint, router: TESTNET.router })).toThrow(
+        "previous transaction remains pending",
+      );
+      expect(() =>
+        saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: "6".repeat(64) }),
+      ).toThrow("previous transaction remains pending");
+      saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
     });
     it("retains a pending hash when writes fail but storage reads still work", () => {
       const checkpoint = {

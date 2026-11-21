@@ -1,0 +1,14 @@
+{
+  "failed_run": 44713556961,
+  "rule": "js/insecure-randomness",
+  "security_severity": 7.8,
+  "source": "src/contracts/checkpoint.ts",
+  "former_fallback_line": 739,
+  "correction_source": "ec95fc106a5ee21521c69567a8e29500b93c9a02",
+  "secure_fallback_bits": 128,
+  "new_meaningful_cases": 3,
+  "focused_cases_passed": 147,
+  "browser_secure_fallback_and_unavailable_refusal": true,
+  "source_security_policy_unchanged": true,
+  "fresh_hosted_validation": "pending"
+}

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, Check, ChevronRight, Copy, Search } from "lucide-react";
 import { parseUnits } from "@hyperion/protocol";
 import { DESTINATIONS, type BridgeRoute, type DestinationKey } from "../../config/testnet";
@@ -95,6 +95,7 @@ export function SourceAssetPicker({
   const latestRequest = useRef(0);
   const [query, setQuery] = useState("");
   const [queryVersion, setQueryVersion] = useState(0);
+  const [pageLimit, setPageLimit] = useState(25);
   const [remote, setRemote] = useState<{
     key: string;
     version: number;
@@ -126,17 +127,29 @@ export function SourceAssetPicker({
   const defaults = [
     ...new Map([USDC, XLM, ...balances].map((asset) => [asset.id, asset])).values(),
   ];
-  const assets = query.trim()
+  const rawAssets = query.trim()
     ? remote?.key === query && remote.version === queryVersion
       ? remote.assets
       : []
     : defaults;
+  const assets = useMemo(() => {
+    const byIdentity = new Map<string, SourceAsset>();
+    for (const asset of rawAssets) {
+      const identity = `${asset.code}:${asset.issuer ?? "native"}`;
+      if (!byIdentity.has(identity)) byIdentity.set(identity, asset);
+    }
+    return [...byIdentity.values()];
+  }, [rawAssets]);
+  const visibleAssets = assets.slice(0, pageLimit);
+  const hasMore = assets.length > pageLimit;
+  const exhausted = !loading && !hasMore && assets.length > 0;
   return (
     <Dialog title="Choose a token" onClose={onClose}>
       <label className={styles.search}>
         <Search size={17} aria-hidden="true" />
         <input
           aria-label="Search Stellar assets"
+          autoFocus
           placeholder="Token code or issuer address"
           value={query}
           onChange={(event) => {
@@ -156,14 +169,20 @@ export function SourceAssetPicker({
         </p>
       )}
       <div className={styles.list} aria-busy={loading}>
-        {loading && <p role="status">Searching Stellar assets...</p>}
+        <p className={styles.listStatus} role="status">
+          {loading
+            ? "Searching Stellar assets..."
+            : query.trim()
+              ? `${assets.length} matching assets for ${query.trim()}.`
+              : "Showing USDC, XLM and wallet assets."}
+        </p>
         {remote?.key === query && remote.version === queryVersion && remote.error && (
           <p role="alert">{remote.error}</p>
         )}
         {!loading && assets.length === 0 && (
           <p>No matching assets. Try an exact token code or issuer.</p>
         )}
-        {assets.map((asset) => {
+        {visibleAssets.map((asset) => {
           const walletAsset = balances.find((balance) => balance.id === asset.id);
           const currentAsset = walletAsset ?? asset;
           const hasLiabilities =
@@ -254,6 +273,17 @@ export function SourceAssetPicker({
             </div>
           );
         })}
+        {hasMore && (
+          <button
+            type="button"
+            onClick={() => {
+              setPageLimit((limit) => limit + 25);
+            }}
+          >
+            Load more assets
+          </button>
+        )}
+        {exhausted && <p role="status">All matching assets are shown.</p>}
       </div>
       <p className={styles.note}>
         Token symbols can repeat. Verify the issuer before choosing an asset. Testnet tokens have no

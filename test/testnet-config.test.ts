@@ -22,6 +22,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("public deployment revision identity", () => {
+  it("accepts the current record and detects a changed active router", () => {
+    expect(config.deploymentIdentityMatches(config.DEPLOYMENT_IDENTITY)).toBe(true);
+    expect(
+      config.deploymentIdentityMatches({
+        ...config.DEPLOYMENT_IDENTITY,
+        router: config.TESTNET.token,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not mistake malformed deployment observations for the current revision", () => {
+    expect(config.deploymentIdentityMatches(null)).toBe(false);
+    expect(
+      config.deploymentIdentityMatches({ ...config.DEPLOYMENT_IDENTITY, commit: "secret" }),
+    ).toBe(false);
+  });
+});
+
 describe("deployment-aware asset metadata", () => {
   it("separates same-symbol issuers, networks and deployment revisions", () => {
     const { getPublicAssetMetadata, TESTNET } = config;

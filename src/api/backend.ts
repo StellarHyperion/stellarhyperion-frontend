@@ -22,6 +22,13 @@ export type TransferLifecycleStage =
   | "settled"
   | "failed";
 
+export interface ProofRevision {
+  readonly status: "valid" | "reconciled" | "invalidated";
+  readonly previousTxHash: string | null;
+  readonly replacementTxHash: string | null;
+  readonly reason: string | null;
+}
+
 export interface FormattedTransfer {
   readonly id: string;
   readonly stage: TransferLifecycleStage;
@@ -64,15 +71,17 @@ export interface FormattedTransfer {
     readonly lastError: string | null;
   } | null;
   readonly claim: {
+    /** Indexer-reported claim data; recovery verifies claim and custody directly on chain. */
     readonly id: string;
     readonly settled: boolean;
-    /** Claims without provenance remain visible but cannot be offered for settlement. */
+    /** Claims without provenance remain visible but are not linked to supported on-chain recovery. */
     readonly deployment?: {
       readonly chain: string;
       readonly router: string;
       readonly revision: string;
     } | null;
   } | null;
+  readonly proofRevision?: ProofRevision | null;
 }
 
 export interface TransfersResponse {
@@ -163,6 +172,54 @@ export interface ClaimsQuery {
   readonly offset?: string;
 }
 
+/** Normalize the current response and the original `data`-array response.
+ * Missing optional evidence stays null; it is never inferred from another field.
+ */
+export function normalizeTransfersResponse(value: unknown): TransfersResponse {
+  if (!value || typeof value !== "object")
+    throw new Error("The transfer indexer returned invalid data.");
+  const input = value as Record<string, unknown>;
+  const rows = Array.isArray(input.transfers) ? input.transfers : input.data;
+  if (!Array.isArray(rows)) throw new Error("The transfer indexer returned invalid data.");
+  const transfers = rows.map((row) => {
+    if (!row || typeof row !== "object")
+      throw new Error("The transfer indexer returned an invalid record.");
+    const transfer = row as Record<string, unknown>;
+    const origin = transfer.origin;
+    const destination = transfer.destination;
+    if (!origin || typeof origin !== "object" || !destination || typeof destination !== "object")
+      throw new Error("The transfer indexer returned an incomplete record.");
+    return {
+      ...transfer,
+      origin: {
+        ...origin,
+        symbol: (origin as Record<string, unknown>).symbol ?? null,
+        decimals: (origin as Record<string, unknown>).decimals ?? null,
+      },
+      destination: {
+        ...destination,
+        token: (destination as Record<string, unknown>).token ?? null,
+        amount: (destination as Record<string, unknown>).amount ?? null,
+        symbol: (destination as Record<string, unknown>).symbol ?? null,
+        decimals: (destination as Record<string, unknown>).decimals ?? null,
+        block: (destination as Record<string, unknown>).block ?? null,
+        txHash: (destination as Record<string, unknown>).txHash ?? null,
+        deliveredAt: (destination as Record<string, unknown>).deliveredAt ?? null,
+      },
+      rail: transfer.rail ?? null,
+      claim: transfer.claim ?? null,
+    } as FormattedTransfer;
+  });
+  return {
+    ...input,
+    transfers,
+    limit: typeof input.limit === "number" ? input.limit : transfers.length,
+    offset: typeof input.offset === "number" ? input.offset : 0,
+    count: typeof input.count === "number" ? input.count : transfers.length,
+    ...(input.coverage ? { coverage: input.coverage } : {}),
+  };
+}
+
 export interface TransfersQuery {
   readonly originChain?: string;
   readonly destinationChain?: string;
@@ -207,6 +264,17 @@ export function filterTransfers(
   });
 }
 
+export interface TransferRequestOptions {
+  readonly signal?: AbortSignal;
+}
+
+interface CachedResponse {
+  readonly etag: string;
+  readonly value: unknown;
+}
+
+const responseCache = new Map<string, CachedResponse>();
+
 export function getRouteName(route: number): string {
   switch (route) {
     case 0:
@@ -230,19 +298,33 @@ function getApiBaseUrl(): string {
   ).replace(/\/$/, "");
 }
 
-function request<T>(path: string, notFoundIsNull?: false, signal?: AbortSignal): Promise<T>;
-function request<T>(path: string, notFoundIsNull: true, signal?: AbortSignal): Promise<T | null>;
+function request<T>(
+  path: string,
+  notFoundIsNull?: false,
+  signal?: AbortSignal | TransferRequestOptions,
+): Promise<T>;
+function request<T>(
+  path: string,
+  notFoundIsNull: true,
+  signal?: AbortSignal | TransferRequestOptions,
+): Promise<T | null>;
 async function request<T>(
   path: string,
   notFoundIsNull = false,
-  signal?: AbortSignal,
+  options?: AbortSignal | TransferRequestOptions,
 ): Promise<T | null> {
+  const signal =
+    options && "signal" in options ? options.signal : (options as AbortSignal | undefined);
   const base = getApiBaseUrl();
   if (!base) throw new Error("Transfer history is unavailable: no indexer is configured.");
+  const url = `${base}${path}`;
+  const cached = responseCache.get(url);
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (cached) headers["If-None-Match"] = cached.etag;
   let response: Response;
   try {
-    response = await fetch(`${base}${path}`, {
-      headers: { Accept: "application/json" },
+    response = await fetch(url, {
+      headers,
       signal: signal
         ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
         : AbortSignal.timeout(15_000),
@@ -253,12 +335,20 @@ async function request<T>(
       "The transfer indexer is unreachable. On-chain transfers and claims still work.",
     );
   }
-  if (response.status === 404 && notFoundIsNull) return null;
+  if (response.status === 304 && cached) return cached.value as T;
+  if (response.status === 404 && notFoundIsNull) {
+    responseCache.delete(url);
+    return null;
+  }
   if (!response.ok)
     throw new Error(
       `The transfer indexer returned HTTP ${response.status}. No sample records are shown.`,
     );
-  return (await response.json()) as T;
+  const value = (await response.json()) as T;
+  const etag = response.headers.get("ETag");
+  if (etag) responseCache.set(url, { etag, value });
+  else responseCache.delete(url);
+  return value;
 }
 
 function params(query?: object): string {
@@ -270,21 +360,25 @@ function params(query?: object): string {
 }
 export async function fetchTransfers(
   query?: TransfersQuery,
-  signal?: AbortSignal,
+  signal?: AbortSignal | TransferRequestOptions,
 ): Promise<TransfersResponse> {
-  return await request<TransfersResponse>(`/v1/transfers${params(query)}`, false, signal);
+  return normalizeTransfersResponse(
+    await request<unknown>(`/v1/transfers${params(query)}`, false, signal),
+  );
 }
 export async function fetchClaims(query?: ClaimsQuery): Promise<ClaimsResponse> {
   return await request<ClaimsResponse>(`/v1/claims${params(query)}`);
 }
 
-export async function fetchIndexerMetrics(signal?: AbortSignal): Promise<IndexerMetrics> {
+export async function fetchIndexerMetrics(
+  signal?: AbortSignal | TransferRequestOptions,
+): Promise<IndexerMetrics> {
   return await request<IndexerMetrics>("/v1/metrics", false, signal);
 }
 
 export function fetchTransferByTx(
   hash: string,
-  signal?: AbortSignal,
+  signal?: AbortSignal | TransferRequestOptions,
 ): Promise<FormattedTransfer | null> {
   if (!/^[0-9a-f]{64}$/i.test(hash))
     return Promise.reject(new Error("Enter a 64-character Stellar transaction hash."));
@@ -293,7 +387,7 @@ export function fetchTransferByTx(
 
 export async function fetchTransferEvidence(
   transfer: FormattedTransfer,
-  signal?: AbortSignal,
+  signal?: AbortSignal | TransferRequestOptions,
 ): Promise<TransferProof> {
   if (!/^[1-9][0-9]{0,18}$/.test(transfer.id) || BigInt(transfer.id) > 9223372036854775807n)
     throw new Error("Detailed proof lookup is unavailable for this transfer identifier.");
@@ -316,7 +410,8 @@ export function localTransferMatches(
     record.origin.chain === "stellar-testnet" &&
     record.origin.sender === checkpoint.account &&
     record.origin.txHash.toLowerCase() === checkpoint.txHash &&
-    record.origin.token === (checkpoint.token ?? TESTNET.token) &&
+    record.origin.token ===
+      (checkpoint.token ?? (checkpoint.router === TESTNET.router ? TESTNET.token : "")) &&
     record.origin.router === checkpoint.router &&
     record.route === checkpoint.route &&
     record.destination.recipient.toLowerCase() === checkpoint.recipient.toLowerCase() &&

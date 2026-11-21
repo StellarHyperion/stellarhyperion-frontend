@@ -1,6 +1,14 @@
 {
   "schemaVersion": 1,
   "generatedAt": "2026-10-29T10:17:56.262Z",
+  "browserResources": {
+    "walletOrigins": [
+      "https://www.freighter.app",
+      "https://albedo.link",
+      "https://xbull.app",
+      "https://lobstr.co"
+    ]
+  },
   "networks": {
     "stellar-testnet": {
       "family": "stellar",
@@ -33,6 +41,20 @@
       },
       "deployedAt": { "ledger": 5433808, "timestamp": "2026-10-28T13:04:40.000Z" },
       "commit": "b91c6ca",
+      "archivedDeployments": [
+        {
+          "router": "CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF",
+          "wasmHash": "e2698a44680a74731c7fa5a9946ce8fd04499e159aa00bd20e98b63de958d10f",
+          "commit": "ee4f419384f77bf9da0e594f4d6a48d0690385cf",
+          "deployedAt": { "ledger": 4965951, "timestamp": "2026-10-01T12:11:16.702Z" },
+          "successor": {
+            "router": "CCXPCT3YFLVANSF3AQMYCCZVGCMLTURAYQ6O6DYGQJMTKVYQL6NTOC2V",
+            "wasmHash": "281d946ea78b194c0ef44ad9488ed02b2aa6912fb4f6fbab523ad38f1e0803f1",
+            "commit": "b91c6ca",
+            "deployedLedger": 5433808
+          }
+        }
+      ],
       "deployer": "GDXRQQETEZHGRJTE3U7DYGIWGGYGMM6EAS5NWGPGN2WXFXZYZ6QZIANA",
       "peerChain": "sepolia",
       "queuedActionIds": [1, 2, 3, 4],

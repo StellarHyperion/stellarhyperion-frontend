@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateProviderFee } from "../src/lib/fee-schema";
+import { createSingleFlightCache } from "../src/lib/single-flight";
 import { GET as relayFee } from "../src/app/api/relay-fee/route";
 import { GET as circleFee } from "../src/app/api/cctp-fee/route";
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe("provider fee response schema", () => {
   const valid = {
@@ -35,6 +39,46 @@ describe("provider fee response schema", () => {
         { token: "XLM", destination: "ethereum-sepolia" },
       ),
     ).toThrow("schema validation");
+  });
+});
+
+describe("provider fee single-flight cache", () => {
+  it("shares only matching requests for its explicit lifetime", async () => {
+    vi.useFakeTimers();
+    const cache = createSingleFlightCache<number>(2_000);
+    const load = vi.fn(() => Promise.resolve(42));
+
+    const first = cache("circle:USDC:sepolia", load);
+    const concurrent = cache("circle:USDC:sepolia", load);
+    await expect(Promise.all([first, concurrent])).resolves.toEqual([42, 42]);
+    await expect(cache("circle:USDC:sepolia", load)).resolves.toBe(42);
+    expect(load).toHaveBeenCalledOnce();
+
+    await expect(cache("circle:USDC:base-sepolia", load)).resolves.toBe(42);
+    await expect(cache("axelar:XLM:ethereum-sepolia", load)).resolves.toBe(42);
+    expect(load).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(cache("circle:USDC:sepolia", load)).resolves.toBe(42);
+    expect(load).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not retain rejected provider requests", async () => {
+    const cache = createSingleFlightCache<number>(2_000);
+    let fail = true;
+    const load = vi.fn(() => {
+      if (fail) {
+        fail = false;
+        return Promise.reject(new Error("provider unavailable"));
+      }
+      return Promise.resolve(7);
+    });
+
+    await expect(cache("axelar:XLM:ethereum-sepolia", load)).rejects.toThrow(
+      "provider unavailable",
+    );
+    await expect(cache("axelar:XLM:ethereum-sepolia", load)).resolves.toBe(7);
+    expect(load).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -117,5 +161,70 @@ describe("live provider endpoint schema boundaries", () => {
     expect(
       (await circleFee(new Request("http://localhost/api/cctp-fee?destination=sepolia"))).status,
     ).toBe(503);
+  });
+
+  it("coalesces same-lane requests without coupling client cancellation or other lanes", async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const urls: string[] = [];
+    const upstreamSignals: AbortSignal[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        urls.push(url);
+        if (init?.signal) upstreamSignals.push(init.signal);
+        await waiting;
+        return url.includes("iris-api-sandbox")
+          ? new Response(
+              JSON.stringify([
+                { finalityThreshold: 2000, minimumFee: 0, forwardFee: { med: 101 } },
+              ]),
+            )
+          : new Response('"1000"');
+      }),
+    );
+
+    const cancelledClient = new AbortController();
+    const cancelled = circleFee(
+      new Request("http://localhost/api/cctp-fee?destination=sepolia", {
+        signal: cancelledClient.signal,
+      }),
+    );
+    const sameLane = circleFee(new Request("http://localhost/api/cctp-fee?destination=sepolia"));
+    const differentDestination = circleFee(
+      new Request("http://localhost/api/cctp-fee?destination=arc-testnet"),
+    );
+    const differentCurrency = relayFee(new Request("http://localhost/api/relay-fee"));
+    cancelledClient.abort();
+    await Promise.resolve();
+
+    expect(urls).toHaveLength(3);
+    expect(new Set(urls).size).toBe(3);
+    expect(upstreamSignals.every((signal) => !signal.aborted)).toBe(true);
+
+    release();
+    const responses = await Promise.all([
+      cancelled,
+      sameLane,
+      differentDestination,
+      differentCurrency,
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200]);
+    expect(await responses[0].json()).toMatchObject({
+      token: "USDC",
+      destination: "sepolia",
+    });
+    expect(await responses[2].json()).toMatchObject({
+      token: "USDC",
+      destination: "arc-testnet",
+    });
+    expect(await responses[3].json()).toMatchObject({
+      token: "XLM",
+      destination: "ethereum-sepolia",
+    });
   });
 });

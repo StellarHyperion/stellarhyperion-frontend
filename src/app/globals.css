@@ -325,6 +325,7 @@ html {
 
 body {
   margin: 0;
+  min-width: 0;
   min-height: 100svh;
   background-color: var(--surface-page);
   background-image:
@@ -349,6 +350,15 @@ body {
   line-height: var(--type-body-leading);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+:where(main, section, article, aside, form, fieldset, dialog) {
+  min-inline-size: 0;
+}
+
+:where(code, pre, kbd, samp) {
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
 }
 
 h1,
@@ -535,6 +545,12 @@ a:hover {
   border-radius: var(--radius-control);
 }
 
+@media (forced-colors: active) {
+  :root {
+    --focus-color: Highlight;
+  }
+}
+
 /*
  * The skip link. Off screen until focused, then parked at the top left as a real control. A
  * keyboard user should not have to walk the header to reach the switchyard.
@@ -591,6 +607,14 @@ a:hover {
 
   html {
     scroll-behavior: auto;
+  }
+
+  /* Decorative motion is removed outright rather than shortened. The static status text these
+   * indicators sit beside carries the operation and outcome information on its own. */
+  [data-motion="decorative"],
+  [data-motion="decorative"] * {
+    animation: none !important;
+    transition: none !important;
   }
 
   *,

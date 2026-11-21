@@ -1,4 +1,5 @@
 "use client";
+import { CheckpointRecoveryInspector } from "./CheckpointRecoveryInspector";
 import { rememberLocalTransfer } from "../../lib/local-transfers";
 import { cctpPayoutBreakdown, FeeUnavailableError } from "../../lib/relay-budget";
 
@@ -14,12 +15,14 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
 import { fetchClaims } from "../../api";
 import { useVisibilityPoll } from "../../lib/visibility-poll";
 import {
   TESTNET,
+  archivedRouterFor,
+  TESTNET_CONFIGURATION_FINGERPRINT,
   destinationFor,
   destinationDecimals,
   deploymentIdentityMismatch,
@@ -69,6 +72,7 @@ import {
   conversionExecutionIntent,
   conversionRoute,
   quoteTrade,
+  conversionPathIssue,
   spendableBalance,
   requireRecoveredUsdc,
   submitConversion,
@@ -85,6 +89,8 @@ import {
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import { validateAmount } from "../../lib/amount-validation";
 import {
+  checkpointNetworkMatches,
+  exportCheckpoint,
   checkpointForAsset,
   acquireOperationOwnership,
   getOperationOwnership,
@@ -102,6 +108,7 @@ import {
   checkpointIdentity,
   type TransferCheckpoint,
 } from "../../contracts/checkpoint";
+import { AsyncGeneration } from "../../lib/async-generation";
 import { useStellarWallet } from "../../wallets";
 import type { WalletApprovalProvenance } from "../../wallets/stellar";
 import {
@@ -126,6 +133,7 @@ import {
 } from "../../lib/runtime-capabilities-context";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
+// Asset discovery pages are merged by issuer/code identity; selection is keyed by that identity so it survives later page arrivals.
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
 
 function makeReviewedIntent(
@@ -208,7 +216,7 @@ export function parseBridgeFormParams(search: string): BridgeFormParams | null {
   }
   if (recipient) {
     try {
-      validateRecipient(recipient);
+      validateRecipient(recipient, destination);
     } catch {
       return null;
     }
@@ -489,6 +497,48 @@ function QuoteDiffDetails({ diff }: { diff: QuoteDiff }) {
   );
 }
 
+function RouteComparison({
+  routes,
+  selected,
+  onSelect,
+}: {
+  routes: TradeQuote["routes"];
+  selected: BridgeRoute;
+  onSelect: (route: BridgeRoute) => void;
+}) {
+  return (
+    <div className={styles.routeComparison} aria-label="Live route comparison">
+      <p className={styles.comparisonTitle}>Live route comparison</p>
+      {routes.map((candidate) => (
+        <button
+          type="button"
+          key={candidate.route}
+          className={styles.routeOption}
+          disabled={!candidate.quote}
+          aria-pressed={candidate.route === selected}
+          onClick={() => {
+            if (candidate.quote) onSelect(candidate.route);
+          }}
+        >
+          <span>
+            <strong>{provider(candidate.route)}</strong>
+            <small>
+              {candidate.quote
+                ? `${formatUnits(candidate.quote.destinationAmount, destinationDecimals(candidate.route))} ${receiveSymbol(candidate.route)} · ${candidate.route === 0 ? "USDC" : "XLM"} gas`
+                : `Unavailable: ${candidate.error ?? "No live price"}`}
+            </small>
+          </span>
+          {candidate.quote && <ChevronDown size={14} aria-hidden="true" />}
+        </button>
+      ))}
+      <p className={styles.assetNote}>
+        Each option uses a live quote and a distinct destination representation. Select a route to
+        review its exact fee and receive minimum before signing.
+      </p>
+    </div>
+  );
+}
+
 function ConversionIntent({
   conversion,
   addTrustline,
@@ -619,7 +669,10 @@ function PendingTransferCard({
   const message = useMessages();
   const translations = useTranslations();
   const runtime = useRuntimeCapabilities();
+  const archivedDeployment = archivedRouterFor(checkpoint.router);
+  const activeDeployment = checkpoint.router === TESTNET.router && !archivedDeployment;
   const sameAccount = wallet.address === checkpoint.account;
+  const sameNetwork = checkpointNetworkMatches(checkpoint);
   const actionRef = useRef<HTMLButtonElement>(null);
   const recoveryMessageRef = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
@@ -658,6 +711,12 @@ function PendingTransferCard({
   const visibleCurrent = checked?.owner === recoveryOwner ? checked : null;
   const check = async () => {
     if (checking || busy || requestRef.current) return;
+    if (!sameNetwork) {
+      setError(
+        "This checkpoint belongs to a different Stellar network. Reconnect to Testnet before checking it.",
+      );
+      return;
+    }
     const controller = new AbortController();
     requestRef.current = controller;
     const owner = recoveryOwner;
@@ -692,7 +751,12 @@ function PendingTransferCard({
         setError(result.message);
         return;
       }
-      if (result.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+      if (
+        result.status === "confirmed" &&
+        checkpoint.stage === "conversion" &&
+        sameAccount &&
+        activeDeployment
+      ) {
         if (!runtimeSigningAvailable(runtime.capabilities, checkpoint.route))
           throw new Error(message("staticFeeUnavailable"));
         conversionConfirmed = true;
@@ -762,6 +826,7 @@ function PendingTransferCard({
       checked?.owner !== recoveryOwner ||
       checked.status !== "confirmed" ||
       !sameAccount ||
+      !sameNetwork ||
       checking ||
       cardSimulating ||
       !!cardSimError ||
@@ -790,7 +855,26 @@ function PendingTransferCard({
     };
     setChecking(true);
     setError(null);
+    let signingLease: Awaited<ReturnType<typeof acquireOperationOwnership>> | undefined;
     try {
+      signingLease = await acquireOperationOwnership(
+        {
+          account: checkpoint.account,
+          recipient: checkpoint.recipient,
+          destination: checkpoint.destination,
+          route: checkpoint.route,
+          bridgeAmount: checkpoint.bridgeAmount,
+          stage: "bridge",
+        },
+        checkpoint,
+      );
+      if (!active()) return;
+      const freshEvidence = await resolveCheckpointTransaction(checkpoint, controller.signal);
+      if (!active()) return;
+      if (freshEvidence.status !== "confirmed")
+        throw new Error(
+          "The original conversion could not be reconfirmed. Keep its checkpoint and retry the read.",
+        );
       await requireRecoveredUsdc(
         checkpoint.account,
         BigInt(checkpoint.bridgeAmount),
@@ -854,6 +938,7 @@ function PendingTransferCard({
         setError(message("conversionAttemptFailed", { reason }));
       }
     } finally {
+      signingLease?.release();
       if (requestRef.current === controller) requestRef.current = null;
       setChecking(false);
     }
@@ -892,6 +977,13 @@ function PendingTransferCard({
       <p id="pending-recovery-message" ref={recoveryMessageRef} role="status" tabIndex={-1}>
         {recoveryMessage(checkpoint.stage, visibleCurrent?.status ?? null, false, translations)}
       </p>
+      {archivedDeployment && (
+        <p role="status">
+          This saved transaction belongs to an archived router revision. Check its original Stellar
+          Testnet hash. Confirmation does not prove destination delivery; continuation through the
+          successor router is blocked.
+        </p>
+      )}
       {checkpoint.stage === "conversion" && checkpoint.source && (
         <p className={styles.address}>
           Original source asset: {checkpoint.source.code}
@@ -907,11 +999,39 @@ function PendingTransferCard({
         {checkpoint.txHash.slice(0, 12)}...{checkpoint.txHash.slice(-8)}{" "}
         <ArrowUpRight size={14} aria-hidden="true" />
       </a>
+      <p>Stage: {checkpoint.stage}</p>
       <div className={styles.transactionIdentity}>
         <span>Source transaction on Stellar Testnet</span>
         <div className={styles.transactionIdentityValue}>
           <CopyableAddress value={checkpoint.txHash} label="transaction hash" />
         </div>
+        <button
+          type="button"
+          className={styles.secondary}
+          onClick={() => {
+            let url: string | undefined;
+            try {
+              const blob = new Blob([exportCheckpoint(checkpoint)], { type: "application/json" });
+              url = URL.createObjectURL(blob);
+              const link = document.createElement("a");
+              link.href = url;
+              link.download = `hyperion-checkpoint-${checkpoint.txHash.slice(0, 12)}.json`;
+              link.click();
+              setError(null);
+            } catch {
+              setError(message("recoveryExportFailed"));
+            } finally {
+              if (url) {
+                const createdUrl = url;
+                setTimeout(() => {
+                  URL.revokeObjectURL(createdUrl);
+                }, 1000);
+              }
+            }
+          }}
+        >
+          {message("recoveryExport")}
+        </button>
         <a
           className={styles.transactionLink}
           href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -921,6 +1041,7 @@ function PendingTransferCard({
           View on Stellar Expert <ArrowUpRight size={14} aria-hidden="true" />
         </a>
       </div>
+      <CheckpointRecoveryInspector key={recoveryOwner} checkpoint={checkpoint} />
       {checkpoint.stage === "bridge" && (
         <Link href={`/transfers/${checkpoint.txHash}`}>
           Track transfer <ArrowRight size={14} aria-hidden="true" />
@@ -931,6 +1052,11 @@ function PendingTransferCard({
           {message("recoveryReconnect", {
             account: `${checkpoint.account.slice(0, 7)}...${checkpoint.account.slice(-7)}`,
           })}
+        </p>
+      )}
+      {!sameNetwork && (
+        <p role="alert" className={styles.error}>
+          {message("recoveryNetworkMismatch")}
         </p>
       )}
       <p className={styles.address}>{message("recoveryOwner", { account: checkpoint.account })}</p>
@@ -970,16 +1096,16 @@ function PendingTransferCard({
           onClick={() => {
             void check();
           }}
-          disabled={busy || checking}
+          disabled={busy || checking || !sameNetwork}
         >
           {checking
             ? message("recoveryCheckingAction")
-            : checkpoint.stage === "conversion" && sameAccount
+            : checkpoint.stage === "conversion" && sameAccount && sameNetwork
               ? message("recoveryContinue")
               : message("recoveryCheck")}
         </button>
       )}
-      {review && checked?.owner === recoveryOwner && (
+      {review && activeDeployment && checked?.owner === recoveryOwner && (
         <ReviewDialog
           onClose={() => {
             if (!checking) {
@@ -1083,7 +1209,8 @@ export function Bridge() {
   const [source, setSource] = useState<SourceAsset>(USDC);
   const [destination, setDestination] = useState<DestinationKey>("sepolia");
   const [route, setRoute] = useState<BridgeRoute>(1);
-  const runtimeReady = runtimeSigningAvailable(runtime.capabilities, route);
+  const runtimeReady =
+    runtime.deploymentReady && runtimeSigningAvailable(runtime.capabilities, route);
   const [amount, setAmount] = useState("");
   const [recipient, setRecipient] = useState("");
   const [touched, setTouched] = useState(false);
@@ -1131,6 +1258,7 @@ export function Bridge() {
   const [phase, setPhase] = useState<TransactionPhase | null>(null);
   const [step, setStep] = useState<"conversion" | "bridge">("bridge");
   const [result, setResult] = useState<TransactionResult | null>(null);
+  const quoteGeneration = useRef(new AsyncGeneration());
   const [error, setError] = useState<string | null>(null);
   const [simulatedState, setSimulatedState] = useState<{
     key: string;
@@ -1190,7 +1318,7 @@ export function Bridge() {
   );
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
-  const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
+  const quoteKey = `${TESTNET_CONFIGURATION_FINGERPRINT}:${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
   const quote =
     quoted?.key === quoteKey && lane?.available && !laneRefreshing ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
@@ -1292,7 +1420,7 @@ export function Bridge() {
   if (amount.trim() && recipient.trim()) {
     try {
       if (!amountValidation.valid) throw new Error(amountValidation.message);
-      validateRecipient(recipient);
+      validateRecipient(recipient, destination);
       valid = true;
     } catch (cause) {
       inputError = errorMessage(cause);
@@ -1370,14 +1498,22 @@ export function Bridge() {
     }
   };
 
-  const invalidateQuote = () => {
+  const invalidateQuote = useCallback(() => {
     setQuoteVersion((version) => version + 1);
     setQuoted(null);
     setReviewing(false);
     setReviewApproval(null);
     setReviewed(null);
     setQuoteDiff(null);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!runtime.deploymentUpdateAvailable) return;
+    const frame = requestAnimationFrame(invalidateQuote);
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [runtime.deploymentUpdateAvailable, invalidateQuote]);
 
   useEffect(() => {
     if (!wallet.address) return;
@@ -1407,17 +1543,18 @@ export function Bridge() {
   }, [wallet.address, result, refresh]);
   useEffect(() => {
     if (!runtimeReady || !valid || !lane?.available || locked) return;
+    const generation = quoteGeneration.current.next();
     let active = true;
     const timer = setTimeout(() => {
       void quoteTrade(destination, activeSource, amount, route)
         .then((value) => {
-          if (active) {
+          if (active && quoteGeneration.current.isCurrent(generation)) {
             setFeeCooldown(null);
             setQuoted({ key: quoteKey, value, error: null, diagnostic: null });
           }
         })
         .catch((cause: unknown) => {
-          if (active) {
+          if (active && quoteGeneration.current.isCurrent(generation)) {
             if (cause instanceof FeeUnavailableError)
               setFeeCooldown({ key: quoteKey, until: Date.now() + cause.retryAfterSeconds * 1000 });
             setQuoted({
@@ -1556,7 +1693,7 @@ export function Bridge() {
     try {
       ownership = await acquireOperationOwnership({
         account: sender,
-        recipient: validateRecipient(recipient),
+        recipient: validateRecipient(recipient, destination),
         destination,
         route,
         bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
@@ -1615,7 +1752,7 @@ export function Bridge() {
       router: TESTNET.router,
       token: TESTNET.token,
       account: sender,
-      recipient: validateRecipient(recipient),
+      recipient: validateRecipient(recipient, destination),
       destination,
       route,
       bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
@@ -2005,7 +2142,10 @@ export function Bridge() {
           </div>
           <div className={styles.amountRow}>
             {fetching ? (
-              <div className={styles.skeleton} aria-hidden="true" />
+              <>
+                <span className={styles.skeleton} data-motion="decorative" aria-hidden="true" />
+                <span className="visuallyHidden">Receive amount pending route quote.</span>
+              </>
             ) : (
               <output aria-label="Minimum received" className={styles.receiveAmount}>
                 {runtimeReady && quote ? (
@@ -2155,14 +2295,14 @@ export function Bridge() {
         </div>
         {fetching ? (
           <div className={styles.fetching} role="status">
-            <span className={styles.fetchOrbit} aria-hidden="true">
+            <span className={styles.fetchOrbit} data-motion="decorative" aria-hidden="true">
               <LoaderCircle size={22} />
             </span>
             <div>
               <strong>Finding your route</strong>
               <span>{message("routeLoading")}</span>
             </div>
-            <span className={styles.fetchDots} aria-hidden="true">
+            <span className={styles.fetchDots} data-motion="decorative" aria-hidden="true">
               <i />
               <i />
               <i />
@@ -2189,6 +2329,15 @@ export function Bridge() {
               simulation={simulation}
               simulating={simulating}
               simulationError={simulationError}
+            />
+            <RouteComparison
+              routes={quote.routes}
+              selected={route}
+              onSelect={(next) => {
+                setRoute(next);
+                invalidateQuote();
+                setError(null);
+              }}
             />
             {quote.conversion && <ConversionDetails conversion={quote.conversion} />}
             <p className={styles.assetNote}>
@@ -2268,6 +2417,9 @@ export function Bridge() {
                 quoteError ??
                 laneError ??
                 inputError}
+              {quoteError &&
+                conversionPathIssue(new Error(quoteError)) === "temporary" &&
+                " Refresh and try again."}
             </p>
           )
         )}
@@ -2601,7 +2753,7 @@ export function Bridge() {
             From Stellar Testnet to {destinationFor(reviewed.quote.bridge.destination).name} via{" "}
             {provider(reviewed.quote.bridge.route)}.
           </p>
-          <p className={styles.address}>Recipient: {validateRecipient(recipient)}</p>
+          <p className={styles.address}>Recipient: {validateRecipient(recipient, destination)}</p>
           {reviewed.quote.source.issuer && reviewed.quote.source.id !== USDC.id && (
             <p className={styles.address}>Source issuer: {reviewed.quote.source.issuer}</p>
           )}
@@ -2642,6 +2794,17 @@ export function Bridge() {
               <QuoteDiffDetails diff={quoteDiff} />
             </section>
           )}
+          <RouteComparison
+            routes={reviewed.quote.routes}
+            selected={reviewed.quote.bridge.route}
+            onSelect={(next) => {
+              setReviewing(false);
+              setReviewed(null);
+              setRoute(next);
+              invalidateQuote();
+              setError(null);
+            }}
+          />
           {reviewed.quote.conversion && (
             <p className={styles.reviewNote}>
               Two signatures: convert to USDC, then review the bridge simulation and its fees. Price
@@ -2860,7 +3023,7 @@ export function ClaimRecovery() {
     setRecovery(null);
     setClaimPhase("preparing");
     try {
-      lease = await acquireClaimSettlementLease();
+      lease = await acquireClaimSettlementLease(account);
       assertCheckpointStorage();
       if (controller.signal.aborted || !mounted.current) return;
       const refreshed = await getClaims(reviewed.map((claim) => claim.id));
@@ -3032,6 +3195,10 @@ export function ClaimRecovery() {
           )}
           {claims.length > 0 && (
             <>
+              <p className={styles.reviewNote}>
+                Verified from the current on-chain claim. The settler pays the recorded recipient,
+                never the wallet that performs recovery.
+              </p>
               <ul>
                 {claims.map((claim) => (
                   <li key={claim.id.toString()}>
@@ -3046,6 +3213,25 @@ export function ClaimRecovery() {
                         : `${claim.amount} base units of ${claim.token}`}
                     </p>
                     <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
+                    <p>
+                      Recorded entitlement does not establish the currently withdrawable amount.
+                    </p>
+                    <p>
+                      Router token custody:{" "}
+                      {claim.custody.status === "verified" && claim.custody.routerBalance !== null
+                        ? `${claim.custody.routerBalance} base units`
+                        : "unknown"}
+                      .
+                    </p>
+                    <p>{claim.custody.reason}</p>
+                    <p>
+                      Source transfer:{" "}
+                      {claim.sourceTxHash ?? "unknown (not supplied by the contract)"}
+                    </p>
+                    <p>
+                      Source association:{" "}
+                      {claim.sourceTransferId ?? "unknown (not supplied by the contract)"}
+                    </p>
                     <p className={styles.address}>
                       Verified router:{" "}
                       <CopyableAddress value={claim.deployment.router} label="verified router" />{" "}

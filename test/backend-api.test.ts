@@ -9,6 +9,7 @@ import {
   filterTransfers,
   reconcileTransfers,
   localTransferMatches,
+  normalizeTransfersResponse,
   type FormattedTransfer,
 } from "../src/api/backend";
 import {
@@ -279,6 +280,65 @@ describe("Real indexer client", () => {
       "https://indexer.example/v1/transfers?search=hash+%26+recipient&offset=40",
     );
   });
+  it("preserves generated source and destination base-unit strings independently", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
+    const transfer = (sourceGross: bigint, index: number): FormattedTransfer => {
+      const fee = BigInt(index + 1) * 100n;
+      const sourceNet = sourceGross - fee;
+      return {
+        id: `amount-${index}`,
+        stage: "delivered",
+        route: 0,
+        origin: {
+          chain: "stellar-testnet",
+          nonce: String(index + 1),
+          sender: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+          token: "CUSDC",
+          symbol: "USDC",
+          decimals: 7,
+          grossAmount: sourceGross.toString(),
+          fee: fee.toString(),
+          netAmount: sourceNet.toString(),
+          block: String(index + 100),
+          txHash: `source-${index}`,
+          observedAt: "2026-11-18T12:00:00.000Z",
+        },
+        destination: {
+          token: "0x" + "1".repeat(40),
+          amount: (sourceNet / 10n).toString(),
+          symbol: "USDC",
+          decimals: 6,
+          chain: "sepolia",
+          recipient: "0x" + "2".repeat(40),
+          delivered: true,
+          block: String(index + 200),
+          txHash: `destination-${index}`,
+          deliveredAt: "2026-11-18T12:05:00.000Z",
+        },
+        rail: null,
+        claim: null,
+      };
+    };
+    let state = 0x159c0de;
+    const records = [
+      transfer(9007199254740993n, 0),
+      ...Array.from({ length: 32 }, (_, index) => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return transfer(BigInt(state) * 100000000n + 1000000n, index + 1);
+      }),
+    ];
+    const payload = { transfers: records, count: records.length, limit: 50, offset: 0 };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))));
+
+    const result = await fetchTransfers();
+    for (const [index, record] of records.entries()) {
+      expect(result.transfers[index]?.origin.grossAmount).toBe(record.origin.grossAmount);
+      expect(result.transfers[index]?.origin.fee).toBe(record.origin.fee);
+      expect(result.transfers[index]?.origin.netAmount).toBe(record.origin.netAmount);
+      expect(result.transfers[index]?.destination.amount).toBe(record.destination.amount);
+    }
+    expect(result.transfers[0]?.origin.grossAmount).toBe("9007199254740993");
+  });
 
   it("passes a keyset cursor when the backend advertises cursor pagination", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
@@ -296,6 +356,54 @@ describe("Real indexer client", () => {
     expect(await fetchTransfers({ limit: "20", cursor: "after-1" })).toEqual(payload);
     expect(fetcher.mock.calls[0]?.[0]).toBe(
       "https://indexer.example/v1/transfers?limit=20&cursor=after-1",
+    );
+  });
+  it("withdraws delivered status after a payment proof is invalidated", () => {
+    const transfer = {
+      stage: "delivered",
+      destination: { delivered: true, amount: "9", decimals: 6, txHash: "b" },
+      proofRevision: {
+        status: "invalidated",
+        previousTxHash: "b",
+        replacementTxHash: null,
+        reason: "destination reorg",
+      },
+    } as unknown as FormattedTransfer;
+    expect(hasVerifiedDestinationEvidence(transfer)).toBe(false);
+    expect(hasVerifiedDestinationEvidence({ ...transfer, proofRevision: null })).toBe(true);
+  });
+  it("renders the supported older data shape without inventing evidence", () => {
+    const result = normalizeTransfersResponse({
+      data: [
+        {
+          id: "legacy-1",
+          stage: "initiated",
+          route: 1,
+          origin: {
+            chain: "stellar",
+            nonce: "7",
+            sender: "G...",
+            token: "C...",
+            grossAmount: "100",
+            fee: "1",
+            netAmount: "99",
+            block: "1",
+            txHash: "a".repeat(64),
+            observedAt: "2026-01-01T00:00:00Z",
+          },
+          destination: {
+            chain: "sepolia",
+            recipient: "0x1111111111111111111111111111111111111111",
+            delivered: false,
+          },
+        },
+      ],
+    });
+    expect(result.transfers).toHaveLength(1);
+    expect(result.transfers[0]?.destination.amount).toBeNull();
+    expect(result.transfers[0]?.claim).toBeNull();
+    expect(result.transfers[0]?.destination.recipient).toBe(
+      "0x1111111111111111111111111111111111111111",
     );
   });
   it("lists claims with explicit chain and settlement filters", async () => {
@@ -355,6 +463,52 @@ describe("Real indexer client", () => {
     expect(
       cursorFreshness(payload.cursors[0] ?? null, Date.parse("2026-11-18T12:31:00.000Z")),
     ).toBe("stale");
+  });
+
+  it("revalidates transfer history with ETags and uses updated payloads", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://etag.example");
+    const first = { transfers: [], count: 0, limit: 20, offset: 0 };
+    const second = { transfers: [], count: 1, limit: 20, offset: 0 };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(first), { headers: { ETag: '"v1"' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(second), { headers: { ETag: '"v2"' } }));
+    vi.stubGlobal("fetch", fetcher);
+
+    await expect(fetchTransfers()).resolves.toEqual(first);
+    await expect(fetchTransfers()).resolves.toEqual(second);
+    expect(fetcher.mock.calls[1]?.[1]).toMatchObject({
+      headers: { Accept: "application/json", "If-None-Match": '"v1"' },
+    });
+  });
+
+  it("uses a 304 payload but does not cache a missing transfer", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://etag-missing.example");
+    const payload = { transfers: [], count: 0, limit: 20, offset: 0 };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(payload), { headers: { ETag: '"v1"' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 304 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 404 }));
+    vi.stubGlobal("fetch", fetcher);
+
+    await expect(fetchTransfers()).resolves.toEqual(payload);
+    await expect(fetchTransfers()).resolves.toEqual(payload);
+    await expect(fetchTransferByTx("f".repeat(64))).resolves.toBeNull();
+    expect(fetcher.mock.calls[1]?.[1]).toMatchObject({
+      headers: { "If-None-Match": '"v1"' },
+    });
+  });
+
+  it("passes an abort signal to polling requests", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://abort.example");
+    const controller = new AbortController();
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ transfers: [] })));
+    vi.stubGlobal("fetch", fetcher);
+
+    await fetchTransfers(undefined, { signal: controller.signal });
+    const init = fetcher.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.signal).toBeDefined();
   });
 });
 

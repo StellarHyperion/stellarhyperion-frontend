@@ -1,5 +1,6 @@
 .panel {
   min-width: 0;
+  max-width: 100%;
   display: grid;
   gap: 12px;
   padding: 20px;
@@ -66,6 +67,7 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 0.75rem;
   color: var(--text-secondary);
@@ -508,6 +510,7 @@
 }
 .routeDetails summary {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -522,7 +525,7 @@
 }
 .routeDetails summary > span:last-child {
   color: var(--text-secondary);
-  white-space: nowrap;
+  white-space: normal;
 }
 .routeIdentity {
   color: var(--text-primary);
@@ -537,6 +540,54 @@
 }
 .routeDetails .assetNote {
   margin-top: 10px;
+}
+.routeComparison {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--edge-color);
+}
+.comparisonTitle {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.routeOption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--edge-color);
+  border-radius: 10px;
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  text-align: start;
+  cursor: pointer;
+}
+.routeOption[aria-pressed="true"] {
+  border-color: var(--leg-origin);
+}
+.routeOption:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+.routeOption span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.routeOption strong {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.routeOption small {
+  color: var(--text-secondary);
+  font-size: 0.625rem;
+  line-height: 1.4;
 }
 .summary {
   display: grid;
@@ -588,12 +639,55 @@
   color: var(--text-primary);
 }
 .progress {
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: 10px;
   color: var(--text-secondary);
   font-size: 0.8125rem;
   line-height: 1.6;
+}
+.progressLine {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.progressSteps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.progressSteps li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--edge-color);
+  font-size: 0.75rem;
+}
+.progressSteps li[data-state="active"],
+.progressSteps li[data-state="done"] {
+  color: var(--text-primary);
+}
+.progressDetail {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+.progressState {
+  flex-shrink: 0;
+  font-family: var(--face-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.progressSteps li[data-state="done"] .progressState {
+  color: var(--state-settled);
+}
+.progressSteps li[data-state="active"] .progressState {
+  color: var(--leg-origin);
 }
 .spinner {
   flex-shrink: 0;
@@ -717,6 +811,30 @@
   color: var(--text-primary);
   background: var(--surface-panel);
   cursor: pointer;
+  min-height: 44px;
+  max-width: 100%;
+}
+.recoveryBody > button {
+  width: 100%;
+}
+.recoveryBody ul {
+  display: grid;
+  gap: 12px;
+}
+.recoveryBody li {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--edge-color);
+  border-radius: 14px;
+  background: var(--surface-page);
+}
+.recoveryBody li p {
+  overflow-wrap: anywhere;
+}
+.recoveryBody li button {
+  width: 100%;
 }
 .secondary:disabled,
 .recoveryBody button:disabled {
@@ -725,6 +843,8 @@
 }
 .pending {
   display: grid;
+  min-width: 0;
+  max-width: 100%;
   gap: 12px;
   padding: 20px;
   border: 1px solid var(--leg-destination);
@@ -733,15 +853,20 @@
   font-size: 0.8125rem;
   line-height: 1.6;
 }
+.pending > * {
+  min-width: 0;
+}
 .pendingTitle {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 9px;
   color: var(--leg-destination);
 }
 .pendingTitle h2 {
+  min-width: 0;
   font-size: 0.9375rem;
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 .pending > p {
   color: var(--text-secondary);
@@ -771,8 +896,8 @@
 }
 .transactionIdentityValue {
   display: flex;
+  align-items: flex-start;
   flex-wrap: wrap;
-  align-items: center;
   gap: 8px;
   width: 100%;
 }
@@ -808,6 +933,8 @@
   cursor: pointer;
   flex-shrink: 0;
   white-space: nowrap;
+  min-width: 44px;
+  min-height: 44px;
 }
 .copyHash:hover {
   background: var(--surface-well);
@@ -836,6 +963,10 @@
 .reviewTotal > svg {
   margin-block: 10px;
   color: var(--leg-origin);
+}
+.pending .secondary {
+  min-height: 44px;
+  width: 100%;
 }
 .routeDetails summary::-webkit-details-marker,
 .support summary::-webkit-details-marker,
@@ -904,6 +1035,23 @@
   }
   .summary > div {
     gap: 10px;
+    flex-wrap: wrap;
+  }
+  .summary dd {
+    text-align: start;
+  }
+}
+@media (width<=26rem) {
+  .panel,
+  .pending {
+    padding: 14px;
+  }
+  .assetPanel {
+    padding: 12px;
+  }
+  .amountRow input,
+  .receiveAmount {
+    font-size: 1.75rem;
   }
 }
 
@@ -1005,6 +1153,46 @@
   text-underline-offset: 3px;
 }
 .validationSummary a:focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 3px;
+}
+
+.recoveryInspector {
+  min-width: 0;
+  border-block-start: 1px solid var(--edge-color);
+  padding-block-start: 16px;
+  overflow-wrap: anywhere;
+}
+.recoveryInspector summary {
+  cursor: pointer;
+  padding-block: 12px;
+}
+.recoveryInspector p {
+  margin-block: 12px;
+}
+.recoveryInspector label {
+  display: block;
+  margin-block: 12px 6px;
+}
+.recoveryInspector textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 120px;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 12px;
+  color: var(--text-primary);
+  background: var(--surface-page);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+.recoveryInspector button {
+  margin-block: 12px;
+  margin-inline-end: 12px;
+  min-height: 44px;
+}
+.recoveryInspector :is(summary, textarea):focus-visible {
   outline: 2px solid var(--focus-color);
   outline-offset: 3px;
 }

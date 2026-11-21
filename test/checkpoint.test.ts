@@ -3,6 +3,7 @@ import { USDC, XLM } from "../src/contracts/assets";
 import { TESTNET } from "../src/config/testnet";
 import {
   checkpointForAsset,
+  checkpointIdentity,
   parseCheckpoint,
   saveCheckpoint,
   getTransferCheckpoint,
@@ -141,6 +142,28 @@ describe("pending transfer checkpoints", () => {
     expect(parseCheckpoint(JSON.stringify({ ...checkpoint, token: "different-token" }))).toBeNull();
   });
 
+  it("preserves a pending hash's original router and token across deployment revisions", () => {
+    const original = {
+      ...checkpoint,
+      router: TESTNET.token,
+      token: TESTNET.router,
+    };
+    const parsed = required(parseCheckpoint(JSON.stringify(original)));
+    expect(parsed.router).toBe(original.router);
+    expect(parsed.token).toBe(original.token);
+    expect(parsed.txHash).toBe(original.txHash);
+    expect(JSON.parse(checkpointIdentity(parsed))).toContain(original.router);
+    expect(JSON.parse(checkpointIdentity(parsed))).toContain(original.token);
+  });
+
+  it("does not assign the new token to a legacy checkpoint from another router", () => {
+    const legacy = { ...checkpoint, router: TESTNET.token, token: undefined };
+    const parsed = required(parseCheckpoint(JSON.stringify(legacy)));
+    expect(parsed.router).toBe(legacy.router);
+    expect(parsed.token).toBeUndefined();
+    expect(parsed.txHash).toBe(legacy.txHash);
+  });
+
   it("preserves source transaction identity when promoting conversion recovery to bridge recovery", () => {
     const storage = createStorage();
     vi.stubGlobal("localStorage", storage);
@@ -152,7 +175,7 @@ describe("pending transfer checkpoints", () => {
       required(getTransferCheckpoint()),
     );
 
-    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toEqual({
+    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toMatchObject({
       ...conversion,
       schemaVersion: 1,
       revision: 2,

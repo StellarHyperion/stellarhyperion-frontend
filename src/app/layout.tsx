@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import { archivo, plexMono } from "./fonts";
 import { PAGE_INK } from "./tokens";
 import { STELLAR_DEPLOYMENT } from "../config/testnet";
@@ -34,7 +35,8 @@ export const viewport: Viewport = {
   themeColor: PAGE_INK,
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html
       lang="en"
@@ -45,6 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <meta name="hyperion-deployment-commit" content={STELLAR_DEPLOYMENT.commit} />
         <script
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html:
               '(function(){try{var t=localStorage.getItem("hyperion.theme");if(t==="light"||t==="dark"){document.documentElement.setAttribute("data-theme",t);}}catch(e){}})();',

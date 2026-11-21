@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
+import { assertCheckpointStorage, getTransferCheckpoint } from "./checkpoint";
 import { TESTNET } from "../config/testnet";
 
 export interface ClaimSettlementIdentity {
@@ -200,25 +201,44 @@ export function saveClaimSettlementCheckpoint(
   }
 }
 /** Hold the same account-operation lock used by bridge signing through settlement confirmation. */
-export async function acquireClaimSettlementLease(): Promise<{ release: () => void }> {
+export async function acquireClaimSettlementLease(
+  account: string,
+): Promise<{ release: () => void }> {
   const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
   if (!locks)
     throw new Error("This browser cannot coordinate settlement tabs. Signing is unavailable.");
+  if (!StrKey.isValidEd25519PublicKey(account))
+    throw new Error("Reconnect the original account before settling a claim.");
   return new Promise((resolve, reject) => {
     void locks
       .request("hyperion.testnet.transfer-signing", { ifAvailable: true }, async (lock) => {
         if (!lock)
           throw new Error("Another tab is signing. Finish or recover it before settlement.");
-        if (getClaimSettlementCheckpoint())
-          throw new Error(
-            "A signed settlement is unresolved. Check its outcome before signing again.",
-          );
-        let release!: () => void;
-        const held = new Promise<void>((done) => {
-          release = done;
-        });
-        resolve({ release });
-        await held;
+        await locks.request(
+          `hyperion.testnet.account.${account}`,
+          { ifAvailable: true },
+          async (accountLock) => {
+            if (!accountLock)
+              throw new Error(
+                "Another tab owns this account. Recover its operation before settling a claim.",
+              );
+            assertCheckpointStorage();
+            if (getTransferCheckpoint())
+              throw new Error(
+                "A signed transfer is unresolved. Check its outcome before settling a claim.",
+              );
+            if (getClaimSettlementCheckpoint())
+              throw new Error(
+                "A signed settlement is unresolved. Check its outcome before signing again.",
+              );
+            let release!: () => void;
+            const held = new Promise<void>((done) => {
+              release = done;
+            });
+            resolve({ release });
+            await held;
+          },
+        );
       })
       .catch(reject);
   });

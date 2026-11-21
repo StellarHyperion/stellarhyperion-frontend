@@ -15,14 +15,18 @@ import {
 } from "../src/wallets/stellar/signature";
 
 const signer = Keypair.random();
-function transaction(amount = "1", networkPassphrase = Networks.TESTNET) {
+function transaction(
+  amount = "1",
+  networkPassphrase = Networks.TESTNET,
+  destination = Keypair.random().publicKey(),
+) {
   return new TransactionBuilder(new Account(signer.publicKey(), "0"), {
     fee: "100",
     networkPassphrase,
   })
     .addOperation(
       Operation.payment({
-        destination: Keypair.random().publicKey(),
+        destination,
         asset: Asset.native(),
         amount,
       }),
@@ -83,6 +87,38 @@ describe("Wallet signature verification", () => {
     const original = tx.toXdr();
     tx.sign(signer);
     expect(verifyWalletSignature(original, tx.toXdr(), signer.publicKey())).toBe(tx.toXdr());
+  });
+  it("keeps generated exact amounts in the signed intent without one-stroop tolerance", () => {
+    let state = 0x159c0de;
+    const amounts = [
+      9007199254740993n,
+      ...Array.from({ length: 24 }, () => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return BigInt(state) * 100000000n + BigInt(state % 100000000) + 1n;
+      }),
+    ];
+    const decimalOracle = (units: bigint): string => {
+      const whole = units / 10000000n;
+      const fraction = (units % 10000000n).toString().padStart(7, "0").replace(/0+$/, "");
+      return fraction ? `${whole}.${fraction}` : whole.toString();
+    };
+
+    for (const units of amounts) {
+      const destination = Keypair.random().publicKey();
+      const amount = decimalOracle(units);
+      const originalTx = transaction(amount, Networks.TESTNET, destination);
+      const original = originalTx.toXdr();
+      originalTx.sign(signer);
+      expect(verifyWalletSignature(original, originalTx.toXdr(), signer.publicKey())).toBe(
+        originalTx.toXdr(),
+      );
+
+      const alteredTx = transaction(decimalOracle(units + 1n), Networks.TESTNET, destination);
+      alteredTx.sign(signer);
+      expect(() => verifyWalletSignature(original, alteredTx.toXdr(), signer.publicKey())).toThrow(
+        "changed the transaction",
+      );
+    }
   });
   it("rejects a signature made for the public network even when the transaction body matches", () => {
     const tx = transaction();

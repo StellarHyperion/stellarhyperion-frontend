@@ -15,6 +15,8 @@ import {
 } from "../src/contracts/stellar";
 import { USDC, XLM, requireRecoveredUsdc } from "../src/contracts/assets";
 import { type TransferCheckpoint } from "../src/contracts/checkpoint";
+import { exportCheckpoint, importCheckpoint } from "../src/contracts/checkpoint";
+import { reconcileCheckpointImport } from "../src/lib/checkpoint-reconciliation";
 import { TESTNET } from "../src/config/testnet";
 
 const account = Keypair.random();
@@ -149,6 +151,64 @@ afterEach(() => {
 });
 
 describe("Checkpoint recovery from independently encoded transaction evidence", () => {
+  it("checks two divergent signed hashes separately and retains unknown imports without changing pending storage", async () => {
+    const item = fixture("bridge");
+    const candidate = { ...item.checkpoint, txHash: "f".repeat(64) };
+    const storage = { setItem: vi.fn(), removeItem: vi.fn() };
+    vi.stubGlobal("localStorage", storage);
+    mockHistory(history(item));
+    const audit = await reconcileCheckpointImport(exportCheckpoint(candidate), item.checkpoint);
+    expect(audit.comparison).toBe("conflict");
+    expect(audit.unresolved).toBe(true);
+    expect(audit.records.map((record) => record.status)).toEqual(["confirmed", "unknown"]);
+    expect(audit.records.map((record) => importCheckpoint(record.metadata)?.txHash)).toEqual([
+      item.checkpoint.txHash,
+      candidate.txHash,
+    ]);
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(storage.removeItem).not.toHaveBeenCalled();
+  });
+  it("retains both terminal source outcomes in a public audit using their actual independent XDR", async () => {
+    const original = fixture("conversion");
+    const candidate = fixture("bridge", false);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          Response.json(
+            url === TESTNET.horizonUrl
+              ? { network_passphrase: TESTNET.networkPassphrase }
+              : url.endsWith(original.checkpoint.txHash)
+                ? history(original)
+                : history(candidate, false),
+          ),
+        ),
+      ),
+    );
+    const audit = await reconcileCheckpointImport(
+      exportCheckpoint(candidate.checkpoint),
+      original.checkpoint,
+    );
+    expect(audit.unresolved).toBe(false);
+    expect(audit.records.map((record) => record.status)).toEqual(["confirmed", "failed"]);
+    expect(audit.checkedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+  it("rejects imported network/deployment metadata before any RPC or Horizon evidence can be accepted", async () => {
+    const item = fixture("bridge");
+    const fetcher = mockHistory(history(item));
+    for (const candidate of [
+      { ...item.checkpoint, networkPassphrase: "other" },
+      { ...item.checkpoint, deploymentCommit: "f".repeat(40) },
+    ]) {
+      await expect(
+        reconcileCheckpointImport(exportCheckpoint(candidate), item.checkpoint),
+      ).rejects.toThrow("another network");
+      await expect(resolveCheckpointTransaction(candidate)).resolves.toMatchObject({
+        status: "unknown",
+      });
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   for (const stage of ["conversion", "bridge"] as const) {
     for (const successful of [true, false]) {
       it(`recovers expired ${stage} history as ${successful ? "confirmed" : "failed"}`, async () => {

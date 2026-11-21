@@ -256,6 +256,23 @@ describe("Direct Stellar wallet adapters", () => {
     });
     await expect(walletAddress("freighter")).rejects.toThrow("Request declined");
   });
+  it.each([
+    ["albedo", () => api.albedo.tx.mockRejectedValue(new Error("popup closed"))],
+    ["xbull", () => api.xbull.sign.mockRejectedValue(new Error("popup closed"))],
+  ] as const)("does not retain a %s approval after the popup closes", async (id, reject) => {
+    reject();
+    const first = envelope();
+    await expect(walletSign(id, first.original, signer.publicKey())).rejects.toThrow(
+      "popup closed",
+    );
+
+    const retry = envelope();
+    if (id === "albedo") api.albedo.tx.mockResolvedValue({ signed_envelope_xdr: retry.signed });
+    else api.xbull.sign.mockResolvedValue(retry.signed);
+    await expect(walletSign(id, retry.original, signer.publicKey())).resolves.toEqual({
+      signedTxXdr: retry.signed,
+    });
+  });
   it("rejects a Freighter network switch before requesting a signature", async () => {
     api.freighter.getNetworkDetails.mockResolvedValue({
       networkPassphrase: "Public Global Stellar Network ; September 2015",

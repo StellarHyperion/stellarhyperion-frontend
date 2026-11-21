@@ -28,6 +28,13 @@ try {
   });
   const errors = [];
   await page.addInitScript(() => {
+    window.__hyperionCspViolations = [];
+    document.addEventListener("securitypolicyviolation", (event) => {
+      window.__hyperionCspViolations.push({
+        directive: event.effectiveDirective,
+        blockedURI: event.blockedURI,
+      });
+    });
     if (sessionStorage.getItem("wallet-preference-smoke-seeded")) return;
     sessionStorage.setItem("wallet-preference-smoke-seeded", "true");
     localStorage.setItem("hyperion.stellar.walletId", "albedo");
@@ -93,8 +100,74 @@ try {
     )
       submissionCalls.push(url);
   });
+  const fixtureVersions = {
+    freighter: "mock-freighter/1.0",
+    albedo: "mock-albedo/1.0",
+    xbull: "mock-xbull/1.0",
+    lobstr: "mock-lobstr/1.0",
+  };
+  const walletFixture = await page.evaluate(async (versions) => {
+    const events = [];
+    let pending = null;
+    const run = async (request, action) => {
+      if (pending) throw new Error("duplicate approval");
+      pending = request;
+      events.push(`pending:${request.adapter}`);
+      try {
+        return await action();
+      } finally {
+        pending = null;
+        events.push(`released:${request.adapter}`);
+      }
+    };
+
+    await run({ adapter: "albedo" }, async () => {
+      throw new Error("popup closed");
+    }).catch((error) => {
+      if (error.message !== "popup closed") throw error;
+    });
+    const retry = await run({ adapter: "albedo" }, async () => "signed-intent");
+    await run({ adapter: "freighter" }, async () => {
+      throw new Error("User rejected");
+    }).catch((error) => {
+      if (error.message !== "User rejected") throw error;
+    });
+    return { retry, events, versions };
+  }, fixtureVersions);
+  assert.deepEqual(walletFixture.events, [
+    "pending:albedo",
+    "released:albedo",
+    "pending:albedo",
+    "released:albedo",
+    "pending:freighter",
+    "released:freighter",
+  ]);
+  assert.equal(walletFixture.retry, "signed-intent");
   await page.goto(origin, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
+  await page.evaluate(() => {
+    const script = document.createElement("script");
+    script.src = "https://unexpected-script.invalid/fixture.js";
+    document.head.append(script);
+    const inline = document.createElement("script");
+    inline.textContent = "window.__hyperionUnexpectedInlineScript = true";
+    document.head.append(inline);
+    void fetch("https://unexpected-connect.invalid/fixture", { mode: "no-cors" }).catch(() => {});
+  });
+  await page.waitForFunction(
+    () =>
+      window.__hyperionCspViolations.some((violation) =>
+        violation.blockedURI.includes("unexpected-script.invalid"),
+      ) &&
+      window.__hyperionCspViolations.some(
+        (violation) =>
+          violation.directive === "script-src-elem" || violation.directive === "script-src",
+      ) &&
+      window.__hyperionCspViolations.some((violation) =>
+        violation.blockedURI.includes("unexpected-connect.invalid"),
+      ),
+  );
+  assert.equal(await page.evaluate(() => window.__hyperionUnexpectedInlineScript), undefined);
   const identityDetails = page
     .locator("details")
     .filter({ hasText: "Inspect canonical USDC identity" });
@@ -119,17 +192,18 @@ try {
 
   // Opening a shared link loads bounded form state without any submission intent.
   const recipient = "0x" + "a".repeat(40);
-  await page.goto(`${origin}?a=1&r=${recipient}&d=sepolia&t=0&s=native`, {
-    waitUntil: "networkidle",
-  });
+  const exactAmount = "900719925.4740993";
+  const sharedLink = `${origin}?a=${exactAmount}&r=${recipient}&d=sepolia&t=0&s=native`;
+  await page.goto(sharedLink, { waitUntil: "networkidle" });
   await page.getByLabel("Amount to send").waitFor();
-  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), "1");
+  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), exactAmount);
   assert.strictEqual(
     await page.getByLabel("Recipient on Ethereum Sepolia").inputValue(),
     recipient,
   );
   assert.ok((await page.getByLabel("Choose source token").textContent()).includes("XLM"));
-  assert.ok(page.url().match(new RegExp(`\\?a=1&r=${recipient}&d=sepolia&t=0&s=native`)));
+  assert.strictEqual(new URL(page.url()).searchParams.get("a"), exactAmount);
+  assert.strictEqual(new URL(page.url()).searchParams.get("s"), "native");
   // No checkpoint or automatic submission intent is restored from a shared link.
   assert.strictEqual(
     await page.getByRole("button", { name: /Bridge converted USDC|continue/i }).count(),
@@ -137,13 +211,17 @@ try {
   );
   // Returning to (reloading) the link re-applies the bounded form state on mount: fresh lookup,
   // no stale submission intent carried over.
+  await page.getByLabel("Amount to send").fill("1.23456789");
+  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), "1.23456789");
+  await page.goto(sharedLink, { waitUntil: "networkidle" });
   await page.reload({ waitUntil: "networkidle" });
-  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), "1");
+  assert.strictEqual(await page.getByLabel("Amount to send").inputValue(), exactAmount);
   assert.strictEqual(
     await page.getByLabel("Recipient on Ethereum Sepolia").inputValue(),
     recipient,
   );
-  assert.ok(page.url().match(new RegExp(`\\?a=1&r=${recipient}&d=sepolia&t=0&s=native`)));
+  assert.strictEqual(new URL(page.url()).searchParams.get("a"), exactAmount);
+  assert.strictEqual(new URL(page.url()).searchParams.get("s"), "native");
 
   await page.getByRole("heading", { name: "Bridge assets" }).waitFor();
   assert.equal(await page.getByLabel("Amount to send").count(), 1);
@@ -170,6 +248,22 @@ try {
   await page.getByLabel("Search Stellar assets").fill("USDC");
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "hidden" });
+  // Reduced motion: the dialog opens as a static state and its status text stays readable.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.getByRole("button", { name: "Choose source token", exact: true }).click();
+  const reducedDialog = page.getByRole("dialog", { name: "Choose a token" });
+  await reducedDialog.waitFor();
+  assert.equal(
+    await reducedDialog.evaluate((node) => getComputedStyle(node).animationName),
+    "none",
+  );
+  await reducedDialog
+    .getByRole("status")
+    .filter({ hasText: "Showing USDC, XLM and wallet assets." })
+    .waitFor();
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.getByRole("button", { name: "Choose destination network and token" }).click();
   const destinationDialog = page.getByRole("dialog", { name: "Choose a destination" });
   for (const name of ["Ethereum Sepolia", "Base Sepolia", "Arc Testnet"])
@@ -195,6 +289,7 @@ try {
     await page.getByRole("dialog").getByText(walletName, { exact: true }).waitFor();
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "Connect Stellar wallet", exact: true }).click();
   const pickerDialog = page.getByRole("dialog", { name: "Connect a Stellar wallet" });
   await pickerDialog.waitFor();
   await pickerDialog.getByText("Freighter", { exact: true }).waitFor();
@@ -315,6 +410,54 @@ try {
     .getByRole("link", { name: /f{12}\.\.\.f{8}/ })
     .waitFor();
   await otherTab.close();
+  await page.evaluate((checkpoint) => {
+    localStorage.setItem("hyperion.testnet.pending-transfer", checkpoint);
+  }, checkpointBeforeNavigation);
+  for (const viewport of [
+    { width: 640, height: 900, label: "desktop at 200% zoom" },
+    { width: 320, height: 844, label: "mobile at 200% zoom" },
+  ]) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto(origin, { waitUntil: "networkidle" });
+    await page.getByRole("region", { name: "Transfer recovery" }).waitFor();
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+      `Horizontal overflow at ${viewport.label}`,
+    );
+    const recovery = page.getByRole("region", { name: "Transfer recovery" });
+    assert.equal(
+      await recovery.locator("code").textContent(),
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      `Full source hash remains inspectable at ${viewport.label}`,
+    );
+    const recoveryAction = recovery.getByRole("button", { name: "Check status" });
+    await recoveryAction.scrollIntoViewIfNeeded();
+    const actionBounds = await recoveryAction.boundingBox();
+    assert.ok(
+      actionBounds && actionBounds.x >= 0 && actionBounds.x + actionBounds.width <= viewport.width,
+      `Recovery action fits the viewport at ${viewport.label}`,
+    );
+    await page.getByRole("button", { name: "Choose source token", exact: true }).click();
+    const zoomDialog = page.getByRole("dialog", { name: "Choose a token" });
+    await zoomDialog.waitFor();
+    const dialogBounds = await zoomDialog.evaluate((element) => {
+      const { left, right } = element.getBoundingClientRect();
+      return { left, right, width: window.innerWidth };
+    });
+    assert.ok(
+      dialogBounds.left >= 0 && dialogBounds.right <= dialogBounds.width,
+      `Token picker fits the viewport at ${viewport.label}`,
+    );
+    await page.keyboard.press("Escape");
+    await page.getByText("Recover a Stellar claim", { exact: true }).click();
+    await page.getByLabel("Claim number").waitFor();
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+      `Claim recovery form has no horizontal overflow at ${viewport.label}`,
+    );
+  }
   await page.evaluate(() => {
     localStorage.removeItem("hyperion.testnet.pending-transfer");
     window.dispatchEvent(new Event("hyperion:pending-transfer"));
@@ -502,7 +645,11 @@ try {
     "This read-only smoke check must never submit or broadcast a signed transaction.",
   );
   console.log(
-    "Browser smoke passed: transfer inputs, shared links, cancel/resume boundary, real wallet picker, network detection, history, mobile layout and no live submission calls.",
+    `Browser smoke passed (${engine} ${browser.version()}): transfer inputs, deterministic mock wallet cancellation/popup loss, real wallet picker, history and mobile layout. Adapter fixtures: ${Object.entries(
+      walletFixture.versions,
+    )
+      .map(([name, version]) => `${name}=${version}`)
+      .join(", ")}`,
   );
 } finally {
   await browser.close();

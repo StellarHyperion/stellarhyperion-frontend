@@ -7,6 +7,7 @@ import { readTransaction, errorMessage, type TransactionResult } from "../../../
 import { STELLAR_DEPLOYMENT } from "../../../config/testnet";
 import { formatTokenAmount, formatTokenIdentity, getExplorerUrl } from "../../../lib/format";
 import { hasVerifiedDestinationEvidence, getEvidenceAwareStage } from "../../../lib/evidence";
+import { deliveryProofState } from "../../../lib/proof-state";
 import { EvidenceTimeline } from "../../../components/transfers/EvidenceTimeline";
 import { useVisibilityPoll } from "../../../lib/visibility-poll";
 import { ActivityRequestGuard } from "../../../lib/activity-request";
@@ -145,6 +146,7 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
         <section className={styles.legPanel} aria-label="Indexed transfer status">
           <h2>{getRouteName(record.route)}</h2>
           <p role="status">Status: {getEvidenceAwareStage(record)}</p>
+          <p role="status">Delivery proof: {deliveryProofState(record, origin)}</p>
           <EvidenceTimeline transfer={record} />
           <p>
             Sent from {record.origin.chain} to {record.destination.chain}
@@ -174,6 +176,41 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
             </p>
           )}
           <p style={{ overflowWrap: "anywhere" }}>Recipient: {record.destination.recipient}</p>
+          {record.proofRevision && record.proofRevision.status !== "valid" && (
+            <section aria-label="Proof revision notice">
+              <p role="status">
+                Destination evidence was {record.proofRevision.status}; this is a proof revision,
+                not a second source transfer.
+              </p>
+              {record.proofRevision.previousTxHash && (
+                <a
+                  href={getExplorerUrl(
+                    record.destination.chain,
+                    "tx",
+                    record.proofRevision.previousTxHash,
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Inspect original destination reference
+                </a>
+              )}
+              {record.proofRevision.replacementTxHash && (
+                <a
+                  href={getExplorerUrl(
+                    record.destination.chain,
+                    "tx",
+                    record.proofRevision.replacementTxHash,
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Inspect replacement destination reference
+                </a>
+              )}
+              {record.proofRevision.reason && <p>{record.proofRevision.reason}</p>}
+            </section>
+          )}
           {record.rail?.railStatus && <p>Rail reports: {record.rail.railStatus}</p>}
           {record.destination.txHash && (
             <a
@@ -191,8 +228,8 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
               </p>
               <p>
                 {record.claim.settled
-                  ? "Settled. Funds were paid to the recorded recipient."
-                  : `Funds are parked on the ${record.destination.chain} router for the recorded recipient.`}
+                  ? "The indexer reports this claim as settled. The claim record is not re-read on chain here."
+                  : `The indexer reports a claim on the ${record.destination.chain} router for the recorded recipient. Verify its current on-chain state before relying on this status.`}
               </p>
               {!record.claim.settled &&
                 (indexerFresh &&
