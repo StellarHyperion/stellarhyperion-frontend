@@ -286,12 +286,18 @@ export interface LaneState {
   adapter: string | null;
   destinationToken?: string;
 }
+function optionalProvenance(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return value;
+}
 export interface PendingClaim {
   id: bigint;
   recipient: string;
   token: string;
   amount: bigint;
   settled: boolean;
+  sourceTxHash: string | null;
+  sourceTransferId: string | null;
   eligibility: ClaimPayoutEligibility;
   custody: ClaimCustody;
   deployment: RouterDeploymentIdentity;
@@ -2264,6 +2270,8 @@ export async function getClaim(id: bigint): Promise<PendingClaim> {
     settled: result.settled,
     eligibility,
     custody,
+    sourceTxHash: optionalProvenance(result.source_tx_hash ?? result.origin_tx_hash),
+    sourceTransferId: optionalProvenance(result.source_transfer_id ?? result.transfer_id),
     deployment,
   };
 }

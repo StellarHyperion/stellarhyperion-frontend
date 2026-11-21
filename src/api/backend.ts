@@ -172,6 +172,54 @@ export interface ClaimsQuery {
   readonly offset?: string;
 }
 
+/** Normalize the current response and the original `data`-array response.
+ * Missing optional evidence stays null; it is never inferred from another field.
+ */
+export function normalizeTransfersResponse(value: unknown): TransfersResponse {
+  if (!value || typeof value !== "object")
+    throw new Error("The transfer indexer returned invalid data.");
+  const input = value as Record<string, unknown>;
+  const rows = Array.isArray(input.transfers) ? input.transfers : input.data;
+  if (!Array.isArray(rows)) throw new Error("The transfer indexer returned invalid data.");
+  const transfers = rows.map((row) => {
+    if (!row || typeof row !== "object")
+      throw new Error("The transfer indexer returned an invalid record.");
+    const transfer = row as Record<string, unknown>;
+    const origin = transfer.origin;
+    const destination = transfer.destination;
+    if (!origin || typeof origin !== "object" || !destination || typeof destination !== "object")
+      throw new Error("The transfer indexer returned an incomplete record.");
+    return {
+      ...transfer,
+      origin: {
+        ...origin,
+        symbol: (origin as Record<string, unknown>).symbol ?? null,
+        decimals: (origin as Record<string, unknown>).decimals ?? null,
+      },
+      destination: {
+        ...destination,
+        token: (destination as Record<string, unknown>).token ?? null,
+        amount: (destination as Record<string, unknown>).amount ?? null,
+        symbol: (destination as Record<string, unknown>).symbol ?? null,
+        decimals: (destination as Record<string, unknown>).decimals ?? null,
+        block: (destination as Record<string, unknown>).block ?? null,
+        txHash: (destination as Record<string, unknown>).txHash ?? null,
+        deliveredAt: (destination as Record<string, unknown>).deliveredAt ?? null,
+      },
+      rail: transfer.rail ?? null,
+      claim: transfer.claim ?? null,
+    } as FormattedTransfer;
+  });
+  return {
+    ...input,
+    transfers,
+    limit: typeof input.limit === "number" ? input.limit : transfers.length,
+    offset: typeof input.offset === "number" ? input.offset : 0,
+    count: typeof input.count === "number" ? input.count : transfers.length,
+    ...(input.coverage ? { coverage: input.coverage } : {}),
+  };
+}
+
 export interface TransfersQuery {
   readonly originChain?: string;
   readonly destinationChain?: string;
@@ -305,7 +353,7 @@ export async function fetchTransfers(
   query?: TransfersQuery,
   signal?: AbortSignal | TransferRequestOptions,
 ): Promise<TransfersResponse> {
-  return await request<TransfersResponse>(`/v1/transfers${params(query)}`, false, signal);
+  return normalizeTransfersResponse(await request<unknown>(`/v1/transfers${params(query)}`, false, signal));
 }
 export async function fetchClaims(query?: ClaimsQuery): Promise<ClaimsResponse> {
   return await request<ClaimsResponse>(`/v1/claims${params(query)}`);

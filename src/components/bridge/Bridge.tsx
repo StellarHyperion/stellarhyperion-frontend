@@ -955,6 +955,7 @@ function PendingTransferCard({
         {checkpoint.txHash.slice(0, 12)}...{checkpoint.txHash.slice(-8)}{" "}
         <ArrowUpRight size={14} aria-hidden="true" />
       </a>
+      <p>Stage: {checkpoint.stage}</p>
       <div className={styles.transactionIdentity}>
         <span>Source transaction on Stellar Testnet</span>
         <div className={styles.transactionIdentityValue}>
@@ -3111,6 +3112,10 @@ export function ClaimRecovery() {
           )}
           {claims.length > 0 && (
             <>
+              <p className={styles.reviewNote}>
+                Verified from the current on-chain claim. The settler pays the recorded recipient,
+                never the wallet that performs recovery.
+              </p>
               <ul>
                 {claims.map((claim) => (
                   <li key={claim.id.toString()}>
@@ -3128,6 +3133,14 @@ export function ClaimRecovery() {
                     <p>Recorded entitlement does not establish the currently withdrawable amount.</p>
                     <p>Router token custody: {claim.custody.status === "verified" && claim.custody.routerBalance !== null ? `${claim.custody.routerBalance} base units` : "unknown"}.</p>
                     <p>{claim.custody.reason}</p>
+                    <p>
+                      Source transfer:{" "}
+                      {claim.sourceTxHash ?? "unknown (not supplied by the contract)"}
+                    </p>
+                    <p>
+                      Source association:{" "}
+                      {claim.sourceTransferId ?? "unknown (not supplied by the contract)"}
+                    </p>
                     <p className={styles.address}>
                       Verified router:{" "}
                       <CopyableAddress value={claim.deployment.router} label="verified router" />{" "}

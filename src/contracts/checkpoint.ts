@@ -449,9 +449,12 @@ export function saveCheckpoint(
   announceCheckpoint();
   return next;
 }
-export function useTransferCheckpoint(): TransferCheckpoint | null {
+export function useTransferCheckpoint(account?: string): TransferCheckpoint | null {
   const raw = useSyncExternalStore(subscribe, snapshot, () => null);
-  return useMemo(() => parseCheckpoint(raw), [raw]);
+  return useMemo(() => {
+    const value = parseCheckpoint(raw);
+    return value && (!account || value.account === account) ? value : null;
+  }, [raw, account]);
 }
 
 export {
