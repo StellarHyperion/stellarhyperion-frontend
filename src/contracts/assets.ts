@@ -10,9 +10,10 @@ import {
   type DestinationKey,
 } from "../config/testnet";
 import {
-  quoteTransfer,
+  compareTransferRoutes,
   submitClassicOperations,
   type LiveQuote,
+  type RouteComparison,
   type SubmissionReconciliation,
   type TransactionPhase,
   type TransactionResult,
@@ -575,6 +576,7 @@ export interface TradeQuote {
   sourceAmount: bigint;
   bridge: LiveQuote;
   conversion: Conversion | null;
+  routes: RouteComparison[];
 }
 
 export const MAX_CONVERSION_PATHS = 50;
@@ -833,8 +835,10 @@ export async function quoteTrade(
   if (amount <= 0n || amount > (1n << 63n) - 1n)
     throw new Error("Enter a positive amount within Stellar's asset limit.");
   const conversion = isCanonicalUsdc(source) ? null : await quoteConversion(source, amount);
-  const bridge = await quoteTransfer(destination, conversion?.usdcAmount ?? amount, route);
-  return { source, sourceAmount: amount, bridge, conversion };
+  const routes = await compareTransferRoutes(destination, conversion?.usdcAmount ?? amount);
+  const selected = routes.find((candidate) => candidate.route === route);
+  if (!selected?.quote) throw new Error(selected?.error ?? "This bridge lane is unavailable.");
+  return { source, sourceAmount: amount, bridge: selected.quote, conversion, routes };
 }
 
 export function conversionOperations(

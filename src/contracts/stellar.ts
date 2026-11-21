@@ -228,6 +228,11 @@ export interface LiveQuote {
   provider?: string;
   readonly feeObservation?: FeeObservation;
 }
+export interface RouteComparison {
+  route: BridgeRoute;
+  quote: LiveQuote | null;
+  error: string | null;
+}
 export type QuoteFreshness = "current" | "stale" | "unknown";
 const QUOTE_MAX_AGE_MS = 30_000;
 export function quoteFreshness(
@@ -1114,6 +1119,22 @@ export async function quoteTransfer(
   };
   quoteBreakdown(result);
   return result;
+}
+
+/** Compare only live, independently validated lanes. A failed lane is retained as unavailable. */
+export async function compareTransferRoutes(
+  destinationKey: DestinationKey,
+  amount: bigint,
+): Promise<RouteComparison[]> {
+  return Promise.all(
+    ([0, 1] as const).map(async (route): Promise<RouteComparison> => {
+      try {
+        return { route, quote: await quoteTransfer(destinationKey, amount, route), error: null };
+      } catch (error) {
+        return { route, quote: null, error: errorMessage(error) };
+      }
+    }),
+  );
 }
 
 export async function readBalance(account: string): Promise<bigint> {
