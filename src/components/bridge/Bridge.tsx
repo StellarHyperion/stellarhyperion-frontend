@@ -127,6 +127,7 @@ import {
 } from "../../lib/runtime-capabilities-context";
 
 const provider = (route: number) => (route === 0 ? "Circle CCTP" : "Axelar ITS");
+// Asset discovery pages are merged by issuer/code identity; selection is keyed by that identity so it survives later page arrivals.
 const receiveSymbol = (route: number) => (route === 0 ? "USDC" : "USDC (ITS)");
 
 function makeReviewedIntent(
