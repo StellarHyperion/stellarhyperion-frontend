@@ -1,7 +1,7 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
 import { getClaimSettlementCheckpoint } from "./claim-checkpoint";
-import { TESTNET, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
+import { TESTNET, archivedRouterFor, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
 import { stellarAsset, type SourceAsset } from "./assets";
 
 export type CheckpointSource = Pick<SourceAsset, "id" | "code" | "issuer">;
@@ -150,7 +150,7 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       typeof value.recipient !== "string" ||
       typeof value.bridgeAmount !== "string" ||
       typeof value.txHash !== "string" ||
-      value.router !== TESTNET.router ||
+      (value.router !== TESTNET.router && !archivedRouterFor(value.router)) ||
       (value.token !== undefined && value.token !== TESTNET.token) ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
       !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||

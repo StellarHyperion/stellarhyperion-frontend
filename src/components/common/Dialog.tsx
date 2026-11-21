@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import styles from "../bridge/AssetPicker.module.css";
 
@@ -17,6 +17,7 @@ export function Dialog({
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const dialog = ref.current;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -41,7 +42,7 @@ export function Dialog({
     <dialog
       ref={ref}
       className={styles.dialog}
-      aria-label={title}
+      aria-labelledby={titleId}
       aria-modal="true"
       onCancel={(event) => {
         event.preventDefault();
@@ -94,9 +95,7 @@ export function Dialog({
     >
       <div className={styles.content}>
         <div className={styles.heading}>
-          <h2 ref={heading} tabIndex={-1}>
-            {title}
-          </h2>
+          <h2 ref={heading} id={titleId} tabIndex={-1}>{title}</h2>
           <button type="button" aria-label={`Close ${title}`} onClick={onClose}>
             <X size={19} />
           </button>

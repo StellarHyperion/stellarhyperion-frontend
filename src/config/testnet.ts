@@ -313,6 +313,33 @@ export function cachedPublicAssetMetadata(query: string, now = Date.now()): Publ
   }
   return matches;
 }
+export interface ArchivedRouterDeployment {
+  chain: "stellar-testnet";
+  router: string;
+  networkPassphrase: string;
+  wasmHash: string;
+  commit: string;
+  deployedLedger: number;
+  successor: {
+    router: string;
+    wasmHash: string;
+    commit: string;
+    deployedLedger: number;
+  };
+}
+export const ARCHIVED_STELLAR_DEPLOYMENTS: readonly ArchivedRouterDeployment[] =
+  stellar.archivedDeployments.map((archived) => ({
+    chain: "stellar-testnet",
+    router: archived.router,
+    networkPassphrase: stellar.networkPassphrase,
+    wasmHash: archived.wasmHash,
+    commit: archived.commit,
+    deployedLedger: archived.deployedAt.ledger,
+    successor: archived.successor,
+  }));
+export function archivedRouterFor(router: string): ArchivedRouterDeployment | null {
+  return ARCHIVED_STELLAR_DEPLOYMENTS.find((deployment) => deployment.router === router) ?? null;
+}
 export type BridgeRoute = 0 | 1;
 const cctpDestinations = new Set(
   stellar.activation.cctp.status === "active" &&

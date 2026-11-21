@@ -20,6 +20,7 @@ import { fetchClaims } from "../../api";
 import { useVisibilityPoll } from "../../lib/visibility-poll";
 import {
   TESTNET,
+  archivedRouterFor,
   destinationFor,
   destinationDecimals,
   deploymentIdentityMismatch,
@@ -619,6 +620,8 @@ function PendingTransferCard({
   const message = useMessages();
   const translations = useTranslations();
   const runtime = useRuntimeCapabilities();
+  const archivedDeployment = archivedRouterFor(checkpoint.router);
+  const activeDeployment = checkpoint.router === TESTNET.router && !archivedDeployment;
   const sameAccount = wallet.address === checkpoint.account;
   const actionRef = useRef<HTMLButtonElement>(null);
   const recoveryMessageRef = useRef<HTMLParagraphElement>(null);
@@ -692,7 +695,7 @@ function PendingTransferCard({
         setError(result.message);
         return;
       }
-      if (result.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount) {
+      if (result.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount && activeDeployment) {
         if (!runtimeSigningAvailable(runtime.capabilities, checkpoint.route))
           throw new Error(message("staticFeeUnavailable"));
         conversionConfirmed = true;
@@ -892,6 +895,7 @@ function PendingTransferCard({
       <p id="pending-recovery-message" ref={recoveryMessageRef} role="status" tabIndex={-1}>
         {recoveryMessage(checkpoint.stage, visibleCurrent?.status ?? null, false, translations)}
       </p>
+      {archivedDeployment && <p role="status">This saved transaction belongs to an archived router revision. Check its original Stellar Testnet hash. Confirmation does not prove destination delivery; continuation through the successor router is blocked.</p>}
       {checkpoint.stage === "conversion" && checkpoint.source && (
         <p className={styles.address}>
           Original source asset: {checkpoint.source.code}
@@ -979,7 +983,7 @@ function PendingTransferCard({
               : message("recoveryCheck")}
         </button>
       )}
-      {review && checked?.owner === recoveryOwner && (
+      {review && activeDeployment && checked?.owner === recoveryOwner && (
         <ReviewDialog
           onClose={() => {
             if (!checking) {
@@ -3046,6 +3050,9 @@ export function ClaimRecovery() {
                         : `${claim.amount} base units of ${claim.token}`}
                     </p>
                     <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
+                    <p>Recorded entitlement does not establish the currently withdrawable amount.</p>
+                    <p>Router token custody: {claim.custody.status === "verified" && claim.custody.routerBalance !== null ? `${claim.custody.routerBalance} base units` : "unknown"}.</p>
+                    <p>{claim.custody.reason}</p>
                     <p className={styles.address}>
                       Verified router:{" "}
                       <CopyableAddress value={claim.deployment.router} label="verified router" />{" "}

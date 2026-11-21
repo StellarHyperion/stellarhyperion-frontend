@@ -545,6 +545,12 @@ a:hover {
   border-radius: var(--radius-control);
 }
 
+@media (forced-colors: active) {
+  :root {
+    --focus-color: Highlight;
+  }
+}
+
 /*
  * The skip link. Off screen until focused, then parked at the top left as a real control. A
  * keyboard user should not have to walk the header to reach the switchyard.

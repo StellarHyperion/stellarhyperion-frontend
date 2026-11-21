@@ -191,8 +191,8 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
               </p>
               <p>
                 {record.claim.settled
-                  ? "Settled. Funds were paid to the recorded recipient."
-                  : `Funds are parked on the ${record.destination.chain} router for the recorded recipient.`}
+                  ? "The indexer reports this claim as settled. The claim record is not re-read on chain here."
+                  : `The indexer reports a claim on the ${record.destination.chain} router for the recorded recipient. Verify its current on-chain state before relying on this status.`}
               </p>
               {!record.claim.settled &&
                 (indexerFresh &&

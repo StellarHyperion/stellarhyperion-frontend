@@ -26,6 +26,7 @@ import {
   TESTNET,
   STELLAR_DEPLOYMENT,
   CIRCLE_STELLAR,
+  archivedRouterFor,
   destinationFor,
   destinationDecimals,
   supportedLanes,
@@ -213,7 +214,13 @@ export interface PendingClaim {
   amount: bigint;
   settled: boolean;
   eligibility: ClaimPayoutEligibility;
+  custody: ClaimCustody;
   deployment: RouterDeploymentIdentity;
+}
+export interface ClaimCustody {
+  readonly status: "verified" | "unknown";
+  readonly routerBalance: bigint | null;
+  readonly reason: string | null;
 }
 export interface RouterDeploymentIdentity {
   chain: string;
@@ -485,6 +492,38 @@ export function describeBindingLimit(
     alternateLanes,
   };
 }
+async function claimRouterCustody(token: string): Promise<ClaimCustody> {
+  let methods: Awaited<ReturnType<typeof contractMethods>>;
+  try {
+    methods = await contractMethods(token);
+  } catch (error) {
+    return {
+      status: "unknown",
+      routerBalance: null,
+      reason: `The claim token's on-chain balance interface could not be verified: ${errorMessage(error)}`,
+    };
+  }
+  if (!methods.some((method) => method.name === "balance"))
+    return {
+      status: "unknown",
+      routerBalance: null,
+      reason: "The claim token does not expose a compatible on-chain balance view.",
+    };
+  try {
+    const result = await view(token, "balance", [new Address(TESTNET.router).toScVal()]);
+    return {
+      status: "verified",
+      routerBalance: parseOnChainInteger(result.value),
+      reason: null,
+    };
+  } catch (error) {
+    return {
+      status: "unknown",
+      routerBalance: null,
+      reason: `The router token balance could not be verified: ${errorMessage(error)}`,
+    };
+  }
+}
 
 function server() {
   return new rpc.Server(TESTNET.rpcUrl, { timeout: 15_000 });
@@ -622,12 +661,19 @@ function object(value: unknown): Record<string, unknown> {
   }
   return value as Record<string, unknown>;
 }
-function integer(value: unknown): bigint {
+export function parseOnChainInteger(value: unknown): bigint {
   if (typeof value !== "bigint" && typeof value !== "number" && typeof value !== "string") {
     throw new Error("The contract returned an invalid amount.");
   }
+  if (
+    (typeof value === "number" && !Number.isSafeInteger(value)) ||
+    (typeof value === "string" && !/^-?\d+$/.test(value))
+  ) {
+    throw new Error("The contract returned an amount that cannot be represented exactly.");
+  }
   return BigInt(value);
 }
+const integer = parseOnChainInteger;
 function address(value: unknown): string {
   if (typeof value !== "string") throw new Error("The contract returned an invalid address.");
   Address.fromString(value);
@@ -1215,7 +1261,7 @@ function inspectCheckpointEnvelope(
 ): "confirmed" | "failed" | null {
   try {
     if (
-      checkpoint.router !== TESTNET.router ||
+      (checkpoint.router !== TESTNET.router && !archivedRouterFor(checkpoint.router)) ||
       envelopeXdr.length > 200_000 ||
       resultXdr.length > 200_000
     )
@@ -1344,7 +1390,7 @@ export async function resolveCheckpointTransaction(
   signal?: AbortSignal,
 ): Promise<CheckpointRecoveryResult> {
   if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
-  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || checkpoint.router !== TESTNET.router)
+  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || (checkpoint.router !== TESTNET.router && !archivedRouterFor(checkpoint.router)))
     return unknownRecovery("The saved checkpoint does not match the configured Stellar Testnet.");
   const lookupSignal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
@@ -1427,6 +1473,16 @@ export async function resolveCheckpointTransaction(
       "Stellar Testnet history could not be checked. The saved checkpoint is unchanged.",
     );
   }
+}
+export async function readCheckpointTransaction(
+  router: string,
+  hash: string,
+): Promise<TransactionResult | null> {
+  if (router !== TESTNET.router && !archivedRouterFor(router))
+    throw new Error(
+      "This checkpoint does not match a known Stellar Testnet deployment. Its status cannot be checked safely.",
+    );
+  return readTransaction(hash);
 }
 
 export interface ReviewSnapshot {
@@ -2091,13 +2147,23 @@ export async function getClaim(id: bigint): Promise<PendingClaim> {
   const result = object(
     (await view(TESTNET.router, "get_claim", [nativeToScVal(id, { type: "u64" })])).value,
   );
+  const claimId = parseOnChainInteger(result.id);
+  if (claimId !== id) throw new Error("The router returned a different claim than requested.");
+  if (typeof result.settled !== "boolean")
+    throw new Error("The router returned an invalid claim settlement status.");
+  const token = address(result.token);
+  const [eligibility, custody] = await Promise.all([
+    claimPayoutEligibility(id, token),
+    claimRouterCustody(token),
+  ]);
   return {
-    id: integer(result.id),
+    id: claimId,
     recipient: address(result.recipient),
-    token: address(result.token),
-    amount: integer(result.amount),
-    settled: result.settled === true,
-    eligibility: await claimPayoutEligibility(id, address(result.token)),
+    token,
+    amount: parseOnChainInteger(result.amount),
+    settled: result.settled,
+    eligibility,
+    custody,
     deployment,
   };
 }

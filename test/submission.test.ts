@@ -15,6 +15,8 @@ import {
 import { formatUnits, sorobanErrorCode, toHex } from "@hyperion/protocol";
 import {
   QuoteChangedError,
+  readCheckpointTransaction,
+  readTransaction,
   createReviewedIntentSnapshot,
   reviewedBridgeMatches,
   reviewedIntentMatches,
@@ -38,7 +40,7 @@ import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint, saveCheckpoint } from "../src/contracts/checkpoint";
 
-import { DESTINATIONS, STELLAR_DEPLOYMENT, TESTNET, supportedLanes } from "../src/config/testnet";
+import { archivedRouterFor, DESTINATIONS, STELLAR_DEPLOYMENT, TESTNET, supportedLanes } from "../src/config/testnet";
 import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
 import {
   planMaxUsdcAmount,
@@ -67,15 +69,17 @@ function setup() {
   vi.spyOn(rpc.Server.prototype, "getAccount").mockImplementation(() =>
     Promise.resolve(new Account(key.publicKey(), "0")),
   );
-  vi.spyOn(rpc.Server.prototype, "getContractInstance").mockResolvedValue({
-    executable: {
-      type: "contractExecutableWasm",
-      wasmHash: Uint8Array.from({ length: 32 }, (_, index) =>
-        parseInt(STELLAR_DEPLOYMENT.wasmHash.slice(index * 2, index * 2 + 2), 16),
-      ),
-    },
-    storage: null,
-  } as never);
+  const getContractInstance = vi
+    .spyOn(rpc.Server.prototype, "getContractInstance")
+    .mockResolvedValue({
+      executable: {
+        type: "contractExecutableWasm",
+        wasmHash: Uint8Array.from({ length: 32 }, (_, index) =>
+          parseInt(STELLAR_DEPLOYMENT.wasmHash.slice(index * 2, index * 2 + 2), 16),
+        ),
+      },
+      storage: null,
+    } as never);
   const simulation = vi.spyOn(rpc.Server.prototype, "simulateTransaction");
   simulation.mockResolvedValueOnce(
     success(
@@ -90,7 +94,7 @@ function setup() {
   );
   simulation.mockResolvedValue(success(nativeToScVal(1n)));
   const send = vi.spyOn(rpc.Server.prototype, "sendTransaction");
-  return { simulation, send };
+  return { simulation, send, getContractInstance };
 }
 // Unlike setup(), the claim read is answered the same way on every call. Each independent
 // submitSettleClaim call reads the claim before submitting its own operation, so a test that
@@ -802,6 +806,29 @@ describe("Signed Stellar submission failure boundaries", () => {
       failure: { stage: "broadcast", txHash: hash },
     });
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("never broadcasts again while checking an ambiguous signed transaction", async () => {
+    const { send } = setup();
+    send.mockRejectedValue(new Error("timeout"));
+    const first = await submitSettleClaim(key.publicKey(), 1n, sign);
+    expect(first.status).toBe("pending");
+    vi.spyOn(rpc.Server.prototype, "getTransaction").mockResolvedValue({
+      status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+    } as never);
+    expect(await readTransaction(first.txHash)).toMatchObject({ status: "pending" });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it("checks an archived transaction hash without reading the successor router", async () => {
+    const { send, getContractInstance } = setup();
+    const archived = archivedRouterFor("CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF");
+    if (!archived) throw new Error("Expected archived testnet router metadata.");
+    vi.spyOn(rpc.Server.prototype, "getTransaction").mockResolvedValue({
+      status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+    } as never);
+    const result = await readCheckpointTransaction(archived.router, "c".repeat(64));
+    expect(result).toMatchObject({ status: "pending", txHash: "c".repeat(64) });
+    expect(getContractInstance).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
   it("reports a known network rejection instead of source confirmation", async () => {
     const { send } = setup();
