@@ -21,6 +21,7 @@ import { useVisibilityPoll } from "../../lib/visibility-poll";
 import {
   TESTNET,
   archivedRouterFor,
+  TESTNET_CONFIGURATION_FINGERPRINT,
   destinationFor,
   destinationDecimals,
   deploymentIdentityMismatch,
@@ -70,6 +71,7 @@ import {
   conversionExecutionIntent,
   conversionRoute,
   quoteTrade,
+  conversionPathIssue,
   spendableBalance,
   requireRecoveredUsdc,
   submitConversion,
@@ -1241,7 +1243,7 @@ export function Bridge() {
   );
   const lane = laneState?.key === laneKey ? laneState.value : null;
   const laneError = laneState?.key === laneKey ? laneState.error : null;
-  const quoteKey = `${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
+  const quoteKey = `${TESTNET_CONFIGURATION_FINGERPRINT}:${laneKey}:${source.id}:${amount}:${recipient}:${quoteVersion}`;
   const quote =
     quoted?.key === quoteKey && lane?.available && !laneRefreshing ? quoted.value : null;
   const quoteError = quoted?.key === quoteKey ? quoted.error : null;
@@ -2337,6 +2339,7 @@ export function Bridge() {
                 quoteError ??
                 laneError ??
                 inputError}
+              {quoteError && conversionPathIssue(new Error(quoteError)) === "temporary" && " Refresh and try again."}
             </p>
           )
         )}

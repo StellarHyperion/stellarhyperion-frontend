@@ -155,6 +155,13 @@ export const TESTNET = {
     "https://horizon-testnet.stellar.org",
   ),
 } as const;
+export const TESTNET_CONFIGURATION_FINGERPRINT = [
+  TESTNET.router,
+  TESTNET.token,
+  TESTNET.networkPassphrase,
+  TESTNET.usdcCode,
+  TESTNET.usdcIssuer,
+].join(":");
 export const STELLAR_DEPLOYMENT = {
   chain: "stellar-testnet",
   router: stellar.router,
