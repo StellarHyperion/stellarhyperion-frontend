@@ -39,6 +39,7 @@ import { compareQuotes } from "../src/lib/quote-diff";
 import { parseBridgeFormParams } from "../src/components/bridge/Bridge";
 import { USDC, XLM } from "../src/contracts/assets";
 import { checkpointMatches, parseCheckpoint, saveCheckpoint } from "../src/contracts/checkpoint";
+import { createSubmissionMachine, transitionSubmission } from "../src/contracts/submission-machine";
 
 import { archivedRouterFor, DESTINATIONS, STELLAR_DEPLOYMENT, TESTNET, supportedLanes } from "../src/config/testnet";
 import { inspectCheckpointStorage } from "../src/contracts/checkpoint";
@@ -427,6 +428,37 @@ describe("Signed Stellar submission failure boundaries", () => {
     ).rejects.toThrow(/claim changed/);
     expect(wallet).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+  it("rejects invalid transitions so duplicate send controls cannot be enabled", () => {
+    const machine = createSubmissionMachine();
+    expect(() => transitionSubmission(machine, "broadcast")).toThrow(/invalid transition/);
+    const signed = transitionSubmission(
+      transitionSubmission(transitionSubmission(machine, "prepare"), "review"),
+      "sign",
+    );
+    expect(signed.canSend).toBe(false);
+  });
+  it("retains account and hash bound pending state for unknown outcomes", () => {
+    const hash = "a".repeat(64);
+    const state = transitionSubmission(
+      transitionSubmission(
+        transitionSubmission(
+          transitionSubmission(transitionSubmission(createSubmissionMachine(), "prepare"), "review"),
+          "sign",
+        ),
+        "checkpoint",
+        { account: key.publicKey(), txHash: hash },
+      ),
+      "broadcast",
+    );
+    expect(state.phase).toBe("broadcast");
+    expect(state.pending).toEqual({ account: key.publicKey(), txHash: hash });
+  });
+  it("handles cancellation and delayed async results without resubmitting", () => {
+    const machine = transitionSubmission(createSubmissionMachine(), "prepare");
+    const cancelled = transitionSubmission(machine, "cancel");
+    expect(cancelled.phase).toBe("cancelled");
+    expect(() => transitionSubmission(cancelled, "confirm")).toThrow(/invalid transition/);
   });
   it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
     const checkpointKey = "hyperion.testnet.pending-transfer";
