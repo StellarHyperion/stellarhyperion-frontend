@@ -176,7 +176,7 @@ describe("pending transfer checkpoints", () => {
       required(getTransferCheckpoint()),
     );
 
-    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toEqual({
+    expect(parseCheckpoint(storage.getItem("hyperion.testnet.pending-transfer"))).toMatchObject({
       ...conversion,
       schemaVersion: 1,
       revision: 2,

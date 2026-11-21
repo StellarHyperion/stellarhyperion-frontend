@@ -1,4 +1,5 @@
 "use client";
+import { CheckpointRecoveryInspector } from "./CheckpointRecoveryInspector";
 import { rememberLocalTransfer } from "../../lib/local-transfers";
 import { cctpPayoutBreakdown, FeeUnavailableError } from "../../lib/relay-budget";
 
@@ -88,6 +89,8 @@ import {
 import { planMaxUsdcAmount, planMaxSourceAmount } from "../../lib/max-planner";
 import { validateAmount } from "../../lib/amount-validation";
 import {
+  checkpointNetworkMatches,
+  exportCheckpoint,
   checkpointForAsset,
   acquireOperationOwnership,
   getOperationOwnership,
@@ -669,6 +672,7 @@ function PendingTransferCard({
   const archivedDeployment = archivedRouterFor(checkpoint.router);
   const activeDeployment = checkpoint.router === TESTNET.router && !archivedDeployment;
   const sameAccount = wallet.address === checkpoint.account;
+  const sameNetwork = checkpointNetworkMatches(checkpoint);
   const actionRef = useRef<HTMLButtonElement>(null);
   const recoveryMessageRef = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
@@ -707,6 +711,12 @@ function PendingTransferCard({
   const visibleCurrent = checked?.owner === recoveryOwner ? checked : null;
   const check = async () => {
     if (checking || busy || requestRef.current) return;
+    if (!sameNetwork) {
+      setError(
+        "This checkpoint belongs to a different Stellar network. Reconnect to Testnet before checking it.",
+      );
+      return;
+    }
     const controller = new AbortController();
     requestRef.current = controller;
     const owner = recoveryOwner;
@@ -811,6 +821,7 @@ function PendingTransferCard({
       checked?.owner !== recoveryOwner ||
       checked.status !== "confirmed" ||
       !sameAccount ||
+      !sameNetwork ||
       checking ||
       cardSimulating ||
       !!cardSimError ||
@@ -839,7 +850,26 @@ function PendingTransferCard({
     };
     setChecking(true);
     setError(null);
+    let signingLease: Awaited<ReturnType<typeof acquireOperationOwnership>> | undefined;
     try {
+      signingLease = await acquireOperationOwnership(
+        {
+          account: checkpoint.account,
+          recipient: checkpoint.recipient,
+          destination: checkpoint.destination,
+          route: checkpoint.route,
+          bridgeAmount: checkpoint.bridgeAmount,
+          stage: "bridge",
+        },
+        checkpoint,
+      );
+      if (!active()) return;
+      const freshEvidence = await resolveCheckpointTransaction(checkpoint, controller.signal);
+      if (!active()) return;
+      if (freshEvidence.status !== "confirmed")
+        throw new Error(
+          "The original conversion could not be reconfirmed. Keep its checkpoint and retry the read.",
+        );
       await requireRecoveredUsdc(
         checkpoint.account,
         BigInt(checkpoint.bridgeAmount),
@@ -903,6 +933,7 @@ function PendingTransferCard({
         setError(message("conversionAttemptFailed", { reason }));
       }
     } finally {
+      signingLease?.release();
       if (requestRef.current === controller) requestRef.current = null;
       setChecking(false);
     }
@@ -963,6 +994,34 @@ function PendingTransferCard({
         <div className={styles.transactionIdentityValue}>
           <CopyableAddress value={checkpoint.txHash} label="transaction hash" />
         </div>
+        {copied && <span role="status">Transaction hash copied.</span>}
+        <button
+          type="button"
+          className={styles.secondary}
+          onClick={() => {
+            let url: string | undefined;
+            try {
+              const blob = new Blob([exportCheckpoint(checkpoint)], { type: "application/json" });
+              url = URL.createObjectURL(blob);
+              const link = document.createElement("a");
+              link.href = url;
+              link.download = `hyperion-checkpoint-${checkpoint.txHash.slice(0, 12)}.json`;
+              link.click();
+              setError(null);
+            } catch {
+              setError(message("recoveryExportFailed"));
+            } finally {
+              if (url) {
+                const createdUrl = url;
+                setTimeout(() => {
+                  URL.revokeObjectURL(createdUrl);
+                }, 1000);
+              }
+            }
+          }}
+        >
+          {message("recoveryExport")}
+        </button>
         <a
           className={styles.transactionLink}
           href={`https://stellar.expert/explorer/testnet/tx/${checkpoint.txHash}`}
@@ -972,6 +1031,7 @@ function PendingTransferCard({
           View on Stellar Expert <ArrowUpRight size={14} aria-hidden="true" />
         </a>
       </div>
+      <CheckpointRecoveryInspector key={recoveryOwner} checkpoint={checkpoint} />
       {checkpoint.stage === "bridge" && (
         <Link href={`/transfers/${checkpoint.txHash}`}>
           Track transfer <ArrowRight size={14} aria-hidden="true" />
@@ -982,6 +1042,11 @@ function PendingTransferCard({
           {message("recoveryReconnect", {
             account: `${checkpoint.account.slice(0, 7)}...${checkpoint.account.slice(-7)}`,
           })}
+        </p>
+      )}
+      {!sameNetwork && (
+        <p role="alert" className={styles.error}>
+          {message("recoveryNetworkMismatch")}
         </p>
       )}
       <p className={styles.address}>{message("recoveryOwner", { account: checkpoint.account })}</p>
@@ -1021,11 +1086,11 @@ function PendingTransferCard({
           onClick={() => {
             void check();
           }}
-          disabled={busy || checking}
+          disabled={busy || checking || !sameNetwork}
         >
           {checking
             ? message("recoveryCheckingAction")
-            : checkpoint.stage === "conversion" && sameAccount
+            : checkpoint.stage === "conversion" && sameAccount && sameNetwork
               ? message("recoveryContinue")
               : message("recoveryCheck")}
         </button>
@@ -2943,7 +3008,7 @@ export function ClaimRecovery() {
     setRecovery(null);
     setClaimPhase("preparing");
     try {
-      lease = await acquireClaimSettlementLease();
+      lease = await acquireClaimSettlementLease(account);
       assertCheckpointStorage();
       if (controller.signal.aborted || !mounted.current) return;
       const refreshed = await getClaims(reviewed.map((claim) => claim.id));

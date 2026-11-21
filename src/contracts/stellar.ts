@@ -36,7 +36,7 @@ import {
   stellarTransactionReadUrls,
   type SupportedLane,
 } from "../config/testnet";
-import type { TransferCheckpoint } from "./checkpoint";
+import { checkpointNetworkMatches, type TransferCheckpoint } from "./checkpoint";
 import {
   claimSettlementIdentities,
   parseClaimSettlementCheckpoint,
@@ -1496,7 +1496,7 @@ export async function resolveCheckpointTransaction(
   signal?: AbortSignal,
 ): Promise<CheckpointRecoveryResult> {
   if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
-  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || (checkpoint.router !== TESTNET.router && !archivedRouterFor(checkpoint.router)))
+  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || (!checkpointNetworkMatches(checkpoint) && !archivedRouterFor(checkpoint.router)))
     return unknownRecovery("The saved checkpoint does not match the configured Stellar Testnet.");
   const lookupSignal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(15000)])

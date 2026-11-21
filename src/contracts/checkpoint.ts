@@ -1,7 +1,7 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
 import { getClaimSettlementCheckpoint } from "./claim-checkpoint";
-import { TESTNET, archivedRouterFor, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
+import { TESTNET, STELLAR_DEPLOYMENT, archivedRouterFor, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
 import { stellarAsset, type SourceAsset } from "./assets";
 
 export type CheckpointSource = Pick<SourceAsset, "id" | "code" | "issuer">;
@@ -12,6 +12,9 @@ export interface TransferCheckpoint {
   /** Monotonic revision used to reject stale tab writers. */
   revision?: number;
   router: string;
+  networkPassphrase?: string;
+  chain?: string;
+  deploymentCommit?: string;
   token?: string;
   account: string;
   recipient: string;
@@ -127,12 +130,15 @@ function checkpointSource(value: unknown): CheckpointSource {
   return source;
 }
 export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
-  if (!raw) return null;
+  if (!raw || raw.length > 16384) return null;
   try {
     const value = JSON.parse(raw) as {
       schemaVersion?: number;
       revision?: number;
       router: string;
+      networkPassphrase?: string;
+      chain?: string;
+      deploymentCommit?: string;
       token?: string;
       account: string;
       recipient: string;
@@ -159,6 +165,12 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
       !StrKey.isValidContract(value.router) ||
       (value.token !== undefined &&
         (typeof value.token !== "string" || !StrKey.isValidContract(value.token))) ||
+      (value.networkPassphrase !== undefined &&
+        (typeof value.networkPassphrase !== "string" || value.networkPassphrase.length > 256)) ||
+      (value.chain !== undefined && (typeof value.chain !== "string" || value.chain.length > 64)) ||
+      (value.deploymentCommit !== undefined &&
+        (typeof value.deploymentCommit !== "string" ||
+          !/^[0-9a-f]{7,40}$/i.test(value.deploymentCommit))) ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
       !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||
       /^0x0{40}$/.test(value.recipient) ||
@@ -174,6 +186,11 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
     const { schemaVersion, revision } = value;
     return {
       router: value.router,
+      ...(value.networkPassphrase === undefined
+        ? {}
+        : { networkPassphrase: value.networkPassphrase }),
+      ...(value.chain === undefined ? {} : { chain: value.chain }),
+      ...(value.deploymentCommit === undefined ? {} : { deploymentCommit: value.deploymentCommit }),
       ...(schemaVersion === undefined ? {} : { schemaVersion: 1 as const }),
       ...(revision === undefined ? {} : { revision }),
       ...(typeof value.token === "string"
@@ -195,6 +212,71 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
   }
 }
 
+/** Legacy records still require independently checked Testnet transaction evidence. */
+export function checkpointNetworkMatches(value: TransferCheckpoint): boolean {
+  return (
+    value.router === TESTNET.router &&
+    (value.token === undefined || value.token === TESTNET.token) &&
+    (value.networkPassphrase === undefined ||
+      value.networkPassphrase === TESTNET.networkPassphrase) &&
+    (value.chain === undefined || value.chain === "stellar-testnet") &&
+    (value.deploymentCommit === undefined || value.deploymentCommit === STELLAR_DEPLOYMENT.commit)
+  );
+}
+
+export type CheckpointComparison = "same" | "conflict";
+export function compareCheckpoints(
+  left: TransferCheckpoint,
+  right: TransferCheckpoint,
+): CheckpointComparison {
+  // Neither a matching hash nor a conversion/bridge stage pair establishes matching evidence.
+  return checkpointIdentity(left) === checkpointIdentity(right) ? "same" : "conflict";
+}
+
+/** Project an explicit allowlist; imported status and extra payloads never establish confirmation. */
+export function exportCheckpoint(value: TransferCheckpoint): string {
+  const publicValue = parseCheckpoint(
+    JSON.stringify({
+      schemaVersion: value.schemaVersion,
+      revision: value.revision,
+      router: value.router,
+      token: value.token,
+      account: value.account,
+      recipient: value.recipient,
+      destination: value.destination,
+      route: value.route,
+      bridgeAmount: value.bridgeAmount,
+      stage: value.stage,
+      txHash: value.txHash,
+      source: value.source,
+      networkPassphrase: value.networkPassphrase,
+      chain: value.chain,
+      deploymentCommit: value.deploymentCommit,
+    }),
+  );
+  if (!publicValue)
+    throw new Error("Recovery metadata is invalid. The saved checkpoint is unchanged.");
+  return JSON.stringify({ exportVersion: 1, sourceStatus: "unknown", ...publicValue });
+}
+
+/** Read-only candidate: callers must check network, envelope and result before accepting evidence. */
+export function importCheckpoint(raw: string): TransferCheckpoint | null {
+  if (raw.length > 16384) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (
+      !value ||
+      typeof value !== "object" ||
+      !("exportVersion" in value) ||
+      value.exportVersion !== 1
+    )
+      return null;
+    return parseCheckpoint(raw);
+  } catch {
+    return null;
+  }
+}
+
 // Returns true only when the checkpoint still describes the same account, destination, route,
 // amount and intent as the current session. A different account or intent means a saved
 // confirmation must never be reapplied to a new transfer.
@@ -206,6 +288,7 @@ export function checkpointMatches(
   >,
 ): boolean {
   return (
+    checkpointNetworkMatches(checkpoint) &&
     checkpoint.account === context.account &&
     checkpoint.recipient === context.recipient &&
     checkpointSourceIdentity(checkpoint.source) === checkpointSourceIdentity(context.source) &&
@@ -265,7 +348,10 @@ export function assertTransition(from: OperationState, to: OperationState): void
 export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
   return JSON.stringify([
     checkpoint.router,
-    checkpoint.token ?? (checkpoint.router === TESTNET.router ? TESTNET.token : null),
+    checkpoint.networkPassphrase ?? TESTNET.networkPassphrase,
+    checkpoint.chain ?? "stellar-testnet",
+    checkpoint.deploymentCommit ?? STELLAR_DEPLOYMENT.commit,
+checkpoint.token ?? (checkpoint.router === TESTNET.router ? TESTNET.token : null),
     checkpoint.account,
     checkpoint.recipient,
     checkpoint.destination,
@@ -289,9 +375,24 @@ function storageRecoveryError(): string | null {
   } catch {
     return "Recovery storage cannot be read. Keep the saved transaction and restore browser storage before signing.";
   }
-  if (!raw || parseCheckpoint(raw)) return null;
+  if (!raw) return null;
+  const parsed = parseCheckpoint(raw);
+  if (parsed)
+    return checkpointNetworkMatches(parsed)
+      ? null
+      : "This saved transaction belongs to another network or router deployment. Reconnect to its original deployment; its exact checkpoint is preserved.";
   try {
-    const record = JSON.parse(raw) as { schemaVersion?: unknown } | null;
+    const record = JSON.parse(raw) as {
+      schemaVersion?: unknown;
+      router?: unknown;
+      token?: unknown;
+    } | null;
+    if (
+      record &&
+      ((typeof record.router === "string" && record.router !== TESTNET.router) ||
+        (typeof record.token === "string" && record.token !== TESTNET.token))
+    )
+      return "This saved transaction belongs to another router or token deployment. Reconnect to its original deployment; its exact checkpoint is preserved.";
     if (record?.schemaVersion !== undefined && record.schemaVersion !== 1)
       return "This saved transaction uses an unsupported recovery version. Keep its data and open it with the compatible app before signing another transaction.";
   } catch {
@@ -357,6 +458,13 @@ export function saveCheckpoint(
     );
   if (value && !parseCheckpoint(JSON.stringify(value)))
     throw new Error("Invalid recovery data. No transaction was submitted.");
+  if (
+    (existing && !checkpointNetworkMatches(existing)) ||
+    (value && !checkpointNetworkMatches(value))
+  )
+    throw new Error(
+      "The saved transaction belongs to another network or deployment. Its checkpoint was preserved.",
+    );
   if (
     expected &&
     (!existing ||
@@ -492,6 +600,7 @@ export interface OperationLease extends OperationOwnership {
 /** Hold the browser's cross-tab lock until signing and broadcast have finished. */
 export async function acquireOperationOwnership(
   ownership: Parameters<typeof claimOperationOwnership>[0],
+  expected?: TransferCheckpoint,
 ): Promise<OperationLease> {
   if (typeof window === "undefined") {
     const owner = claimOperationOwnership(ownership);
@@ -508,50 +617,87 @@ export async function acquireOperationOwnership(
       "This browser cannot coordinate transfer tabs. Use a supported browser before signing.",
     );
   }
+  if (!StrKey.isValidEd25519PublicKey(ownership.account))
+    throw new Error("Invalid account ownership. Reconnect the original wallet before signing.");
   return new Promise<OperationLease>((resolve, reject) => {
     void locks
-      .request("hyperion.testnet.transfer-signing", { ifAvailable: true }, async (lock) => {
-        if (!lock) {
-          const current = getOperationOwnership();
-          throw new Error(
-            `Another tab owns this transfer (checkpoint ${current?.id ?? "unavailable"}). Finish or recover it before trying again.`,
-          );
-        }
-        const recoveryError = storageRecoveryError();
-        if (recoveryError) throw new Error(recoveryError);
-        if (getClaimSettlementCheckpoint())
-          throw new Error(
-            "A signed claim settlement is unresolved. Check it before another transfer.",
-          );
-        const checkpoint = getTransferCheckpoint();
-        if (checkpoint) {
-          throw new Error(
-            `A signed transfer is unresolved (checkpoint ${checkpoint.txHash}). Check its status before signing another transfer.`,
-          );
-        }
-        const owner = claimOperationOwnership(ownership);
-        let release!: () => void;
-        const held = new Promise<void>((done) => {
-          release = done;
-        });
-        let released = false;
-        resolve({
-          ...owner,
-          release: () => {
-            if (released) return;
-            released = true;
-            releaseOperationOwnership(owner.id);
-            release();
+      .request("hyperion.testnet.transfer-signing", { ifAvailable: true }, async (globalLock) => {
+        if (!globalLock)
+          throw new Error("Another tab is signing. Finish or recover it before trying again.");
+        await locks.request(
+          `hyperion.testnet.account.${ownership.account}`,
+          { ifAvailable: true },
+          async (accountLock) => {
+            if (!accountLock)
+              throw new Error(
+                "Another tab owns this account. Finish or recover its transfer before signing.",
+              );
+            const recoveryError = storageRecoveryError();
+            if (recoveryError) throw new Error(recoveryError);
+            if (getClaimSettlementCheckpoint())
+              throw new Error(
+                "A signed claim settlement is unresolved. Check it before another transfer.",
+              );
+            const checkpoint = getTransferCheckpoint();
+            if (expected) {
+              if (
+                !checkpoint ||
+                expected.stage !== "conversion" ||
+                ownership.stage !== "bridge" ||
+                !checkpointNetworkMatches(expected) ||
+                checkpointIdentity(checkpoint) !== checkpointIdentity(expected) ||
+                (checkpoint.revision ?? 0) !== (expected.revision ?? 0) ||
+                !checkpointMatches(expected, {
+                  ...ownership,
+                  stage: "conversion",
+                  ...(expected.source ? { source: expected.source } : {}),
+                })
+              )
+                throw new Error(
+                  "The original conversion checkpoint changed. Check its outcome before continuing.",
+                );
+            } else if (checkpoint) {
+              throw new Error(
+                `A signed transfer is unresolved (checkpoint ${checkpoint.txHash}). Check its status before signing another transfer.`,
+              );
+            }
+            // A released Web Lock proves the old tab no longer holds signing ownership.
+            // Reclaim only ownership metadata; never clear or expire a signed checkpoint.
+            let owner: OperationOwnership;
+            ownershipLockHeld = true;
+            try {
+              owner = claimOperationOwnership(ownership);
+            } finally {
+              ownershipLockHeld = false;
+            }
+            let release!: () => void;
+            const held = new Promise<void>((done) => {
+              release = done;
+            });
+            let released = false;
+            resolve({
+              ...owner,
+              release: () => {
+                if (released) return;
+                released = true;
+                try {
+                  releaseOperationOwnership(owner.id);
+                } finally {
+                  release();
+                }
+              },
+            });
+            await held;
           },
-        });
-        await held;
+        );
       })
       .catch(reject);
   });
 }
+let ownershipLockHeld = false;
 
 export function parseOwnership(raw: string | null): OperationOwnership | null {
-  if (!raw) return null;
+  if (!raw || raw.length > 4096) return null;
   try {
     const value = JSON.parse(raw) as {
       id: string;
@@ -566,6 +712,7 @@ export function parseOwnership(raw: string | null): OperationOwnership | null {
     if (
       typeof value.id !== "string" ||
       !value.id ||
+      value.id.length > 128 ||
       !StrKey.isValidEd25519PublicKey(value.account) ||
       !/^0x[0-9a-fA-F]{40}$/.test(value.recipient) ||
       /^0x0{40}$/.test(value.recipient) ||
@@ -580,7 +727,11 @@ export function parseOwnership(raw: string | null): OperationOwnership | null {
     }
     destinationFor(value.destination);
     return {
-      ...value,
+      id: value.id,
+      account: value.account,
+      recipient: value.recipient,
+      bridgeAmount: value.bridgeAmount,
+      timestamp: value.timestamp,
       destination: destinationFor(value.destination).key,
       route: value.route,
       stage: value.stage,
@@ -601,6 +752,17 @@ export function getOperationOwnership(): OperationOwnership | null {
   }
 }
 
+function createOperationOwnershipId(): string {
+  if (typeof crypto !== "undefined") {
+    if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    if (typeof crypto.getRandomValues === "function") {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
+  }
+  throw new Error("Secure browser randomness is unavailable. No transaction will be signed.");
+}
+
 export function claimOperationOwnership(
   ownership: Omit<OperationOwnership, "id" | "timestamp"> & {
     id?: string;
@@ -609,23 +771,35 @@ export function claimOperationOwnership(
 ): OperationOwnership {
   if (typeof window !== "undefined" && typeof localStorage === "undefined")
     throw new Error("Browser storage is unavailable. Review the transfer again before signing.");
-  const id =
-    ownership.id ??
-    (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
+  const id = ownership.id ?? createOperationOwnershipId();
   const record: OperationOwnership = {
-    ...ownership,
+    account: ownership.account,
+    recipient: ownership.recipient,
+    destination: ownership.destination,
+    route: ownership.route,
+    bridgeAmount: ownership.bridgeAmount,
+    stage: ownership.stage,
     id,
     timestamp: ownership.timestamp ?? Date.now(),
   };
+  if (!parseOwnership(JSON.stringify(record)))
+    throw new Error("Invalid account ownership metadata. Review the transfer again.");
   const serialized = JSON.stringify(record);
   const storedOwnership =
     typeof localStorage !== "undefined" && typeof localStorage.getItem === "function"
       ? localStorage.getItem(ownershipKey)
       : memoryOwnership;
   const current = parseOwnership(storedOwnership);
-  if (current && current.id !== record.id && Date.now() - current.timestamp < OWNERSHIP_TTL_MS) {
+  if (storedOwnership && !current)
+    throw new Error(
+      "Saved account ownership is invalid. Keep recovery data and restore this browser before signing.",
+    );
+  if (
+    !ownershipLockHeld &&
+    current &&
+    current.id !== record.id &&
+    Date.now() - current.timestamp < OWNERSHIP_TTL_MS
+  ) {
     throw new Error(
       `Another tab owns this transfer (checkpoint ${current.id}). Finish or recover it before trying again.`,
     );
@@ -633,6 +807,8 @@ export function claimOperationOwnership(
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.setItem(ownershipKey, serialized);
+      if (localStorage.getItem(ownershipKey) !== serialized)
+        throw new Error("Ownership did not persist.");
     }
   } catch {
     throw new Error("Browser storage is unavailable. Review the transfer again before signing.");

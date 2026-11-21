@@ -1156,3 +1156,43 @@
   outline: 2px solid var(--focus-color);
   outline-offset: 3px;
 }
+
+.recoveryInspector {
+  min-width: 0;
+  border-block-start: 1px solid var(--edge-color);
+  padding-block-start: 16px;
+  overflow-wrap: anywhere;
+}
+.recoveryInspector summary {
+  cursor: pointer;
+  padding-block: 12px;
+}
+.recoveryInspector p {
+  margin-block: 12px;
+}
+.recoveryInspector label {
+  display: block;
+  margin-block: 12px 6px;
+}
+.recoveryInspector textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 120px;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--edge-color-strong);
+  border-radius: 12px;
+  color: var(--text-primary);
+  background: var(--surface-page);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+.recoveryInspector button {
+  margin-block: 12px;
+  margin-inline-end: 12px;
+  min-height: 44px;
+}
+.recoveryInspector :is(summary, textarea):focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 3px;
+}

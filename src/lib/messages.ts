@@ -58,6 +58,44 @@ const english = {
     "Source transaction failed on Stellar. No destination delivery was initiated.",
   bridgeUnknown: () =>
     "This saved signed hash does not establish broadcast or confirmation. Check its source status before approving another transfer.",
+  recoveryNetworkMismatch: () =>
+    "This recovery record belongs to another network or router deployment. Lookup and continuation are blocked. Reconnect to its original deployment.",
+  recoveryExport: () => "Export recovery metadata",
+  recoveryExportFailed: () =>
+    "Recovery export failed. Your original checkpoint is unchanged. Retry or copy its transaction hash.",
+  recoveryCompare: () => "Compare a recovery export",
+  recoveryCompareHelp: () =>
+    "Paste public recovery metadata to check every signed hash against Stellar Testnet. This read cannot sign, resubmit, or replace your saved transaction.",
+  recoveryMetadata: () => "Recovery metadata",
+  recoveryBothChecking: () => "Checking both records...",
+  recoveryEvidenceCheck: () => "Check recovery evidence",
+  recoveryCompareCancel: () => "Cancel comparison",
+  recoveryUnresolvedAudit: () =>
+    "At least one signed hash remains unresolved. Preserve both records and retry their reads.",
+  recoveryTerminalAudit: () =>
+    "Every source outcome was independently checked. The signed hashes remain separate; destination delivery is tracked separately.",
+  recoveryAuditChecked: ({
+    time,
+    comparison,
+  }: {
+    readonly time: string;
+    readonly comparison: string;
+  }) => `Checked ${time}. Comparison: ${comparison}.`,
+  recoveryAuditRecord: ({
+    number,
+    hash,
+    status,
+    source,
+  }: {
+    readonly number: string;
+    readonly hash: string;
+    readonly status: string;
+    readonly source: string;
+  }) => `Record ${number}: ${hash} (${status}, ${source}).`,
+  recoveryAuditDownload: () => "Download public audit",
+  recoveryAuditSaveFailed: () =>
+    "The public audit could not be saved. Download this checked summary. Your pending checkpoint is unchanged.",
+  recoveryCompareFailed: () => "Recovery comparison failed. Your pending checkpoint is unchanged.",
   recoveryChecking: () => "Checking Stellar Testnet transaction history...",
   recoveryCheckingAction: () => "Checking transaction...",
   recoveryContinue: () => "Check and continue",
