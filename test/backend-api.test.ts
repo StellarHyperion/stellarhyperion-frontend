@@ -357,6 +357,20 @@ describe("Real indexer client", () => {
       "https://indexer.example/v1/transfers?limit=20&cursor=after-1",
     );
   });
+  it("withdraws delivered status after a payment proof is invalidated", () => {
+    const transfer = {
+      stage: "delivered",
+      destination: { delivered: true, amount: "9", decimals: 6, txHash: "b" },
+      proofRevision: {
+        status: "invalidated",
+        previousTxHash: "b",
+        replacementTxHash: null,
+        reason: "destination reorg",
+      },
+    } as unknown as FormattedTransfer;
+    expect(hasVerifiedDestinationEvidence(transfer)).toBe(false);
+    expect(hasVerifiedDestinationEvidence({ ...transfer, proofRevision: null })).toBe(true);
+  });
   it("lists claims with explicit chain and settlement filters", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://indexer.example");
     const payload = { claims: [], count: 0, limit: 20, offset: 0 };

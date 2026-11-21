@@ -179,6 +179,12 @@ export function TransferList({ transfers }: TransferListProps): ReactElement {
               </span>
             </p>
           )}
+          {t.proofRevision && t.proofRevision.status !== "valid" && (
+            <p className={styles.claimInfo} role="status">
+              Evidence {t.proofRevision.status}: destination proof changed. This is not a duplicate
+              source transfer.
+            </p>
+          )}
 
           <details className={styles.proofDrawer}>
             <summary>Inspect proof evidence</summary>

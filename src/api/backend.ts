@@ -22,6 +22,13 @@ export type TransferLifecycleStage =
   | "settled"
   | "failed";
 
+export interface ProofRevision {
+  readonly status: "valid" | "reconciled" | "invalidated";
+  readonly previousTxHash: string | null;
+  readonly replacementTxHash: string | null;
+  readonly reason: string | null;
+}
+
 export interface FormattedTransfer {
   readonly id: string;
   readonly stage: TransferLifecycleStage;
@@ -74,6 +81,7 @@ export interface FormattedTransfer {
       readonly revision: string;
     } | null;
   } | null;
+  readonly proofRevision?: ProofRevision | null;
 }
 
 export interface TransfersResponse {

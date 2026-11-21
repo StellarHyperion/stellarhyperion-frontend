@@ -174,6 +174,41 @@ function TransferDetailContent({ txHash }: { txHash: string }) {
             </p>
           )}
           <p style={{ overflowWrap: "anywhere" }}>Recipient: {record.destination.recipient}</p>
+          {record.proofRevision && record.proofRevision.status !== "valid" && (
+            <section aria-label="Proof revision notice">
+              <p role="status">
+                Destination evidence was {record.proofRevision.status}; this is a proof revision,
+                not a second source transfer.
+              </p>
+              {record.proofRevision.previousTxHash && (
+                <a
+                  href={getExplorerUrl(
+                    record.destination.chain,
+                    "tx",
+                    record.proofRevision.previousTxHash,
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Inspect original destination reference
+                </a>
+              )}
+              {record.proofRevision.replacementTxHash && (
+                <a
+                  href={getExplorerUrl(
+                    record.destination.chain,
+                    "tx",
+                    record.proofRevision.replacementTxHash,
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Inspect replacement destination reference
+                </a>
+              )}
+              {record.proofRevision.reason && <p>{record.proofRevision.reason}</p>}
+            </section>
+          )}
           {record.rail?.railStatus && <p>Rail reports: {record.rail.railStatus}</p>}
           {record.destination.txHash && (
             <a
