@@ -210,7 +210,7 @@ export function parseBridgeFormParams(search: string): BridgeFormParams | null {
   }
   if (recipient) {
     try {
-      validateRecipient(recipient);
+      validateRecipient(recipient, destination);
     } catch {
       return null;
     }
@@ -1340,7 +1340,7 @@ export function Bridge() {
   if (amount.trim() && recipient.trim()) {
     try {
       if (!amountValidation.valid) throw new Error(amountValidation.message);
-      validateRecipient(recipient);
+      validateRecipient(recipient, destination);
       valid = true;
     } catch (cause) {
       inputError = errorMessage(cause);
@@ -1609,7 +1609,7 @@ export function Bridge() {
     try {
       ownership = await acquireOperationOwnership({
         account: sender,
-        recipient: validateRecipient(recipient),
+        recipient: validateRecipient(recipient, destination),
         destination,
         route,
         bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
@@ -1668,7 +1668,7 @@ export function Bridge() {
       router: TESTNET.router,
       token: TESTNET.token,
       account: sender,
-      recipient: validateRecipient(recipient),
+      recipient: validateRecipient(recipient, destination),
       destination,
       route,
       bridgeAmount: String(reviewedQuote.bridge.requestedAmount),
@@ -2666,7 +2666,7 @@ export function Bridge() {
             From Stellar Testnet to {destinationFor(reviewed.quote.bridge.destination).name} via{" "}
             {provider(reviewed.quote.bridge.route)}.
           </p>
-          <p className={styles.address}>Recipient: {validateRecipient(recipient)}</p>
+          <p className={styles.address}>Recipient: {validateRecipient(recipient, destination)}</p>
           {reviewed.quote.source.issuer && reviewed.quote.source.id !== USDC.id && (
             <p className={styles.address}>Source issuer: {reviewed.quote.source.issuer}</p>
           )}

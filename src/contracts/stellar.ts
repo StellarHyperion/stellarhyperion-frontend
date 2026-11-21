@@ -790,10 +790,15 @@ export function parseSendAmount(value: string): bigint {
   return amount;
 }
 
-export function validateRecipient(value: string): string {
+export function validateRecipient(value: string, destinationKey?: DestinationKey): string {
   const recipient = value.trim();
+  if (destinationKey) destinationFor(destinationKey);
   if (!/^0x[0-9a-fA-F]{40}$/.test(recipient) || /^0x0{40}$/.test(recipient)) {
-    throw new Error("Enter a nonzero, 20-byte EVM recipient address on the selected testnet.");
+    throw new Error(
+      destinationKey
+        ? `Enter a nonzero, 20-byte EVM recipient address for ${destinationFor(destinationKey).name}.`
+        : "Enter a nonzero, 20-byte EVM recipient address on the selected testnet.",
+    );
   }
   return recipient;
 }
