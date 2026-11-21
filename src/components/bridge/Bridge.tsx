@@ -751,7 +751,12 @@ function PendingTransferCard({
         setError(result.message);
         return;
       }
-      if (result.status === "confirmed" && checkpoint.stage === "conversion" && sameAccount && activeDeployment) {
+      if (
+        result.status === "confirmed" &&
+        checkpoint.stage === "conversion" &&
+        sameAccount &&
+        activeDeployment
+      ) {
         if (!runtimeSigningAvailable(runtime.capabilities, checkpoint.route))
           throw new Error(message("staticFeeUnavailable"));
         conversionConfirmed = true;
@@ -972,7 +977,13 @@ function PendingTransferCard({
       <p id="pending-recovery-message" ref={recoveryMessageRef} role="status" tabIndex={-1}>
         {recoveryMessage(checkpoint.stage, visibleCurrent?.status ?? null, false, translations)}
       </p>
-      {archivedDeployment && <p role="status">This saved transaction belongs to an archived router revision. Check its original Stellar Testnet hash. Confirmation does not prove destination delivery; continuation through the successor router is blocked.</p>}
+      {archivedDeployment && (
+        <p role="status">
+          This saved transaction belongs to an archived router revision. Check its original Stellar
+          Testnet hash. Confirmation does not prove destination delivery; continuation through the
+          successor router is blocked.
+        </p>
+      )}
       {checkpoint.stage === "conversion" && checkpoint.source && (
         <p className={styles.address}>
           Original source asset: {checkpoint.source.code}
@@ -994,7 +1005,6 @@ function PendingTransferCard({
         <div className={styles.transactionIdentityValue}>
           <CopyableAddress value={checkpoint.txHash} label="transaction hash" />
         </div>
-        {copied && <span role="status">Transaction hash copied.</span>}
         <button
           type="button"
           className={styles.secondary}
@@ -2404,7 +2414,9 @@ export function Bridge() {
                 quoteError ??
                 laneError ??
                 inputError}
-              {quoteError && conversionPathIssue(new Error(quoteError)) === "temporary" && " Refresh and try again."}
+              {quoteError &&
+                conversionPathIssue(new Error(quoteError)) === "temporary" &&
+                " Refresh and try again."}
             </p>
           )
         )}
@@ -3198,8 +3210,16 @@ export function ClaimRecovery() {
                         : `${claim.amount} base units of ${claim.token}`}
                     </p>
                     <p>Status: {claim.settled ? "settled on chain" : "parked"}</p>
-                    <p>Recorded entitlement does not establish the currently withdrawable amount.</p>
-                    <p>Router token custody: {claim.custody.status === "verified" && claim.custody.routerBalance !== null ? `${claim.custody.routerBalance} base units` : "unknown"}.</p>
+                    <p>
+                      Recorded entitlement does not establish the currently withdrawable amount.
+                    </p>
+                    <p>
+                      Router token custody:{" "}
+                      {claim.custody.status === "verified" && claim.custody.routerBalance !== null
+                        ? `${claim.custody.routerBalance} base units`
+                        : "unknown"}
+                      .
+                    </p>
                     <p>{claim.custody.reason}</p>
                     <p>
                       Source transfer:{" "}

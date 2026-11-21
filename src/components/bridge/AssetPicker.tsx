@@ -96,7 +96,7 @@ export function SourceAssetPicker({
   const [query, setQuery] = useState("");
   const [queryVersion, setQueryVersion] = useState(0);
   const [pageLimit, setPageLimit] = useState(25);
-  const [selectedId, setSelectedId] = useState(selected.id);
+  const [selectedId] = useState(selected.id);
   const [remote, setRemote] = useState<{
     key: string;
     version: number;

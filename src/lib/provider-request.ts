@@ -11,6 +11,7 @@ export async function fetchWithDeadline(
   const cancel = () => {
     controller.abort();
   };
+  if (signal?.aborted) controller.abort(signal.reason);
   signal?.addEventListener("abort", cancel, { once: true });
   try {
     return await fetch(input, { ...init, signal: controller.signal });

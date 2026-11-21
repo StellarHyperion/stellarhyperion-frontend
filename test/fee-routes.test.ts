@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GET as getRelayFee } from "../src/app/api/relay-fee/route";
-import { GET as getCctpFee } from "../src/app/api/cctp-fee/route";
-import {
-  createFeeRequestGuard,
-  feeRequestGuard,
-  providerFeeCooldown,
-} from "../src/lib/fee-request-guard";
+let providerFeeCooldown: typeof import("../src/lib/fee-request-guard").providerFeeCooldown;
+let getRelayFee: typeof import("../src/app/api/relay-fee/route").GET;
+let getCctpFee: typeof import("../src/app/api/cctp-fee/route").GET;
+import { createFeeRequestGuard } from "../src/lib/fee-request-guard";
 import { createFeeCooldown } from "../src/lib/relay-budget";
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ GET: getRelayFee } = await import("../src/app/api/relay-fee/route"));
+  ({ GET: getCctpFee } = await import("../src/app/api/cctp-fee/route"));
+  const guardModule = await import("../src/lib/fee-request-guard");
+  const { feeRequestGuard } = guardModule;
+  providerFeeCooldown = guardModule.providerFeeCooldown;
   const cooldown = createFeeCooldown();
   vi.spyOn(providerFeeCooldown, "remaining").mockImplementation((provider) =>
     cooldown.remaining(provider),
@@ -176,7 +179,7 @@ describe("fee route contracts", () => {
     const blocked = await getRelayFee(new Request("http://localhost/api/relay-fee"));
     expect(blocked.status).toBe(429);
     expect(blocked.headers.get("Retry-After")).toBe("1");
-    expect(pending).toHaveLength(4);
+    expect(pending).toHaveLength(1);
     for (const resolve of pending) resolve(new Response('"1000001"'));
     expect((await Promise.all(requests)).map((result) => result.status)).toEqual([
       200, 200, 200, 200,

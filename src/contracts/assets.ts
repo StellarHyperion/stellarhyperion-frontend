@@ -1,6 +1,5 @@
 import { Asset, BASE_FEE, Operation, StrKey, type xdr } from "@stellar/stellar-sdk";
 import { formatUnits, parseUnits } from "@hyperion/protocol";
-import type { SourceAsset as _Unused } from "./assets";
 import {
   TESTNET,
   cachedPublicAssetMetadata,
@@ -511,7 +510,8 @@ export async function searchAssets(query: string, signal?: AbortSignal): Promise
       };
       stellarAsset(asset);
       return [asset];
-    });
+    })
+    .filter((asset, index, all) => all.findIndex((other) => other.id === asset.id) === index);
 }
 
 export interface Conversion {

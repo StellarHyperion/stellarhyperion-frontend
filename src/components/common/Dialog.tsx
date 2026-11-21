@@ -98,7 +98,9 @@ export function Dialog({
     >
       <div className={styles.content}>
         <div className={styles.heading}>
-          <h2 ref={heading} id={titleId} tabIndex={-1}>{title}</h2>
+          <h2 ref={heading} id={titleId} tabIndex={-1}>
+            {title}
+          </h2>
           <button type="button" aria-label={`Close ${title}`} onClick={onClose}>
             <X size={19} />
           </button>

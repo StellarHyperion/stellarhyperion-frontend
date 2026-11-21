@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { WalletProvider } from "../wallets";
-import { STELLAR_DEPLOYMENT, publicConfigurationAdmission } from "../config/testnet";
+import {
+  STELLAR_DEPLOYMENT,
+  publicConfigurationAdmission,
+  parsePublicDeploymentIdentity,
+  deploymentIdentityMatches,
+} from "../config/testnet";
 import {
   detectRuntimeCapabilities,
   initialRuntimeCapabilities,

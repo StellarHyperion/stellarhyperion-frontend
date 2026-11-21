@@ -548,7 +548,7 @@ describe("Real Stellar transaction encoding", () => {
       expect(() =>
         saveCheckpoint({ ...checkpoint, stage: "bridge", txHash: "6".repeat(64) }),
       ).toThrow("previous transaction remains pending");
-      saveCheckpoint(null, checkpoint.txHash);
+      saveCheckpoint(null, getTransferCheckpoint() ?? undefined);
     });
     it("retains a pending hash when writes fail but storage reads still work", () => {
       const checkpoint = {

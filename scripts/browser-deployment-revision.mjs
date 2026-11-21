@@ -121,9 +121,11 @@ try {
     .getByRole("button", { name: "Reload active deployment" })
     .waitFor();
   assert.deepEqual(
-    await page.evaluate(() => window.__hyperionWalletRequests.filter((type) =>
-      ["REQUEST_ACCESS", "REQUEST_PUBLIC_KEY", "SIGN_TRANSACTION"].includes(type),
-    )),
+    await page.evaluate(() =>
+      window.__hyperionWalletRequests.filter((type) =>
+        ["REQUEST_ACCESS", "REQUEST_PUBLIC_KEY", "SIGN_TRANSACTION"].includes(type),
+      ),
+    ),
     [],
   );
   assert.equal(

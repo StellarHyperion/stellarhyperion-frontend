@@ -265,7 +265,7 @@ export function filterTransfers(
 }
 
 export interface TransferRequestOptions {
-  readonly signal?: AbortSignal | TransferRequestOptions;
+  readonly signal?: AbortSignal;
 }
 
 interface CachedResponse {
@@ -298,14 +298,23 @@ function getApiBaseUrl(): string {
   ).replace(/\/$/, "");
 }
 
-function request<T>(path: string, notFoundIsNull?: false, signal?: AbortSignal | TransferRequestOptions): Promise<T>;
-function request<T>(path: string, notFoundIsNull: true, signal?: AbortSignal | TransferRequestOptions): Promise<T | null>;
+function request<T>(
+  path: string,
+  notFoundIsNull?: false,
+  signal?: AbortSignal | TransferRequestOptions,
+): Promise<T>;
+function request<T>(
+  path: string,
+  notFoundIsNull: true,
+  signal?: AbortSignal | TransferRequestOptions,
+): Promise<T | null>;
 async function request<T>(
   path: string,
   notFoundIsNull = false,
-  signal?: AbortSignal | TransferRequestOptions,
+  options?: AbortSignal | TransferRequestOptions,
 ): Promise<T | null> {
-  signal = signal && "signal" in signal ? signal.signal : signal as AbortSignal | undefined;
+  const signal =
+    options && "signal" in options ? options.signal : (options as AbortSignal | undefined);
   const base = getApiBaseUrl();
   if (!base) throw new Error("Transfer history is unavailable: no indexer is configured.");
   const url = `${base}${path}`;
@@ -353,13 +362,17 @@ export async function fetchTransfers(
   query?: TransfersQuery,
   signal?: AbortSignal | TransferRequestOptions,
 ): Promise<TransfersResponse> {
-  return normalizeTransfersResponse(await request<unknown>(`/v1/transfers${params(query)}`, false, signal));
+  return normalizeTransfersResponse(
+    await request<unknown>(`/v1/transfers${params(query)}`, false, signal),
+  );
 }
 export async function fetchClaims(query?: ClaimsQuery): Promise<ClaimsResponse> {
   return await request<ClaimsResponse>(`/v1/claims${params(query)}`);
 }
 
-export async function fetchIndexerMetrics(signal?: AbortSignal | TransferRequestOptions): Promise<IndexerMetrics> {
+export async function fetchIndexerMetrics(
+  signal?: AbortSignal | TransferRequestOptions,
+): Promise<IndexerMetrics> {
   return await request<IndexerMetrics>("/v1/metrics", false, signal);
 }
 
@@ -410,7 +423,7 @@ export function localTransferMatches(
 export async function reconcileTransfers(
   account: string,
   references: readonly LocalTransferReference[],
-  signal?: AbortSignal | TransferRequestOptions,
+  signal?: AbortSignal,
 ): Promise<ReconciliationResult[]> {
   const selected = references
     .filter(

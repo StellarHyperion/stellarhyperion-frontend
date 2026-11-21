@@ -67,49 +67,66 @@ export async function GET(request: Request) {
   }
   if (!destination.routes.includes(0)) {
     admission.release();
-    return NextResponse.json({ error: "The CCTP lane is not active for this destination." }, { status: 400, headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(
+      { error: "The CCTP lane is not active for this destination." },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
   }
   try {
-    const quote = await loadCircleFee(`circle:USDC:${destination.key}:${destination.cctpDomain}`, async () => {
-    const response = await fetchWithDeadline(
-      `https://iris-api-sandbox.circle.com/v2/burn/USDC/fees/27/${destination.cctpDomain}?forward=true`,
-      {
-        signal: AbortSignal.timeout(15_000),
-        cache: "no-store",
+    const quote = await loadCircleFee(
+      `circle:USDC:${destination.key}:${destination.cctpDomain}`,
+      async () => {
+        const response = await fetchWithDeadline(
+          `https://iris-api-sandbox.circle.com/v2/burn/USDC/fees/27/${destination.cctpDomain}?forward=true`,
+          {
+            signal: AbortSignal.timeout(15_000),
+            cache: "no-store",
+          },
+        );
+        if (response.status === 429 || response.status === 503) {
+          const retryAfter = providerFeeCooldown.block("cctp", response.headers.get("retry-after"));
+          await response.body?.cancel();
+          throw new Error(`Provider fee cooldown: ${retryAfter}`);
+        }
+        const body: unknown = JSON.parse(await readFeeResponse(response));
+        if (!response.ok || !Array.isArray(body) || body.length > 32)
+          throw new Error("Invalid Circle fee response.");
+        const fee = selectFinalizedCctpFee(body);
+        if (fee === null) throw new Error("No unambiguous finalized forwarding estimate.");
+        return validateProviderFee(
+          {
+            amount: String(relayBudget(fee.amount) * 10n),
+            estimatedAmount: String(fee.amount * 10n),
+            token: "USDC",
+            decimals: 7,
+            destination: destination.key,
+            finality: 2000,
+            provider: "Circle CCTP",
+            ...feeObservation(),
+            lane: { source: "stellar-testnet", destination: destination.key, route: 0 },
+          },
+          {
+            token: "USDC",
+            destination: destination.key,
+          },
+        );
       },
     );
-    if (response.status === 429 || response.status === 503) {
-      const retryAfter = providerFeeCooldown.block("cctp", response.headers.get("retry-after"));
-      await response.body?.cancel();
-      throw new Error(`Provider fee cooldown: ${retryAfter}`);
-    }
-    const body: unknown = JSON.parse(await readFeeResponse(response));
-    if (!response.ok || !Array.isArray(body) || body.length > 32)
-      throw new Error("Invalid Circle fee response.");
-    const fee = selectFinalizedCctpFee(body);
-    if (fee === null) throw new Error("No unambiguous finalized forwarding estimate.");
-    return validateProviderFee(
-      {
-        amount: String(relayBudget(fee.amount) * 10n),
-        estimatedAmount: String(fee.amount * 10n),
-        token: "USDC",
-        decimals: 7,
-        destination: destination.key,
-        finality: 2000,
-        provider: "Circle CCTP",
-        ...feeObservation(),
-        lane: { source: "stellar-testnet", destination: destination.key, route: 0 },
-      },
-      {
-        token: "USDC",
-        destination: destination.key,
-      },
-    );
-    });
     return NextResponse.json(quote, { headers: { "Cache-Control": "no-store" } });
   } catch {
     const retryAfter = providerFeeCooldown.remaining("cctp");
-    if (retryAfter > 0) return NextResponse.json({ error: "Live provider pricing is cooling down. No transfer can be prepared.", code: "RATE_LIMITED", retryAfter }, { status: 429, headers: { "Retry-After": String(retryAfter), "Cache-Control": "no-store" } });
+    if (retryAfter > 0)
+      return NextResponse.json(
+        {
+          error: "Live provider pricing is cooling down. No transfer can be prepared.",
+          code: "RATE_LIMITED",
+          retryAfter,
+        },
+        {
+          status: 429,
+          headers: { "Retry-After": String(retryAfter), "Cache-Control": "no-store" },
+        },
+      );
     return NextResponse.json(
       { error: "Circle forwarding pricing is unavailable. Try again later." },
       { status: 503, headers: { "Cache-Control": "no-store" } },

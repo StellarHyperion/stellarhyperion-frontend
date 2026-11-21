@@ -1,7 +1,14 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
 import { getClaimSettlementCheckpoint } from "./claim-checkpoint";
-import { TESTNET, STELLAR_DEPLOYMENT, archivedRouterFor, destinationFor, type BridgeRoute, type DestinationKey } from "../config/testnet";
+import {
+  TESTNET,
+  STELLAR_DEPLOYMENT,
+  archivedRouterFor,
+  destinationFor,
+  type BridgeRoute,
+  type DestinationKey,
+} from "../config/testnet";
 import { stellarAsset, type SourceAsset } from "./assets";
 
 export type CheckpointSource = Pick<SourceAsset, "id" | "code" | "issuer">;
@@ -198,6 +205,11 @@ export function parseCheckpoint(raw: string | null): TransferCheckpoint | null {
         : value.router === TESTNET.router
           ? { token: TESTNET.token }
           : {}),
+      ...(value.networkPassphrase === undefined
+        ? {}
+        : { networkPassphrase: value.networkPassphrase }),
+      ...(value.chain === undefined ? {} : { chain: value.chain }),
+      ...(value.deploymentCommit === undefined ? {} : { deploymentCommit: value.deploymentCommit }),
       account: value.account,
       recipient: value.recipient,
       bridgeAmount: value.bridgeAmount,
@@ -221,6 +233,20 @@ export function checkpointNetworkMatches(value: TransferCheckpoint): boolean {
       value.networkPassphrase === TESTNET.networkPassphrase) &&
     (value.chain === undefined || value.chain === "stellar-testnet") &&
     (value.deploymentCommit === undefined || value.deploymentCommit === STELLAR_DEPLOYMENT.commit)
+  );
+}
+
+export function checkpointRecoveryDeploymentMatches(checkpoint: TransferCheckpoint): boolean {
+  if (checkpointNetworkMatches(checkpoint)) return true;
+  const archived = archivedRouterFor(checkpoint.router);
+  return Boolean(
+    archived &&
+    (checkpoint.networkPassphrase === undefined ||
+      checkpoint.networkPassphrase === archived.networkPassphrase) &&
+    (checkpoint.chain === undefined || checkpoint.chain === archived.chain) &&
+    (checkpoint.deploymentCommit === undefined ||
+      checkpoint.deploymentCommit === archived.commit) &&
+    (checkpoint.token === undefined || checkpoint.token === TESTNET.token),
   );
 }
 
@@ -325,7 +351,8 @@ export function getTransferCheckpoint(): TransferCheckpoint | null {
 function checkpointSourceIdentity(source: CheckpointSource | undefined): string {
   return JSON.stringify([source?.id ?? null, source?.code ?? null, source?.issuer ?? null]);
 }
-export type OperationState = "prepare" | "review" | "sign" | "checkpoint" | "broadcast" | "confirmation";
+export type OperationState =
+  "prepare" | "review" | "sign" | "checkpoint" | "broadcast" | "confirmation";
 
 const allowedTransitions: Record<OperationState, readonly OperationState[]> = {
   prepare: ["review"],
@@ -341,8 +368,7 @@ export function canTransition(from: OperationState, to: OperationState): boolean
 }
 
 export function assertTransition(from: OperationState, to: OperationState): void {
-  if (!canTransition(from, to))
-    throw new Error(`Invalid operation transition: ${from} -> ${to}.`);
+  if (!canTransition(from, to)) throw new Error(`Invalid operation transition: ${from} -> ${to}.`);
 }
 
 export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
@@ -351,7 +377,7 @@ export function checkpointIdentity(checkpoint: TransferCheckpoint): string {
     checkpoint.networkPassphrase ?? TESTNET.networkPassphrase,
     checkpoint.chain ?? "stellar-testnet",
     checkpoint.deploymentCommit ?? STELLAR_DEPLOYMENT.commit,
-checkpoint.token ?? (checkpoint.router === TESTNET.router ? TESTNET.token : null),
+    checkpoint.token ?? (checkpoint.router === TESTNET.router ? TESTNET.token : null),
     checkpoint.account,
     checkpoint.recipient,
     checkpoint.destination,
@@ -459,8 +485,8 @@ export function saveCheckpoint(
   if (value && !parseCheckpoint(JSON.stringify(value)))
     throw new Error("Invalid recovery data. No transaction was submitted.");
   if (
-    (existing && !checkpointNetworkMatches(existing)) ||
-    (value && !checkpointNetworkMatches(value))
+    (existing && !checkpointRecoveryDeploymentMatches(existing)) ||
+    (value && !checkpointRecoveryDeploymentMatches(value))
   )
     throw new Error(
       "The saved transaction belongs to another network or deployment. Its checkpoint was preserved.",

@@ -17,11 +17,49 @@
   backdrop-filter: blur(10px);
 }
 .content {
-  min-width: 0;
   padding: clamp(12px, 4vw, 24px);
-  display: grid;
-  gap: 16px;
+  min-width: 0;
   overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+/*
+ * Only the body scrolls. The heading and the footer actions are siblings of this box, so a
+ * review of a long conversion intent never pushes Cancel or Confirm out of reach on a phone or
+ * at 200 percent zoom.
+ */
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-content: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.body > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 16px 24px;
+  padding-block-end: calc(16px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--edge-color);
+  background: var(--surface-raised);
+}
+.footer > button {
+  flex: 1 1 10rem;
+  min-block-size: var(--tap-target);
 }
 .heading {
   position: sticky;
@@ -37,7 +75,6 @@
   min-width: 0;
   font-size: 1.125rem;
   font-weight: 600;
-  min-width: 0;
   overflow-wrap: anywhere;
 }
 .heading button {

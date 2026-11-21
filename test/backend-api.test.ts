@@ -468,7 +468,7 @@ describe("Real indexer client", () => {
   it("revalidates transfer history with ETags and uses updated payloads", async () => {
     vi.stubEnv("NEXT_PUBLIC_HYPERION_API_URL", "https://etag.example");
     const first = { transfers: [], count: 0, limit: 20, offset: 0 };
-    const second = { transfers: [{ id: "new" }], count: 1, limit: 20, offset: 0 };
+    const second = { transfers: [], count: 1, limit: 20, offset: 0 };
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(first), { headers: { ETag: '"v1"' } }))
@@ -494,7 +494,7 @@ describe("Real indexer client", () => {
 
     await expect(fetchTransfers()).resolves.toEqual(payload);
     await expect(fetchTransfers()).resolves.toEqual(payload);
-    await expect(fetchTransferByTx("missing")).resolves.toBeNull();
+    await expect(fetchTransferByTx("f".repeat(64))).resolves.toBeNull();
     expect(fetcher.mock.calls[1]?.[1]).toMatchObject({
       headers: { "If-None-Match": '"v1"' },
     });

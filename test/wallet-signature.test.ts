@@ -115,9 +115,9 @@ describe("Wallet signature verification", () => {
 
       const alteredTx = transaction(decimalOracle(units + 1n), Networks.TESTNET, destination);
       alteredTx.sign(signer);
-      expect(() =>
-        verifyWalletSignature(original, alteredTx.toXdr(), signer.publicKey()),
-      ).toThrow("changed the transaction");
+      expect(() => verifyWalletSignature(original, alteredTx.toXdr(), signer.publicKey())).toThrow(
+        "changed the transaction",
+      );
     }
   });
   it("rejects a signature made for the public network even when the transaction body matches", () => {

@@ -36,7 +36,7 @@ import {
   stellarTransactionReadUrls,
   type SupportedLane,
 } from "../config/testnet";
-import { checkpointNetworkMatches, type TransferCheckpoint } from "./checkpoint";
+import { checkpointRecoveryDeploymentMatches, type TransferCheckpoint } from "./checkpoint";
 import {
   claimSettlementIdentities,
   parseClaimSettlementCheckpoint,
@@ -144,7 +144,9 @@ export interface SubmissionMachineState {
   readonly binding: { readonly signedHash: string; readonly account: string } | null;
 }
 
-const SUBMISSION_TRANSITIONS: Readonly<Record<SubmissionState, Partial<Record<SubmissionEvent["type"], SubmissionState>>>> = {
+const SUBMISSION_TRANSITIONS: Readonly<
+  Record<SubmissionState, Partial<Record<SubmissionEvent["type"], SubmissionState>>>
+> = {
   idle: { PREPARE: "preparing" },
   preparing: { PREPARED: "reviewing", FAILED: "failed", CANCEL: "cancelled" },
   reviewing: { REVIEW_APPROVED: "signing", CANCEL: "cancelled", FAILED: "failed" },
@@ -171,7 +173,9 @@ export function submissionTransition(
     return { state: next, binding: { signedHash: event.signedHash, account: event.account } };
   }
   if (current.state === "pending" && event.type !== "CONFIRMED" && event.type !== "FAILED")
-    throw new Error("Pending submissions are bound to their signed hash and cannot change otherwise.");
+    throw new Error(
+      "Pending submissions are bound to their signed hash and cannot change otherwise.",
+    );
   if (event.type === "RESET") return INITIAL_SUBMISSION;
   return { state: next, binding: current.binding };
 }
@@ -1331,7 +1335,7 @@ function matchesBridge(checkpoint: TransferCheckpoint, operation: ParsedOperatio
   if (invocation.functionName.toString() !== "bridge_out_with_gas") return false;
   if (
     invocation.contractAddress.type !== "scAddressTypeContract" ||
-    StrKey.encodeContract(invocation.contractAddress.contractId.toBytes()) !== TESTNET.router
+    StrKey.encodeContract(invocation.contractAddress.contractId.toBytes()) !== checkpoint.router
   )
     return false;
   const args = invocation.args;
@@ -1496,7 +1500,7 @@ export async function resolveCheckpointTransaction(
   signal?: AbortSignal,
 ): Promise<CheckpointRecoveryResult> {
   if (signal?.aborted) throw new DOMException("Recovery lookup cancelled.", "AbortError");
-  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || (!checkpointNetworkMatches(checkpoint) && !archivedRouterFor(checkpoint.router)))
+  if (!/^[0-9a-f]{64}$/.test(checkpoint.txHash) || !checkpointRecoveryDeploymentMatches(checkpoint))
     return unknownRecovery("The saved checkpoint does not match the configured Stellar Testnet.");
   const lookupSignal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(15000)])

@@ -243,9 +243,7 @@ try {
   const destinationDialog = page.getByRole("dialog", { name: "Choose a destination" });
   await destinationDialog.waitFor();
   for (const name of ["Ethereum Sepolia", "Base Sepolia", "Arc Testnet"])
-    await destinationDialog
-      .getByRole("button", { name: new RegExp(name, "i") })
-      .waitFor();
+    await destinationDialog.getByRole("button", { name: new RegExp(name, "i") }).waitFor();
   await destinationDialog.getByRole("button", { name: /Base Sepolia/i }).click();
   const cctpOption = destinationDialog.getByRole("button", {
     name: /Native USDC via Circle CCTP/,
@@ -280,8 +278,9 @@ try {
   await page.keyboard.press("Escape");
   await destinationDialog.waitFor({ state: "hidden" });
   expectAudit(
-    (await page.getByRole("button", { name: "Choose destination network and token" }).innerText())
-      .includes("Ethereum Sepolia"),
+    (
+      await page.getByRole("button", { name: "Choose destination network and token" }).innerText()
+    ).includes("Ethereum Sepolia"),
     "Choose destination network and token",
     "keeps the previous destination when the picker is cancelled",
     await page.getByRole("button", { name: "Choose destination network and token" }).innerText(),
@@ -341,19 +340,14 @@ try {
     }, checkpoint);
   }
 
-  await seedCheckpoint(
-    "CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF",
-    "0",
-  );
+  await seedCheckpoint("CDMOLDF4SJDEDRWTDF7XAYMSRE6L3YEHHIRF57CFWNQYNC6ZOZ5LWCWF", "0");
   const recovery = page.getByRole("region", { name: "Transfer recovery" });
   await recovery.waitFor();
   await page.getByText("Reconnect GBBD47I...ZLLFLA5 to continue this transfer").waitFor();
   await page.getByText("Archived router:", { exact: false }).waitFor();
   await page.getByRole("link", { name: "Inspect successor deployment" }).waitFor();
   expectAudit(
-    await page
-      .getByRole("button", { name: "Continue unavailable for this router" })
-      .isDisabled(),
+    await page.getByRole("button", { name: "Continue unavailable for this router" }).isDisabled(),
     "Continue unavailable for this router",
     "cannot submit a checkpoint against an archived router",
     "button disabled state",
@@ -370,12 +364,7 @@ try {
     const statusHeading = card.getByRole("heading", { name: heading });
     await statusHeading.waitFor();
     const actualText = await card.innerText();
-    expectAudit(
-      actualText.includes(expectedText),
-      heading,
-      `reports ${expectedText}`,
-      actualText,
-    );
+    expectAudit(actualText.includes(expectedText), heading, `reports ${expectedText}`, actualText);
     if (status === "SUCCESS") {
       expectAudit(
         (await card.getByRole("link", { name: "Track transfer" }).count()) === 1,
@@ -414,10 +403,7 @@ try {
     "has not confirmed a final transaction result yet",
   );
 
-  await seedCheckpoint(
-    "GDXRQQETEZHGRJTE3U7DYGIWGGYGMM6EAS5NWGPGN2WXFXZYZ6QZIANA",
-    "4",
-  );
+  await seedCheckpoint("GDXRQQETEZHGRJTE3U7DYGIWGGYGMM6EAS5NWGPGN2WXFXZYZ6QZIANA", "4");
   const unknownRouter = page.getByRole("region", { name: "Transfer recovery" });
   await unknownRouter.waitFor();
   const unknownRouterMessage = unknownRouter.getByText(
@@ -452,9 +438,7 @@ try {
     path.join(evidenceDir, "audit-report.json"),
     JSON.stringify(auditResults, null, 2),
   );
-  console.log(
-    `Browser audit passed: ${auditResults.length} checks. Evidence: ${evidenceDir}`,
-  );
+  console.log(`Browser audit passed: ${auditResults.length} checks. Evidence: ${evidenceDir}`);
 } catch (error) {
   await writeFile(
     path.join(evidenceDir, "audit-report.json"),

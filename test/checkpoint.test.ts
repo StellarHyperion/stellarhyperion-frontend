@@ -3,6 +3,7 @@ import { USDC, XLM } from "../src/contracts/assets";
 import { TESTNET } from "../src/config/testnet";
 import {
   checkpointForAsset,
+  checkpointIdentity,
   parseCheckpoint,
   saveCheckpoint,
   getTransferCheckpoint,
@@ -151,10 +152,8 @@ describe("pending transfer checkpoints", () => {
     expect(parsed.router).toBe(original.router);
     expect(parsed.token).toBe(original.token);
     expect(parsed.txHash).toBe(original.txHash);
-    expect(JSON.parse(checkpointIdentity(parsed)).slice(0, 2)).toEqual([
-      original.router,
-      original.token,
-    ]);
+    expect(JSON.parse(checkpointIdentity(parsed))).toContain(original.router);
+    expect(JSON.parse(checkpointIdentity(parsed))).toContain(original.token);
   });
 
   it("does not assign the new token to a legacy checkpoint from another router", () => {

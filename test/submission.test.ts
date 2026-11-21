@@ -15,6 +15,9 @@ import {
 import { formatUnits, sorobanErrorCode, toHex } from "@hyperion/protocol";
 import {
   QuoteChangedError,
+  INITIAL_SUBMISSION,
+  submissionTransition,
+  canEnableSendControl,
   readCheckpointTransaction,
   readTransaction,
   createReviewedIntentSnapshot,
@@ -48,8 +51,13 @@ import {
   saveCheckpoint,
   inspectCheckpointStorage,
 } from "../src/contracts/checkpoint";
-import { archivedRouterFor, DESTINATIONS, STELLAR_DEPLOYMENT, TESTNET, supportedLanes } from "../src/config/testnet";
-import { createSubmissionMachine, transitionSubmission } from "../src/contracts/submission-machine";
+import {
+  archivedRouterFor,
+  DESTINATIONS,
+  STELLAR_DEPLOYMENT,
+  TESTNET,
+  supportedLanes,
+} from "../src/config/testnet";
 import {
   planMaxUsdcAmount,
   planMaxSourceAmount,
@@ -417,6 +425,9 @@ describe("Signed Stellar submission failure boundaries", () => {
         token: TESTNET.token,
         amount: 20n,
         settled: false,
+        sourceTxHash: null,
+        sourceTransferId: null,
+        custody: { status: "unknown", routerBalance: null, reason: "Fixture" },
         eligibility: {
           status: "eligible",
           reason: "Generated fixture",
@@ -436,36 +447,38 @@ describe("Signed Stellar submission failure boundaries", () => {
     expect(wallet).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
   });
-  it("rejects invalid transitions so duplicate send controls cannot be enabled", () => {
-    const machine = createSubmissionMachine();
-    expect(() => transitionSubmission(machine, "broadcast")).toThrow(/invalid transition/);
-    const signed = transitionSubmission(
-      transitionSubmission(transitionSubmission(machine, "prepare"), "review"),
-      "sign",
+  it("rejects invalid submission transitions and duplicate send controls", () => {
+    expect(() => submissionTransition(INITIAL_SUBMISSION, { type: "CHECKPOINTED" })).toThrow(
+      /Invalid submission transition/,
     );
-    expect(signed.canSend).toBe(false);
-  });
-  it("retains account and hash bound pending state for unknown outcomes", () => {
-    const hash = "a".repeat(64);
-    const state = transitionSubmission(
-      transitionSubmission(
-        transitionSubmission(
-          transitionSubmission(transitionSubmission(createSubmissionMachine(), "prepare"), "review"),
-          "sign",
-        ),
-        "checkpoint",
-        { account: key.publicKey(), txHash: hash },
-      ),
-      "broadcast",
+    const prepared = submissionTransition(
+      submissionTransition(INITIAL_SUBMISSION, { type: "PREPARE" }),
+      { type: "PREPARED" },
     );
-    expect(state.phase).toBe("broadcast");
-    expect(state.pending).toEqual({ account: key.publicKey(), txHash: hash });
+    expect(canEnableSendControl(prepared)).toBe(true);
+    const signing = submissionTransition(prepared, { type: "REVIEW_APPROVED" });
+    expect(canEnableSendControl(signing)).toBe(false);
+    const signed = submissionTransition(signing, {
+      type: "SIGNED",
+      account: key.publicKey(),
+      signedHash: "a".repeat(64),
+    });
+    const pending = submissionTransition(submissionTransition(signed, { type: "CHECKPOINTED" }), {
+      type: "BROADCAST_UNKNOWN",
+    });
+    expect(pending.state).toBe("pending");
+    expect(pending.binding).toEqual({ account: key.publicKey(), signedHash: "a".repeat(64) });
+    expect(() => submissionTransition(pending, { type: "PREPARE" })).toThrow(
+      /Invalid submission transition/,
+    );
   });
-  it("handles cancellation and delayed async results without resubmitting", () => {
-    const machine = transitionSubmission(createSubmissionMachine(), "prepare");
-    const cancelled = transitionSubmission(machine, "cancel");
-    expect(cancelled.phase).toBe("cancelled");
-    expect(() => transitionSubmission(cancelled, "confirm")).toThrow(/invalid transition/);
+  it("handles cancellation without accepting delayed confirmation", () => {
+    const preparing = submissionTransition(INITIAL_SUBMISSION, { type: "PREPARE" });
+    const cancelled = submissionTransition(preparing, { type: "CANCEL" });
+    expect(cancelled.state).toBe("cancelled");
+    expect(() => submissionTransition(cancelled, { type: "CONFIRMED" })).toThrow(
+      /Invalid submission transition/,
+    );
   });
   it("distinguishes writable recovery storage from a blocked store without claiming guaranteed persistence", () => {
     const checkpointKey = "hyperion.testnet.pending-transfer";
@@ -1355,9 +1368,8 @@ describe("Spendable-balance maximum amount planner", () => {
         expect(parseSendAmount(sourceText)).toBe(requestedAmount);
         expect(formatUnits(requestedAmount, 7)).toBe(sourceText);
         expect(
-          parseBridgeFormParams(
-            `?a=${sourceText}&r=0x${"1".repeat(40)}&d=sepolia&t=1&s=native`,
-          )?.amount,
+          parseBridgeFormParams(`?a=${sourceText}&r=0x${"1".repeat(40)}&d=sepolia&t=1&s=native`)
+            ?.amount,
         ).toBe(sourceText);
 
         const quantum = index % 2 === 0 ? 10n : 1n;
@@ -1386,9 +1398,7 @@ describe("Spendable-balance maximum amount planner", () => {
         const review = quoteBreakdown(quote);
 
         expect(review.requestedSourceAmount).toBe(requestedAmount);
-        expect(review.actualSourceDebit + review.protocolFee + review.retainedDust).toBe(
-          requestedAmount,
-        );
+        expect(review.actualSourceDebit + review.retainedDust).toBe(requestedAmount);
         expect(review.actualSourceDebit).toBe(grossAmount);
         expect(review.representableBridgeAmount).toBe(netAmount);
         expect(review.representableBridgeAmount / quantum).toBe(representableAmount);

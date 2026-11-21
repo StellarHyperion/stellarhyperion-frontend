@@ -434,9 +434,7 @@ try {
     await recoveryAction.scrollIntoViewIfNeeded();
     const actionBounds = await recoveryAction.boundingBox();
     assert.ok(
-      actionBounds &&
-        actionBounds.x >= 0 &&
-        actionBounds.x + actionBounds.width <= viewport.width,
+      actionBounds && actionBounds.x >= 0 && actionBounds.x + actionBounds.width <= viewport.width,
       `Recovery action fits the viewport at ${viewport.label}`,
     );
     await page.getByRole("button", { name: "Choose source token", exact: true }).click();

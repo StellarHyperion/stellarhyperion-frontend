@@ -197,7 +197,7 @@ describe("live provider endpoint schema boundaries", () => {
     const differentDestination = circleFee(
       new Request("http://localhost/api/cctp-fee?destination=arc-testnet"),
     );
-    const differentCurrency = relayFee();
+    const differentCurrency = relayFee(new Request("http://localhost/api/relay-fee"));
     cancelledClient.abort();
     await Promise.resolve();
 

@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { contentSecurityPolicy } from "../src/config/content-security-policy";
-import {
-  BROWSER_RESOURCE_ORIGINS,
-  stellarTransactionReadUrls,
-} from "../src/config/testnet";
+import { BROWSER_RESOURCE_ORIGINS, stellarTransactionReadUrls } from "../src/config/testnet";
 import { STELLAR_WALLETS } from "../src/wallets/stellar/sdk";
 
 describe("browser resource policy", () => {

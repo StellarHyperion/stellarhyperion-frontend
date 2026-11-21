@@ -66,7 +66,6 @@ read-only when that deployment is not supported by the active app. Check a
 saved source hash before another approval; source confirmation is not
 destination delivery.
 
-
 `NEXT_PUBLIC_HYPERION_API_URL` supplies transfer activity and destination verification. The backend must run its indexer and rail pollers regularly. The public testnet uses a five-minute GitHub Actions schedule, subject to runner queueing; destination Activity can take several minutes to update. Unreachable history is shown explicitly. A confirmed Stellar transaction proves source execution; destination delivery requires matching confirmed bridge and token-payment events.
 
 Transfer history refreshes every 10 seconds and transaction details every 5 seconds while visible; hidden tabs reduce those reads to once per minute. Each poll owns one timer and one request, aborts obsolete lookups, and obtains fresh status immediately when visibility returns. Pagination and claim recovery wait for that refresh; a failed indexer refresh keeps claim actions blocked. Public source hashes remain in the URL and pending checkpoint regardless of polling activity. No visibility event signs or resubmits a transaction.

@@ -79,7 +79,8 @@ describe("bounded public provider admission", () => {
         }),
       ),
     );
-    expect(provider).toHaveBeenCalledTimes(4);
+    await Promise.resolve();
+    expect(provider).toHaveBeenCalledTimes(1);
     const rejected = await circle(
       new Request("http://localhost/api/cctp-fee?destination=base-sepolia", {
         headers: { "x-forwarded-for": "203.0.113.99" },
@@ -89,7 +90,7 @@ describe("bounded public provider admission", () => {
     expect(rejected.headers.get("retry-after")).toBe("1");
     expect(rejected.headers.get("cache-control")).toBe("no-store");
     expect(await rejected.json()).toMatchObject({ code: "RATE_LIMITED", retryAfter: 1 });
-    expect(provider).toHaveBeenCalledTimes(4);
+    expect(provider).toHaveBeenCalledTimes(1);
     release.forEach((finish) => {
       finish(new Response("1000"));
     });

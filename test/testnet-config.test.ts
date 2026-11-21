@@ -35,9 +35,9 @@ describe("public deployment revision identity", () => {
 
   it("does not mistake malformed deployment observations for the current revision", () => {
     expect(config.deploymentIdentityMatches(null)).toBe(false);
-    expect(config.deploymentIdentityMatches({ ...config.DEPLOYMENT_IDENTITY, commit: "secret" })).toBe(
-      false,
-    );
+    expect(
+      config.deploymentIdentityMatches({ ...config.DEPLOYMENT_IDENTITY, commit: "secret" }),
+    ).toBe(false);
   });
 });
 
