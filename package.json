@@ -36,13 +36,13 @@
     "test:browser:trace": "HYPERION_PROVIDER_DELAY_MS=75 node scripts/browser-performance-trace.mjs"
   },
   "dependencies": {
-    "@albedo-link/intent": "^0.12.0",
+    "@albedo-link/intent": "^0.13.0",
     "@creit.tech/xbull-wallet-connect": "^0.4.0",
     "@hyperion/protocol": "file:hyperion-protocol-0.1.0.tgz",
     "@lobstrco/signer-extension-api": "^3.0.0",
     "@stellar/freighter-api": "^6.0.0",
-    "@stellar/stellar-sdk": "17.2.1",
-    "lucide-react": "^1.49.0",
+    "@stellar/stellar-sdk": "17.4.0",
+    "lucide-react": "^1.77.0",
     "next": "^16.4.6",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -58,7 +58,7 @@
     "prettier": "^3.10.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.73.0",
-    "vitest": "^5.1.0",
-    "vite": "8.3.8"
+    "vite": "8.3.8",
+    "vitest": "^5.1.1"
   }
 }
