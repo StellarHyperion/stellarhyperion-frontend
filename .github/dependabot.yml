@@ -13,6 +13,10 @@ updates:
       time: "07:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    # The current TypeScript ESLint stack requires the JavaScript compiler API.
+    ignore:
+      - dependency-name: typescript
+        versions: [">=7.0.0"]
     commit-message:
       prefix: "frontend"
       include: scope

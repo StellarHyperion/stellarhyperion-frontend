@@ -42,7 +42,7 @@
     "@lobstrco/signer-extension-api": "^3.0.0",
     "@stellar/freighter-api": "^6.0.0",
     "@stellar/stellar-sdk": "17.4.0",
-    "lucide-react": "^1.49.0",
+    "lucide-react": "^1.77.0",
     "next": "^16.4.6",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -56,9 +56,9 @@
     "eslint": "^10.15.0",
     "eslint-config-next": "^16.4.6",
     "prettier": "^3.10.1",
-    "typescript": "^7.0.2",
+    "typescript": "^5.9.3",
     "typescript-eslint": "^8.73.0",
-    "vitest": "^5.1.1",
-    "vite": "8.3.8"
+    "vite": "8.3.8",
+    "vitest": "^5.1.1"
   }
 }
